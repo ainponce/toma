@@ -123,7 +123,7 @@ import Testing
             ("+", [.command], .zoomIn), ("-", [.command], .zoomOut),
             ("1", [.command], .tab(1)), ("2", [.command], .tab(2)), ("3", [.command], .tab(3)),
             ("4", [.command], .tab(4)), ("5", [.command], .tab(5)), ("6", [.command], .tab(6)),
-            ("7", [.command], .tab(7)), ("8", [.command], .tab(8)),
+            ("7", [.command], .tab(7)), ("8", [.command], .tab(8)), ("9", [.command], .tab(9)),
             ("i", [.command, .option], .togglePanel),
             ("e", [.command], .export),
             ("o", [.command], .open),
@@ -149,9 +149,18 @@ import Testing
         #expect(command("+", [.command, .shift]) == .zoomIn)
         #expect(command("-", [.command, .option]) == nil)
         #expect(command("+") == nil)
-        // Only the panel's eight tabs.
-        #expect(command("9", [.command]) == nil)
+        // Only the panel's nine tabs.
         #expect(command("0", [.command]) == nil)
+    }
+
+    /// ⌘9 is the Annotations tab, the ninth (phase 3 design §5.6); ⌘0 is none.
+    @Test func commandNineShowsTheAnnotationsTab() {
+        for focus in Self.focuses {
+            #expect(command("9", [.command], focus: focus) == .tab(9))
+            #expect(command("0", [.command], focus: focus) == nil)
+        }
+        #expect(command("9", [.command, .shift]) == nil)
+        #expect(command("9", [.option]) == nil)
     }
 
     @Test func keysWithOtherModifiersAreNotTheTables() {

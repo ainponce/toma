@@ -98,6 +98,132 @@ import Testing
         #expect(Self.layout([]).tracks.map(\.track) == [.ruler, .video, .zoom])
     }
 
+    // MARK: - Phase 3
+
+    /// A take `id` with `tracks`, each recorded.
+    private static func take(_ id: String, _ tracks: [TrackRecord]) -> TakeRecord {
+        TakeRecord(id: id, status: .complete, startedAt: Date(timeIntervalSince1970: 0), tracks: tracks)
+    }
+
+    private static let someRect = NormalizedRect(x: 0.1, y: 0.1, width: 0.3, height: 0.2)
+
+    @Test func annotationsRowOnlyWithAnnotations() {
+        let take = Self.fullTake()
+        #expect(!TimelineLayout(take: take, document: .legacy(take: take, events: [])).tracks.map(\.track).contains(.annotations))
+
+        var document = EditDocument.legacy(take: take, events: [])
+        document.annotations.items = [
+            Annotation(id: "a-00000001", anchor: .whole, layer: 0, kind: .step(StepAnnotation()), rect: Self.someRect)
+        ]
+        let layout = TimelineLayout(take: take, document: document)
+        #expect(layout.tracks.map(\.track) == [.ruler, .video, .annotations, .zoom, .camera, .audio(id: "mic")])
+        #expect(layout.tracks[2] == TimelineRow(track: .annotations, height: 28))
+        #expect(TimelineLayout.annotationsHeight == 28)
+
+        // With a transcript, right after Captions; and before Screen.
+        document.transcript = Transcript(language: "es-AR", engine: "speechTranscriber-1", takes: [])
+        let screens = Self.take("take-001", [
+            Self.track("display-1", .display), Self.track("display-2", .display), Self.track("mic", .microphone),
+        ])
+        #expect(TimelineLayout(take: screens, document: document).tracks.map(\.track) == [
+            .ruler, .video, .captions, .annotations, .screen, .zoom, .audio(id: "mic"),
+        ])
+    }
+
+    @Test func importedAndMusicRowsAtTheBottom() {
+        let take = Self.fullTake()
+        let legacy = EditDocument.legacy(take: take, events: [])
+        let tracks = TimelineLayout(take: take, document: legacy).tracks.map(\.track)
+        #expect(!tracks.contains(.importedAudio))
+        #expect(!tracks.contains(.music))
+
+        // A clip of the sequence that shows an imported video, and a piece of music.
+        var document = legacy
+        let point = document.sequence[0].start
+        document.sequence.append(Clip(
+            id: "c-00000002", take: "take-001", start: point, end: point, speed: 1,
+            content: .media(MediaClip(asset: "assets/0123456789abcdef0123456789abcdef.mov", start: 0, end: 2_000_000_000))))
+        document.music.items = [MusicItem(id: "mu-00000001", source: "library:music-1/calm", start: 0, end: 5_000_000_000)]
+        let layout = TimelineLayout(take: take, document: document)
+        #expect(layout.tracks.map(\.track) == [.ruler, .video, .zoom, .camera, .audio(id: "mic"), .importedAudio, .music])
+        #expect(layout.tracks.suffix(2) == [TimelineRow(track: .importedAudio, height: 36), TimelineRow(track: .music, height: 36)])
+        #expect(TimelineLayout.importedAudioHeight == 36)
+        #expect(TimelineLayout.musicHeight == 36)
+
+        // An annotation of an imported clip has its sound in Imported Clips too; music alone, only Music.
+        var annotated = legacy
+        annotated.annotations.items = [
+            Annotation(
+                id: "a-00000001", anchor: .output(start: 0, end: 1_000_000_000), layer: 0,
+                kind: .clip(ClipAnnotation(asset: "assets/0123456789abcdef0123456789abcdef.mov", start: 0, end: 1_000_000_000)),
+                rect: Self.someRect)
+        ]
+        #expect(TimelineLayout(take: take, document: annotated).tracks.map(\.track).suffix(2) == [.audio(id: "mic"), .importedAudio])
+        var music = legacy
+        music.music = document.music
+        #expect(TimelineLayout(take: take, document: music).tracks.map(\.track).suffix(2) == [.audio(id: "mic"), .music])
+    }
+
+    @Test func audioRowsAreTheUnionOfTheTakes() {
+        let first = Self.take("take-001", [
+            Self.track("display-1", .display), Self.track("mic", .microphone), Self.track("system-audio-a", .systemAudio),
+        ])
+        let second = Self.take("take-002", [
+            Self.track("display-1", .display), Self.track("mic", .microphone), Self.track("system-audio-b", .systemAudio),
+        ])
+        let document = EditDocument.legacy(take: first, events: [])
+        let layout = TimelineLayout(takes: [first, second], document: document)
+        #expect(layout.tracks.map(\.track) == [
+            .ruler, .video, .zoom, .audio(id: "mic"), .audio(id: "system-audio-a"), .audio(id: "system-audio-b"),
+        ])
+        // By kind first, as with one take: a microphone only the second take has goes before the first's system audio.
+        let third = Self.take("take-003", [Self.track("mic-2", .microphone), Self.track("camera", .camera)])
+        #expect(TimelineLayout(takes: [first, third], document: document).tracks.map(\.track) == [
+            .ruler, .video, .zoom, .camera, .audio(id: "mic"), .audio(id: "mic-2"), .audio(id: "system-audio-a"),
+        ])
+    }
+
+    @Test func phase2RowsAreUnchanged() {
+        let transcript = Transcript(language: "es-AR", engine: "speechTranscriber-1", takes: [])
+        let block = PrivacyBlock(
+            id: "p-00000001", take: "take-001", start: HostTime(nanoseconds: 1_000_000_000),
+            end: HostTime(nanoseconds: 2_000_000_000), effect: .blur, rect: NormalizedRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2))
+        let takes = [
+            Self.fullTake(),
+            Self.take("take-001", [
+                Self.track("display-1", .display), Self.track("window-1", .window), Self.track("camera", .camera),
+                Self.track("mic", .microphone), Self.track("system-audio", .systemAudio),
+            ]),
+            Self.take("take-001", [Self.track("device", .device), Self.track("deviceAudio", .deviceAudio), Self.track("mic", .microphone)]),
+            Self.take("take-001", []),
+        ]
+        for take in takes {
+            for document in [
+                EditDocument.legacy(take: take, events: []), Self.documentWith(transcript: transcript, take: take),
+                Self.documentWith(privacy: PrivacyPlan(blocks: [block]), take: take),
+                Self.documentWith(transcript: transcript, privacy: PrivacyPlan(blocks: [block]), take: take),
+            ] {
+                let one = TimelineLayout(take: take, document: document)
+                #expect(TimelineLayout(takes: [take], document: document) == one)
+                // Only the rows of phases 1 and 2, in their order.
+                let tracks = one.tracks.map(\.track)
+                #expect(!tracks.contains(.annotations) && !tracks.contains(.importedAudio) && !tracks.contains(.music))
+                let order: [TimelineTrack] = [.ruler, .video, .captions, .screen, .zoom, .privacy, .camera]
+                let known = tracks.filter { order.contains($0) }
+                #expect(known == order.filter { known.contains($0) })
+            }
+        }
+        // The full take with everything of phase 2, row by row.
+        let take = takes[1]
+        let full = TimelineLayout(take: take, document: Self.documentWith(transcript: transcript, privacy: PrivacyPlan(blocks: [block]), take: take))
+        #expect(full.tracks == [
+            TimelineRow(track: .ruler, height: 24), TimelineRow(track: .video, height: 56), TimelineRow(track: .captions, height: 28),
+            TimelineRow(track: .screen, height: 24), TimelineRow(track: .zoom, height: 28), TimelineRow(track: .privacy, height: 28),
+            TimelineRow(track: .camera, height: 32), TimelineRow(track: .audio(id: "mic"), height: 36),
+            TimelineRow(track: .audio(id: "system-audio"), height: 36),
+        ])
+    }
+
     @Test func scaleRangeIsFitTo600PointsPerSecond() {
         #expect(TimelineLayout.fitScale(duration: 120, width: 1200) == 10)
         #expect(TimelineLayout.clampScale(1000, duration: 120, width: 1200) == 600)

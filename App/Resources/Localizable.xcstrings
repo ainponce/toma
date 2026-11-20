@@ -805,6 +805,17 @@
         }
       }
     },
+    "Annotations" : {
+      "comment" : "The panel tab and the timeline row of the annotations (phase 3)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anotaciones"
+          }
+        }
+      }
+    },
     "Another app changed this project, and this version of Toma can't open it now." : {
       "comment" : "Why a project couldn't be opened: another process changed it into one this version can't read",
       "localizations" : {
@@ -4136,6 +4147,17 @@
         }
       }
     },
+    "Imported Clips" : {
+      "comment" : "The header of the timeline's row of the sound of the imported clips",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clips importados"
+          }
+        }
+      }
+    },
     "Import…" : {
       "comment" : "Manage Styles: add .tomastyle files",
       "localizations" : {
@@ -4829,6 +4851,17 @@
         }
       }
     },
+    "Markers" : {
+      "comment" : "The editor bar's menu of the project's markers (phase 3)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcadores"
+          }
+        }
+      }
+    },
     "Match System" : {
       "comment" : "Settings, Appearance: light or dark as the system is",
       "localizations" : {
@@ -5199,6 +5232,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mover a la Papelera…"
+          }
+        }
+      }
+    },
+    "Music" : {
+      "comment" : "The timeline row of the music (phase 3)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Música"
           }
         }
       }
@@ -8086,6 +8130,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Toma guardada"
+          }
+        }
+      }
+    },
+    "Takes" : {
+      "comment" : "The editor bar's menu of the project's takes (phase 3)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tomas"
           }
         }
       }

@@ -138,14 +138,16 @@ struct TimelineContent {
         }.sorted()
     }
 
-    /// `markers`: the take's marker times (`markerTimes(in:)`); `contentRatio`: what "Like the Recording" follows.
+    /// `markers`: the take's marker times (`markerTimes(in:)`); `contentRatio`: what "Like the Recording" follows; `takes`:
+    /// those the sequence shows (`take` alone when empty), whose audio tracks have rows (`TimelineLayout(takes:document:)`).
     init(
         take: TakeRecord, markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>],
-        contentRatio: Double? = nil
+        contentRatio: Double? = nil, takes: [TakeRecord] = []
     ) {
         let map = TimeMap(sequence: document.sequence)
         let takeID = document.sequence.first?.take ?? take.id
-        layout = TimelineLayout(take: take, document: document)
+        let takes = takes.isEmpty ? [take] : takes
+        layout = TimelineLayout(takes: takes, document: document)
         self.map = map
 
         sequence = document.sequence
@@ -213,13 +215,19 @@ struct TimelineContent {
             .filter { !$0.isEmpty }
             .sorted { $0.lowerBound < $1.lowerBound }
 
+        // Each audio row by its track's id: as `take` recorded it, or else the first of `takes` that did, with the gain the
+        // mix reads for it (`AudioPlan.trackGain`).
         var audio: [String: AudioTrack] = [:]
-        for track in take.tracks where !track.kind.isVideo {
-            guard let origin = track.segments.map(\.startHostTime.nanoseconds).min() else { continue }
-            let key = AudioPlan.key(take: take.id, track: track.id)
-            let gain = document.audio.tracks[key]
-            audio[track.id] = AudioTrack(
-                key: key, isMicrophone: track.kind == .microphone, gain: gain?.gain ?? 1, muted: gain?.muted ?? false, origin: origin)
+        let takeIDs = takes.map(\.id)
+        for record in [take] + takes {
+            for track in record.tracks where !track.kind.isVideo && audio[track.id] == nil {
+                guard let origin = track.segments.map(\.startHostTime.nanoseconds).min() else { continue }
+                let key = AudioPlan.key(take: record.id, track: track.id)
+                let gain = document.audio.trackGain(take: record.id, track: track.id, takes: takeIDs)
+                audio[track.id] = AudioTrack(
+                    key: key, isMicrophone: track.kind == .microphone, gain: gain?.gain ?? 1, muted: gain?.muted ?? false,
+                    origin: origin)
+            }
         }
         self.audio = audio
 
@@ -556,6 +564,8 @@ final class TimelineTracks {
             case let .audio(id):
                 layOutWaveform(id, content, row, geometry, palette)
                 shownWaveforms.insert(id)
+            // Empty in the base of phase 3: the annotations (3a) and the sound (3c) draw in them.
+            case .annotations, .importedAudio, .music: break
             }
         }
         for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end, audioClips.end] { pool() }

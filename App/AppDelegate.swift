@@ -498,6 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 || environment["TOMA_SHOWCASE_SEEK"] != nil
                 || environment["TOMA_SHOWCASE_DEVICEFRAME"] != nil || environment["TOMA_SHOWCASE_REFRAME"] != nil
                 || environment["TOMA_SHOWCASE_PLAYHEAD"] != nil
+                || environment.keys.contains(where: { $0.hasPrefix("TOMA_SHOWCASE_P3_") })
             {
                 Task {
                     while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
@@ -567,6 +568,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if let picture = environment["TOMA_SHOWCASE_PICTURE"]?.split(separator: ":").map(String.init) {
                         model.showcasePicture(picture)
                     }
+                    // TOMA_SHOWCASE_P3_<NAME>: the screens of phase 3, each feature's in its own file.
+                    await model.showcasePhase3(environment)
                 }
             }
             guard surface == "export" else { return }

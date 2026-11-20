@@ -2,7 +2,8 @@
 import Analysis
 import ProjectFormat
 
-/// The commands of the Camera and Screen tracks and of the Camera tab (design §5.3 to §5.5 and §8.7), as pure functions
+/// The commands of the Camera and Screen tracks, of the Camera tab (design §5.3 to §5.5 and §8.7) and of the rows of the
+/// sound (`setTrackGain`, phase 3 design §7.2), as pure functions
 /// of the document. Each one gives the step that does it (`EditStep`), or `nil` when there is nothing to do;
 /// `followCursor`, which always plans, gives a step without changes then.
 ///
@@ -238,6 +239,40 @@ public enum TrackCommands {
         var changes = DocumentChanges()
         changes.set(["screens"], from: doc.screens, to: screens)
         return changes.stepEvenIfEmpty(label: .screen, target: "/screens")
+    }
+
+    // MARK: - The sound
+
+    /// The volume or Mute of a row of the Audio tab or of the timeline (phase 3 plan decision 11): audio track `track` in
+    /// each of `takes`, the takes the sequence shows that recorded it, in that order. One `.volume` step that writes the
+    /// key `<take>/<track>` of each with `edit` applied to the gain the mix reads for it (`AudioPlan.trackGain`, with
+    /// `takes`; a gain of 1, not muted, without one). A key the document lacks gets its value with one `set` of
+    /// `/audio/tracks`, and without the ranges of the gain it comes from: a range is of its own take's source. With every
+    /// key there, a `set` of each, aimed at the first; so with one take, the step the Audio tab made in phase 2.
+    /// `nil` without takes, if nothing changes or a value is not a number.
+    public static func setTrackGain(
+        _ doc: EditDocument, track: String, takes: [String], _ edit: (inout TrackGain) -> Void
+    ) -> EditStep? {
+        var order: [String] = []
+        for take in takes where !order.contains(take) { order.append(take) }
+        let keys = order.map { AudioPlan.key(take: $0, track: track) }
+        guard let first = keys.first else { return nil }
+        var tracks = doc.audio.tracks
+        for (take, key) in zip(order, keys) {
+            var gain = doc.audio.trackGain(take: take, track: track, takes: order) ?? TrackGain(gain: 1, muted: false)
+            if doc.audio.tracks[key] == nil { gain.ranges = [] }
+            edit(&gain)
+            tracks[key] = gain
+        }
+        var changes = DocumentChanges()
+        guard keys.allSatisfy({ doc.audio.tracks[$0] != nil }) else {
+            changes.set(["audio", "tracks"], from: doc.audio.tracks, to: tracks)
+            return changes.step(label: .volume, target: "/audio/tracks")
+        }
+        for key in keys {
+            if let old = doc.audio.tracks[key], let new = tracks[key] { changes.set(["audio", "tracks", key], from: old, to: new) }
+        }
+        return changes.step(label: .volume, target: JSONPointer(components: ["audio", "tracks", first]).string)
     }
 
     // MARK: - Private

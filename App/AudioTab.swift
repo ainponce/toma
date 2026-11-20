@@ -17,7 +17,7 @@ struct AudioTab: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.audioTracks) { track in
-                    let gain = audio.tracks[track.id] ?? TrackGain(gain: 1, muted: false)
+                    let gain = audio.trackGain(take: track.take, track: track.track, takes: track.takes) ?? TrackGain(gain: 1, muted: false)
                     PanelSection {
                         if track.isMicrophone {
                             VStack(alignment: .leading, spacing: 1) {

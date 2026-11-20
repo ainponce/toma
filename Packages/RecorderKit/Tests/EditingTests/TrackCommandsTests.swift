@@ -302,3 +302,61 @@ private enum TrackFixture {
         #expect(TrackCommands.followCursor(edited, project: project).changes.isEmpty)
     }
 }
+
+// MARK: - The sound
+
+/// A row of the timeline and of the Audio tab is a track by its id in every take that recorded it (plan decision 11): its
+/// volume and Mute are written in each take's key, in one step; the key a take lacks with the `set` of `/audio/tracks`,
+/// from the gain the mix reads for it (`AudioPlan.trackGain`), its ranges left out (they are of their own take's source).
+@Test func rowGainWritesEveryTake() throws {
+    let range = GainRange(
+        id: "g-00000001", take: "take-001", start: TrackFixture.at(1), end: TrackFixture.at(2), gain: -6)
+    var document = TrackFixture.document()
+    let mine = TrackGain(gain: 0.5, muted: false, cleanup: 0.4, ranges: [range])
+    let other = TrackGain(gain: 1.2, muted: true)
+    // `take-003` has no microphone: only its system audio has a key.
+    document.audio.tracks = ["take-001/mic": mine, "take-003/system-audio": other]
+
+    let step = try #require(TrackCommands.setTrackGain(document, track: "mic", takes: ["take-001", "take-002"]) { $0.gain = 1.5 })
+    #expect(step.label == .volume)
+    #expect(step.target == "/audio/tracks")
+    #expect(step.changes.count == 1)
+    let edited = try TrackFixture.applying(step, to: document)
+    #expect(edited.audio.tracks == [
+        "take-001/mic": TrackGain(gain: 1.5, muted: false, cleanup: 0.4, ranges: [range]),
+        "take-002/mic": TrackGain(gain: 1.5, muted: false, cleanup: 0.4),
+        "take-003/system-audio": other,
+    ])
+
+    // Both keys there now: a `set` of each, in the order of the takes, aimed at the first.
+    let muted = try #require(TrackCommands.setTrackGain(edited, track: "mic", takes: ["take-001", "take-002"]) { $0.muted = true })
+    #expect(muted.target == "/audio/tracks/take-001~1mic")
+    let paths = muted.changes.compactMap { change -> String? in
+        if case let .set(path, _, _) = change { path.string } else { nil }
+    }
+    #expect(paths == ["/audio/tracks/take-001~1mic", "/audio/tracks/take-002~1mic"])
+    let twice = try TrackFixture.applying(muted, to: edited)
+    #expect(twice.audio.tracks["take-001/mic"]?.muted == true)
+    #expect(twice.audio.tracks["take-002/mic"]?.muted == true)
+    #expect(twice.audio.tracks["take-003/system-audio"] == other)
+    // Nothing to change, no step; no take, none either.
+    #expect(TrackCommands.setTrackGain(twice, track: "mic", takes: ["take-001", "take-002"]) { $0.muted = true } == nil)
+    #expect(TrackCommands.setTrackGain(twice, track: "mic", takes: []) { $0.gain = 2 } == nil)
+    #expect(TrackCommands.setTrackGain(twice, track: "mic", takes: ["take-001"]) { $0.gain = .nan } == nil)
+}
+
+/// With one take, the step the Audio tab made in phase 2: the `set` of the track's key, or of `/audio/tracks` when the
+/// document has none for it, as `StyleCommands.set` gives it.
+@Test func rowGainOfOneTakeIsThePhase2Step() throws {
+    var document = TrackFixture.document()
+    document.audio.tracks = [:]
+    let fresh = TrackCommands.setTrackGain(document, track: "mic", takes: ["take-001"]) { $0.gain = 0.8 }
+    #expect(fresh == StyleCommands.set(
+        document, "/audio/tracks", ["take-001/mic": TrackGain(gain: 0.8, muted: false)], label: .volume))
+
+    document.audio.tracks = ["take-001/mic": TrackGain(gain: 0.5, muted: false, cleanup: 0.4)]
+    let kept = TrackCommands.setTrackGain(document, track: "mic", takes: ["take-001"]) { $0.muted = true }
+    #expect(kept == StyleCommands.set(
+        document, "/audio/tracks/take-001~1mic", TrackGain(gain: 0.5, muted: true, cleanup: 0.4), label: .volume))
+    #expect(kept != nil)
+}

@@ -5,7 +5,8 @@ import ProjectFormat
 import SwiftUI
 
 /// The editor's bar (design §5.2), in the window's unified toolbar: on the left the project's name (which a click edits,
-/// design §6.7) and what the output lasts, in the middle the format, on the right the panel's button and Export. Each item
+/// design §6.7) and what the output lasts, in the middle the format, on the right the Takes and Markers menus (phase 3
+/// design §8.1 and §8.3), the panel's button and Export. Each item
 /// has the identifier `-TomaDumpEditorStructure` prints. On macOS 26 the name and the duration are the window's title, not
 /// a glass capsule (`TitledEditorToolbar`).
 struct EditorToolbar: CustomizableToolbarContent {
@@ -17,6 +18,8 @@ struct EditorToolbar: CustomizableToolbarContent {
         nameItem
         durationItem
         formatItem
+        takesItem
+        markersItem
         panelItem
         exportItem
     }
@@ -52,6 +55,20 @@ struct EditorToolbar: CustomizableToolbarContent {
         }
     }
 
+    /// The project's takes (phase 3 design §8.1).
+    var takesItem: some CustomizableToolbarContent {
+        ToolbarItem(id: "editor.takes", placement: .primaryAction) {
+            TakesMenu(model: model)
+        }
+    }
+
+    /// The project's markers (phase 3 design §8.3).
+    var markersItem: some CustomizableToolbarContent {
+        ToolbarItem(id: "editor.markers", placement: .primaryAction) {
+            MarkersMenu(model: model)
+        }
+    }
+
     var panelItem: some CustomizableToolbarContent {
         ToolbarItem(id: "editor.panel", placement: .primaryAction) {
             Button(action: togglePanel) {
@@ -79,6 +96,8 @@ struct TitledEditorToolbar: CustomizableToolbarContent {
         toolbar.nameItem.sharedBackgroundVisibility(.hidden)
         toolbar.durationItem.sharedBackgroundVisibility(.hidden)
         toolbar.formatItem
+        toolbar.takesItem
+        toolbar.markersItem
         toolbar.panelItem
         toolbar.exportItem
     }

@@ -24,8 +24,10 @@ enum EditorSelection: Equatable {
     case privacyBlocks(Set<String>)
 }
 
-/// A track of sound of the take, as a row of the Audio tab.
+/// A track of sound, as a row of the Audio tab and of the timeline: a track by its id in every take the sequence shows
+/// that recorded it (phase 3 plan decision 11), as the first of them recorded it.
 struct AudioTrackRow: Equatable, Identifiable {
+    /// The first take that recorded it.
     var take: String
     var track: String
     var isMicrophone: Bool
@@ -33,8 +35,48 @@ struct AudioTrackRow: Equatable, Identifiable {
     var deviceName: String
     /// The sound of an iPhone or iPad (`deviceAudio`).
     var isDevice = false
+    /// Every take the sequence shows that recorded it, in the order it first shows them: its volume and Mute are written
+    /// in each (`TrackCommands.setTrackGain`).
+    var takes: [String]
 
-    var id: String { AudioPlan.key(take: take, track: track) }
+    /// The track's id: one row whichever takes recorded it.
+    var id: String { track }
+    /// The key of its gain in the document for its first take (`AudioPlan.key(take:track:)`).
+    var key: String { AudioPlan.key(take: take, track: track) }
+
+    /// The rows of `takes`, those the sequence shows in the order it first shows them, in the timeline's order
+    /// (`TimelineLayout`): the microphones, the system audio, an iPhone's or iPad's sound, each track id once.
+    static func rows(of takes: [TakeRecord]) -> [AudioTrackRow] {
+        var rows: [(kind: TrackKind, row: AudioTrackRow)] = []
+        var index: [String: Int] = [:]
+        for take in takes {
+            for track in take.tracks where !track.kind.isVideo && !track.segments.isEmpty {
+                if let k = index[track.id] {
+                    rows[k].row.takes.append(take.id)
+                    continue
+                }
+                index[track.id] = rows.count
+                rows.append((track.kind, AudioTrackRow(
+                    take: take.id, track: track.id, isMicrophone: track.kind == .microphone, deviceName: track.source.name,
+                    isDevice: track.kind == .deviceAudio, takes: [take.id])))
+            }
+        }
+        return [TrackKind.microphone, .systemAudio, .deviceAudio].flatMap { kind in rows.filter { $0.kind == kind }.map(\.row) }
+    }
+}
+
+extension LoadedProject {
+    /// The records of the takes `document`'s sequence shows, each once, in the order it first shows them, as
+    /// `takesShown(by:)` gives them without looking at the package: from the manifest. This project's take for an empty
+    /// sequence, or one that shows no take the manifest has.
+    func takeRecords(shownBy document: EditDocument) -> [TakeRecord] {
+        var seen: Set<String> = []
+        let shown = document.sequence.compactMap { clip -> TakeRecord? in
+            guard seen.insert(clip.take).inserted else { return nil }
+            return clip.take == take.id ? take : takes.first { $0.id == clip.take }
+        }
+        return shown.isEmpty ? [take] : shown
+    }
 }
 
 /// The import of a background image, as the panel shows it.
@@ -167,7 +209,7 @@ final class EditorModel {
     private(set) var isDeviceTake = false
     /// The take noted when keys were typed (`keyActivity`): "Hold While Typing" has something to hold.
     private(set) var canHoldWhileTyping = false
-    /// The take's tracks of sound, as the Audio tab lists them.
+    /// The tracks of sound of the takes the sequence shows, as the Audio tab and the timeline list them.
     private(set) var audioTracks: [AudioTrackRow] = []
     /// The automatic zoom's settings that are being planned again off the main thread: the controls show them meanwhile.
     var autoZoomPending: AutoZoomSettings?
@@ -503,14 +545,7 @@ final class EditorModel {
         hasClicks = ZoomPanelRules.hasClicks(events: project.events)
         canHoldWhileTyping = ZoomPanelRules.canHoldWhileTyping(events: project.events)
         // In the timeline's order (`TimelineLayout`): the microphones, the system audio, an iPhone's or iPad's sound.
-        let sounds: [TrackRecord] = [TrackKind.microphone, .systemAudio, .deviceAudio].flatMap { kind in
-            project.take.tracks.filter { $0.kind == kind && !$0.segments.isEmpty }
-        }
-        audioTracks = sounds.map { (track: TrackRecord) -> AudioTrackRow in
-            AudioTrackRow(
-                take: project.take.id, track: track.id, isMicrophone: track.kind == .microphone, deviceName: track.source.name,
-                isDevice: track.kind == .deviceAudio)
-        }
+        audioTracks = AudioTrackRow.rows(of: project.takeRecords(shownBy: document))
         isDeviceTake = project.take.tracks.contains { $0.kind == .device }
         hasDesktopPhoto = false
         Self.findDesktopPhoto(in: project, document: document) { [weak self] found in self?.hasDesktopPhoto = found }
@@ -920,6 +955,9 @@ final class EditorModel {
             let next = session.document
             document = next
             durationSeconds = TimeMap(sequence: next.sequence).durationSeconds
+            // A take the sequence starts or stops showing adds or takes away its tracks.
+            let rows = AudioTrackRow.rows(of: session.project.takeRecords(shownBy: next))
+            if rows != audioTracks { audioTracks = rows }
             pruneSelection(in: next)
             if !isPlaying { movePlayhead(to: Timeline(next, revision: session.revision)) }
             build(next, revision: session.revision)

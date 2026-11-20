@@ -87,7 +87,7 @@ public enum EditorCommand: Equatable, Sendable {
     /// The timeline's scale.
     case zoomIn, zoomOut, fitTimeline
     case deselect
-    /// The panel's tab: 1 is the first (Background), 6 the last (Audio).
+    /// The panel's tab, ⌘1 … ⌘9: 1 is the first (Background), 9 the last (Annotations, phase 3 design §5.6).
     case tab(Int)
     case togglePanel
     case export
@@ -176,7 +176,7 @@ public struct KeyboardCommands {
         case ("e", [.command]): .export
         case ("o", [.command]): .open
         case let (digit, [.command]):
-            Int(digit).flatMap { (1...8).contains($0) ? .tab($0) : nil }
+            Int(digit).flatMap { (1...9).contains($0) ? .tab($0) : nil }
         default: nil
         }
     }

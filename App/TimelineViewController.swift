@@ -134,8 +134,8 @@ final class TimelineViewController: NSViewController {
             cachesFor = (project.package.url, project.take)
             makeCaches(project, caches)
         }
-        timeline.show(take: project.take, markers: model.markerTimes, document: document, missing: missing,
-            contentRatio: model.contentRatio(of: document))
+        timeline.show(take: project.take, takes: project.takeRecords(shownBy: document), markers: model.markerTimes,
+            document: document, missing: missing, contentRatio: model.contentRatio(of: document))
     }
 
     /// The thumbnails' cache, and the waveform of each audio track worked out off the main thread (decoded by the cache on
@@ -178,10 +178,9 @@ final class TimelineViewController: NSViewController {
         }
     }
 
+    /// The Mute of an audio row's header: of the track in every take that recorded it, as the Audio tab's.
     private func setMuted(_ track: String, _ muted: Bool) {
-        guard let take = model.overlayProject?.take, let record = take.track(track) else { return }
-        model.setTrackMuted(
-            AudioTrackRow(take: take.id, track: track, isMicrophone: record.kind == .microphone, deviceName: record.source.name),
-            muted)
+        guard let row = model.audioTracks.first(where: { $0.id == track }) else { return }
+        model.setTrackMuted(row, muted)
     }
 }
