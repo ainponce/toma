@@ -1153,6 +1153,9 @@ struct DrawCounts: Equatable, Sendable {
     /// How many times the step over the stage was reached (phase 3 design §12, step 4: `Compositor.drawOverTheStage`, the
     /// calm zoom's): once a frame with a stage, on every path but the camera over every pixel, drawn or not.
     var stageOverlaySteps = 0
+    /// Milestone 3b's: the calm zoom's drawings that read the frame as drawn (Dim and the loupe, `drawCalmZoom`), each in
+    /// a pass of its own into the target, counted in `renderPasses` too.
+    var calmZoomSamples = 0
 }
 
 /// Where a pipeline draws: alone into the target, or into one attachment of the motion blur's pass (0 the subsample, 1
