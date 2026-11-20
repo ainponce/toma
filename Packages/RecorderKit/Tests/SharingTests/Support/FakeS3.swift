@@ -44,6 +44,11 @@ final class FakeS3: Sendable {
         case networkFailure(URLError.Code)
         /// No answer at all until the task is cancelled.
         case hang
+        /// The storage does what was asked (stores the object, completes the upload…), but its answer is lost: the
+        /// request fails with `code`, as when the connection drops on the way back.
+        case processThenFail(URLError.Code)
+        /// The storage does what was asked and never answers, until the task is cancelled.
+        case processThenHang
     }
 
     struct Object: Sendable, Equatable {
@@ -186,6 +191,12 @@ final class FakeS3: Sendable {
                     return .answer(Self.error(status, code, date: date))
                 case .networkFailure(let code): return .failure(code)
                 case .hang: return .hang
+                case .processThenFail(let code):
+                    _ = answer(request, in: &state)
+                    return .failure(code)
+                case .processThenHang:
+                    _ = answer(request, in: &state)
+                    return .hang
                 }
             }
             return .answer(answer(request, in: &state))

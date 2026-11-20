@@ -47,6 +47,14 @@ import Testing
             preferences: Self.preferences(provider: .minio, endpoint: " http://[::1]:9000/ "), secret: Self.secret)
         #expect(configuration.endpoint.absoluteString == "http://[::1]:9000")
         #expect(configuration.objectURL(key: "toma/a.txt").absoluteString == "http://[::1]:9000/bucket/toma/a.txt")
+        // The scheme's own port is dropped (review M4): the URL and the signed host agree with what URLSession sends.
+        let defaultPort = try ShareConfiguration(
+            preferences: Self.preferences(endpoint: "https://E.example.com:443/", publicBaseURL: "https://p.example.com:443/v"),
+            secret: Self.secret)
+        #expect(defaultPort.endpoint.absoluteString == "https://e.example.com")
+        #expect(defaultPort.publicBaseURL?.absoluteString == "https://p.example.com/v")
+        let local = try ShareConfiguration(preferences: Self.preferences(endpoint: "http://localhost:80"), secret: Self.secret)
+        #expect(local.endpoint.absoluteString == "http://localhost")
     }
 
     @Test func publicBaseNeedsHTTPS() throws {
@@ -108,6 +116,15 @@ import Testing
                 provider: .s3, endpoint: "https://s3.eu-west-1.amazonaws.com", region: "eu-west-1", bucket: "my.bucket"),
             secret: Self.secret)
         #expect(dotted.addressing == .path)
+        // A bucket that is no host name's label (capitals, "_") is addressed by path too (review M5).
+        for bucket in ["MyBucket", "my_bucket"] {
+            let legacy = try ShareConfiguration(
+                preferences: Self.preferences(
+                    provider: .s3, endpoint: "https://s3.us-east-1.amazonaws.com", region: "us-east-1", bucket: bucket),
+                secret: Self.secret)
+            #expect(legacy.addressing == .path, "\(bucket)")
+            #expect(legacy.objectURL(key: "a").absoluteString == "https://s3.us-east-1.amazonaws.com/\(bucket)/a")
+        }
         #expect(
             dotted.objectURL(key: "toma/x/video.mp4").absoluteString
                 == "https://s3.eu-west-1.amazonaws.com/my.bucket/toma/x/video.mp4")
@@ -149,6 +166,18 @@ import Testing
         #expect(throws: ShareConfigurationProblem.missingSecret) {
             try ShareConfiguration(preferences: Self.preferences(), secret: "")
         }
+        // A region or an access key id that would break the signature's scope or its `Credential=` (review M6).
+        for region in ["us east-1", "eu/west", "US-EAST-1"] {
+            #expect(Self.problem(Self.preferences(region: region)) == .invalidRegion, "\(region)")
+        }
+        for id in ["AKID EXAMPLE", "AKID/1", "a,b", "clé"] {
+            var preferences = Self.preferences()
+            preferences.accessKeyID = id
+            #expect(Self.problem(preferences) == .invalidAccessKey, "\(id)")
+        }
+        var minio = Self.preferences(provider: .minio, endpoint: "http://localhost:9000", region: "us-east-1")
+        minio.accessKeyID = "minio_admin-1.x"
+        #expect(Self.problem(minio) == nil)
     }
 
     @Test func credentialsNeverPrint() throws {
