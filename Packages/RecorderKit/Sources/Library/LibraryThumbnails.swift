@@ -159,23 +159,33 @@ public actor LibraryThumbnails {
         }
     }
 
-    /// What the thumbnail of `project` draws (final review of phase 2): `document` with what `caches` hold of its camera's
-    /// analysis (`CameraAnalysisCaches.fill`: the masks while the background is not Original, the faces while the framing
-    /// follows the face), which it never makes. A Blurred or Removed camera with a segment the render can draw
+    /// What the thumbnail of `project` draws (final review of phase 2): `document` with what `caches` hold of the camera's
+    /// analysis of every take its sequence shows (`LoadedProject.takesShown(by:)`, `CameraAnalysisCaches.fill(_:document:
+    /// takes:package:caches:)`: the masks while the background is not Original, the faces while the framing follows the
+    /// face), which it never makes. A Blurred or Removed camera of the take of the thumbnail's frame (the clip shown at
+    /// `time(outputSeconds:)`; every take shown without one) with a segment the render can draw
     /// (`SegmentAvailability.present`) still without its mask is left out (`camera.show` off) rather than drawn with the
     /// room behind the person; Follow the Face without its faces stays centred, as the preview does until they arrive.
-    /// Reads the disk: never on the main thread.
+    /// Reads the disk (the events of the takes shown too, the first time): never on the main thread.
     static func drawn(
         _ project: LoadedProject, document: EditDocument, caches: ProjectCaches
     ) -> (document: EditDocument, analysis: AnalysisInputs) {
         var analysis = AnalysisInputs()
-        CameraAnalysisCaches.fill(&analysis, document: document, take: project.take, package: project.package, caches: caches)
+        let takes = project.takesShown(by: document).map(\.take)
+        CameraAnalysisCaches.fill(&analysis, document: document, takes: takes, package: project.package, caches: caches)
+        let map = TimeMap(sequence: document.sequence)
+        let frame = map.source(atOutput: TimeMap.outputNanoseconds(seconds: time(outputSeconds: map.durationSeconds)))
+        let framed = frame.flatMap { document.sequence.indices.contains($0.clip) ? document.sequence[$0.clip].take : nil }
         var drawn = document
         if document.camera.background != .original,
-           let track = CameraAnalysisCaches.cameraTrack(document: document, take: project.take),
-           track.segments.contains(where: { segment in
-               SegmentAvailability.classify(segment, in: project.package) == .present
-                   && analysis.personMasks[CameraSegment(take: project.take.id, track: track.id, segment: segment.index)] == nil
+           takes.contains(where: { take in
+               guard framed == nil || take.id == framed,
+                     let track = CameraAnalysisCaches.cameraTrack(document: document, take: take)
+               else { return false }
+               return track.segments.contains { segment in
+                   SegmentAvailability.classify(segment, in: project.package) == .present
+                       && analysis.personMasks[CameraSegment(take: take.id, track: track.id, segment: segment.index)] == nil
+               }
            })
         {
             drawn.camera.show = false
@@ -356,9 +366,7 @@ public actor LibraryThumbnails {
             guard !shouldStop() else { return stopped() }
             let caches = ProjectCaches(root: context.cachesRoot, projectID: project.manifest.resolvedProjectID)
             let (document, analysis) = drawn(project, document: read, caches: caches)
-            size = Self.size(
-                for: document.aspect,
-                contentRatio: StageLayout.contentRatio(take: project.take, document: document, events: project.events))
+            size = Self.size(for: document.aspect, contentRatio: StageLayout.contentRatio(project: project, document: document))
             renderer = try FrameRenderer(project: project, document: document, outputSize: size, analysis: analysis)
         } catch {
             return stopped()

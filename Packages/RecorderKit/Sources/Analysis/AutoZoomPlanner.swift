@@ -54,10 +54,15 @@ public enum AutoZoomPlanner {
     static let minimumDepth = 1.15
     static let minimumFreeDuration: Int64 = 1_000_000_000
 
-    public static func plan(take: TakeRecord, events: [InputEvent], document: EditDocument) -> [ZoomRegion] {
+    /// `contentRatio`: the ratio `auto` follows, for a take that is not the one of the document's first clip
+    /// (`StagePoints.init(take:events:document:contentRatio:)`: the blocks fit the output's stage); `nil` works it out
+    /// from `take`.
+    public static func plan(
+        take: TakeRecord, events: [InputEvent], document: EditDocument, contentRatio: Double?? = nil
+    ) -> [ZoomRegion] {
         let timeMap = TimeMap(sequence: document.sequence)
         guard document.zoom.auto.enabled, timeMap.duration > 0 else { return [] }
-        let stage = StagePoints(take: take, events: events, document: document)
+        let stage = StagePoints(take: take, events: events, document: document, contentRatio: contentRatio)
         let found = ActivityExtraction(take: take, events: events, timeMap: timeMap, stage: stage)
         let planner = Planner(
             settings: document.zoom.auto, stage: stage, timeMap: timeMap, sequence: document.sequence,

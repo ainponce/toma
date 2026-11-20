@@ -18,11 +18,19 @@ public enum MultiTakeFixtures {
     ///   looks like one of `take-001`), `mic` at 660 Hz and the cursor moving over the display, without clicks: the same
     ///   track IDs, so a track's gain holds by its id in both (`AudioPlan.trackGain(take:track:takes:)`).
     public static func twoTakes(in dir: URL) async throws -> LoadedProject {
-        let first = try TakeBuilder(in: dir, name: "TwoTakes")
-        try await record(into: first, start: base, seconds: 4, clicks: [1.0, 3.4], frequency: 440, inverted: false)
+        try await twoTakes(in: dir, name: "TwoTakes", secondScreen: screen)
+    }
+
+    /// `twoTakes(in:)` with the display of `take-002` of `secondScreen` (its global frame, and its pixels at 1×), as
+    /// one recorded on another screen: `Rect(x: 0, y: 0, width: 480, height: 360)` for a 4:3 one.
+    public static func twoTakes(in dir: URL, name: String, secondScreen: Rect) async throws -> LoadedProject {
+        let first = try TakeBuilder(in: dir, name: name)
+        try await record(into: first, start: base, seconds: 4, clicks: [1.0, 3.4], frequency: 440, inverted: false, screen: screen)
         _ = try first.write()
         let second = try TakeBuilder(appendingTo: first.package, take: "take-002")
-        try await record(into: second, start: base.adding(seconds: 60), seconds: 3, clicks: [], frequency: 660, inverted: true)
+        try await record(
+            into: second, start: base.adding(seconds: 60), seconds: 3, clicks: [], frequency: 660, inverted: true,
+            screen: secondScreen)
         _ = try second.write()
         return try LoadedProject.load(first.package.url)
     }
@@ -61,10 +69,11 @@ public enum MultiTakeFixtures {
     private static let base = HostTime(nanoseconds: 5_000_000_000_000)
     private static let screen = Rect(x: 0, y: 0, width: 640, height: 360)
 
-    /// Adds to `builder` `seconds` of `display-1` (its colours `inverted` or not), of `mic` (the sine at `frequency`)
-    /// and of the cursor from `start`, with a left click at each of `clicks`, where the cursor is then.
+    /// Adds to `builder` `seconds` of `display-1` of `screen` (its colours `inverted` or not), of `mic` (the sine at
+    /// `frequency`) and of the cursor from `start`, with a left click at each of `clicks`, where the cursor is then.
     private static func record(
-        into builder: TakeBuilder, start: HostTime, seconds: Double, clicks: [Double], frequency: Double, inverted: Bool
+        into builder: TakeBuilder, start: HostTime, seconds: Double, clicks: [Double], frequency: Double, inverted: Bool,
+        screen: Rect
     ) async throws {
         try await builder.addVideoTrack(
             id: "display-1",
@@ -80,11 +89,11 @@ public enum MultiTakeFixtures {
             InputEvent(t: start.adding(seconds: -0.01), kind: .displayGeometry(displayID: 1, frame: screen, scale: 1))
         ])
         try builder.addEvents((0..<Int(seconds * 120)).map { i in
-            let at = cursorPosition(at: Double(i) / 120, seconds: seconds)
+            let at = cursorPosition(at: Double(i) / 120, seconds: seconds, screen: screen)
             return InputEvent(t: start.adding(seconds: Double(i) / 120), kind: .cursor(x: at.x, y: at.y))
         })
         try builder.addEvents(clicks.flatMap { t -> [InputEvent] in
-            let at = cursorPosition(at: t, seconds: seconds)
+            let at = cursorPosition(at: t, seconds: seconds, screen: screen)
             return [
                 InputEvent(t: start.adding(seconds: t), kind: .mouseDown(.left, x: at.x, y: at.y)),
                 InputEvent(t: start.adding(seconds: t + 0.08), kind: .mouseUp(.left, x: at.x, y: at.y)),
@@ -92,8 +101,8 @@ public enum MultiTakeFixtures {
         })
     }
 
-    /// Where the cursor is `t` seconds after the start of a take of `seconds`: across the screen, as in `GoldenDocuments`.
-    private static func cursorPosition(at t: Double, seconds: Double) -> SIMD2<Double> {
+    /// Where the cursor is `t` seconds after the start of a take of `seconds`: across `screen`, as in `GoldenDocuments`.
+    private static func cursorPosition(at t: Double, seconds: Double, screen: Rect) -> SIMD2<Double> {
         let f = t / seconds
         return SIMD2(screen.x + screen.width * (0.2 + 0.6 * f), screen.y + screen.height * (0.3 + 0.4 * f))
     }

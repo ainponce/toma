@@ -216,29 +216,35 @@ public enum TrackCommands {
     /// (`screens.planner`). One `set` of `/screens`, since the planner's name is an optional key; without anything to
     /// change, the step has no changes.
     public static func followCursor(_ doc: EditDocument, project: LoadedProject) -> EditStep {
+        let screens = followed(doc.screens, project: project, timeMap: TimeMap(sequence: doc.sequence))
+        var changes = DocumentChanges()
+        changes.set(["screens"], from: doc.screens, to: screens)
+        return changes.stepEvenIfEmpty(label: .screen, target: "/screens")
+    }
+
+    /// `screens` with `project`'s take followed as `followCursor(_:project:)` says, in the output of `timeMap`: its
+    /// initial screen, its automatic changes planned again around its user's, and the planner's name with two or more
+    /// screens; every other take's left as they are.
+    static func followed(_ screens: ScreenPlan, project: LoadedProject, timeMap: TimeMap) -> ScreenPlan {
         let take = project.take
-        let timeMap = TimeMap(sequence: doc.sequence)
         let plan = ScreenFollowPlanner.plan(take: take, events: project.events, package: project.package, timeMap: timeMap)
         let follows = take.tracks.filter(\.kind.isScreen).count >= 2
 
-        var screens = doc.screens
-        if let initial = plan.initial { screens.initial[take.id] = initial }
-        let users = doc.screens.changes.filter { $0.take == take.id && $0.origin == .user }
+        var followed = screens
+        if let initial = plan.initial { followed.initial[take.id] = initial }
+        let users = screens.changes.filter { $0.take == take.id && $0.origin == .user }
         let userIDs = Set(users.map(\.id)), userInstants = Set(users.map(\.t))
         let autos = (follows ? plan.changes : []).filter { !userIDs.contains($0.id) && !userInstants.contains($0.t) }
-        var shown = screens.initial[take.id]
+        var shown = followed.initial[take.id]
         var merged: [ScreenChange] = []
         for change in (users + autos).enumerated().sorted(by: { ($0.element.t, $0.offset) < ($1.element.t, $1.offset) }).map(\.element) {
             if change.origin == .auto, change.track == shown { continue }
             merged.append(change)
             shown = change.track
         }
-        screens.changes = doc.screens.changes.filter { $0.take != take.id } + merged
-        if follows { screens.planner = ScreenFollowPlanner.id }
-
-        var changes = DocumentChanges()
-        changes.set(["screens"], from: doc.screens, to: screens)
-        return changes.stepEvenIfEmpty(label: .screen, target: "/screens")
+        followed.changes = screens.changes.filter { $0.take != take.id } + merged
+        if follows { followed.planner = ScreenFollowPlanner.id }
+        return followed
     }
 
     // MARK: - The sound

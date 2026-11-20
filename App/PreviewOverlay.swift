@@ -188,7 +188,10 @@ final class PreviewOverlayView: NSView {
     /// The stage's points of `document`, kept while it is the same document.
     private func points(of document: EditDocument, _ project: LoadedProject) -> StagePoints? {
         if stagePoints?.document != document, let screens = model.takeScreens {
-            stagePoints = (document, StagePoints(take: project.take, document: document, screens: screens))
+            // In the output's stage, whatever take it is of (the ratio of the first clip's take).
+            let ratio = model.contentRatio(of: document)
+            stagePoints = (
+                document, StagePoints(take: project.take, document: document, screens: screens, contentRatio: .some(ratio)))
         }
         return stagePoints?.points
     }

@@ -336,8 +336,9 @@ public struct FrameEvaluator: Sendable {
     /// size, frames per second and analysis: each clip draws its own take's screens, cursor, zoom, camera, privacy,
     /// captions and keys as that take alone draws them, and the frame of another take says which (`RenderFrame.take`).
     /// The one difference: a `.desktop` background is in every frame the desktop of the take of the sequence's first clip
-    /// (the style is the project's), so the classic gradient when the manifest does not have that take. A take without
-    /// paths in `paths` (or every take, without `paths`) has them built here, which costs what `MotionPaths` costs, and
+    /// (the style is the project's), so the classic gradient when the manifest does not have that take. Every take's
+    /// stage is the output's (`SequencePaths`). A take without paths in `paths` (or every take, without `paths`) has
+    /// them built here as `SequencePaths` builds them, which costs what `MotionPaths` costs, and
     /// each other take's events are read (the disk, the first time): never on the main thread. With one take, exactly the
     /// scene of that take.
     public init(
@@ -350,10 +351,17 @@ public struct FrameEvaluator: Sendable {
         } else {
             desktop = project.take
         }
+        // Every take's stage is the output's (`SequencePaths`): a take that is not the first clip's needs its ratio.
+        let drawn = [project] + project.takesShown(by: document)
+        let paths = if let paths, drawn.allSatisfy({ paths.byTake[$0.take.id] != nil }) {
+            paths
+        } else {
+            SequencePaths(project: project, document: document, cameraReadable: cameraReadable, reusing: paths)
+        }
         func scene(_ shown: LoadedProject) -> FrameEvaluator {
             let id = shown.take.id
             var scene = FrameEvaluator(
-                take: shown.take, events: shown.events, document: document, outputSize: outputSize, paths: paths?.byTake[id],
+                take: shown.take, events: shown.events, document: document, outputSize: outputSize, paths: paths.byTake[id],
                 frameRate: frameRate, cameraReadable: cameraReadable[id] ?? true, analysis: analysis)
             if desktop?.id != id {
                 scene.desktopTake = desktop

@@ -67,10 +67,13 @@ public enum NewDocument {
     /// The corners that cover the black ones of the windows `document` shows (`WindowCornerCover`) wherever it shows them:
     /// the most any needs at the start of a clip of the take, or at a change of a window's frame inside one (a narrower
     /// window, or one drawn larger, needs rounder corners). Each at the window's width in points then and its screen's
-    /// rect as the render places it (`StagePoints`); 0 when no window with a usable frame is shown at any of those. Also
-    /// what a take new in the document brings (`TakeCommands`), for its clips alone.
-    static func windowCornerCover(of document: EditDocument, take: TakeRecord, events: [InputEvent]) -> Double {
-        let stage = StagePoints(take: take, events: events, document: document)
+    /// rect as the render places it (`StagePoints`, with `contentRatio` as it takes it: the output's, for a take that is
+    /// not the first clip's); 0 when no window with a usable frame is shown at any of those. Also what a take new in the
+    /// document brings (`TakeCommands`), for its clips alone.
+    static func windowCornerCover(
+        of document: EditDocument, take: TakeRecord, events: [InputEvent], contentRatio: Double?? = nil
+    ) -> Double {
+        let stage = StagePoints(take: take, events: events, document: document, contentRatio: contentRatio)
         let clips = document.sequence.filter { $0.take == take.id }
         let changes = events.compactMap { event -> HostTime? in
             guard case .windowGeometry = event.kind, clips.contains(where: { $0.start <= event.t && event.t < $0.end }) else { return nil }

@@ -603,8 +603,9 @@ public final class EditSession {
         }
     }
 
-    /// "Apply Default Style" (design §5.9): `StyleCommands.applyDefaultStyle` of `style` for the take, as one step that
-    /// `perform` takes. An image background is brought into the package first from `styleDirectory`, the default style's
+    /// "Apply Default Style" (design §5.9): `StyleCommands.applyDefaultStyle` of `style` for every take the sequence shows
+    /// (`StyleCommands.applyDefaultStyle(_:_:takes:)`, their events read off the main actor), as one step that `perform`
+    /// takes. An image background is brought into the package first from `styleDirectory`, the default style's
     /// folder (its `<sha>.<ext>`, with `importAsset`); without the folder, or if the image is not there, does not decode
     /// or cannot be saved, the classic gradient (`Background.tomaClassic`) is applied in its place. `.refused` if the
     /// project cannot be edited, or has all of it already.
@@ -622,13 +623,13 @@ public final class EditSession {
             }
             style.style.background = background
         }
-        guard let step = StyleCommands.applyDefaultStyle(document, style, take: project.take, events: project.events)
+        guard let takes = await shownTakes(), let step = StyleCommands.applyDefaultStyle(document, style, takes: takes)
         else { return .refused }
         return perform(step)
     }
 
-    /// "Apply" a named style (1c design §8): `StyleCommands.applyStyle` of `style` for the take, as one step that `perform`
-    /// takes. An image background is brought into the package first from `imageDirectory`, the folder of the style's
+    /// "Apply" a named style (1c design §8): `StyleCommands.applyStyle` of `style` for every take the sequence shows
+    /// (`StyleCommands.applyStyle(_:_:takes:)`, their events read off the main actor), as one step that `perform` takes. An image background is brought into the package first from `imageDirectory`, the folder of the style's
     /// image (`StyleLibrary.imageDirectory(of:)`), with `importAsset`, as `applyDefaultStyle` does; without the folder, or
     /// if the image is not there or does not decode, the rest is applied and the project keeps its background
     /// (`imageMissing`). An error of the disk is never a missing image: `importAsset` tries it again meanwhile, and if it
@@ -651,9 +652,22 @@ public final class EditSession {
             // The document as it is after the import, which waited.
             style.look.style.background = imported.map { .image(file: $0) } ?? document.style.background
         }
-        guard let step = StyleCommands.applyStyle(document, style, take: project.take, events: project.events)
+        guard let takes = await shownTakes(), let step = StyleCommands.applyStyle(document, style, takes: takes)
         else { return (.refused, imageMissing) }
         return (perform(step), imageMissing)
+    }
+
+    /// The takes `document`'s sequence shows (`LoadedProject.takesShown(by:)`) with their events, read on the session's
+    /// queue of files (each take's from the disk the first time): never on the main actor. Read again if the document
+    /// came to show other takes meanwhile, so they are those of the document as it is on return; `nil` if the session
+    /// closed meanwhile.
+    private func shownTakes() async -> [(TakeRecord, [InputEvent])]? {
+        while !isClosed {
+            let shown = project.takesShown(by: document)
+            guard let takes = try? await Self.run(on: files, { shown.map { ($0.take, $0.events) } }) else { return nil }
+            if takes.map(\.0.id) == project.takesShown(by: document).map(\.take.id) { return takes }
+        }
+        return nil
     }
 
     /// Waits for the attempt at the upgrade to version 3 under way to come back, then until the journal confirmed every

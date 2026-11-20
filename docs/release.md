@@ -1114,6 +1114,11 @@ Con macOS 26, el modelo del idioma instalado y Ajustes ▸ General ▸ «Transcr
 - VoiceOver lee «Placa «Intro», 3 s», «Cuadro congelado, 2 s» y «Clip importado, 4,5 s», con la acción Borrar.
 - Con el proyecto de la vitrina (`TOMA_SHOWCASE_P3_ANNOTATIONS=content scripts/ui-shots.sh build/shots/a15 editor <proyecto>`, en oscuro y en claro): «Intro» al principio, el congelado elegido a los 6 s y la toma importada como clip al final, los tres distintos de un tramo de la toma; ningún texto cortado en español. El agente no pudo capturar la pantalla (estaba bloqueada): vio la fila dibujada desde sus capas (`TOMA_SHOWCASE_P3_TIMELINE_PNG`).
 
+**La edición con varias tomas** (T8, con la app de T10)
+
+- En un proyecto de dos tomas (la segunda agregada con Tomas ▸ «Agregar al final» o regrabada) en «Como la grabación», con la segunda grabada en otra pantalla de otra proporción (la de la MacBook y un monitor 16:9): la vista previa, el MP4 y el GIF tienen la forma de la pantalla de la toma del primer clip; en el tramo de la otra toma su pantalla entra entera, centrada, y un zoom con foco fijo, el cursor y la burbuja caen donde apuntan, sin correrse a un costado. Mover al principio un clip de la otra toma cambia la forma de las tres a la suya.
+- Con las dos tomas en la secuencia: Regenerar los zooms automáticos y Seguir el cursor cambian los bloques y las pantallas de las dos, y dejan los del usuario; Aplicar un estilo (y el estilo por defecto) cambia el estilo del proyecto y vuelve a planear los zooms de las dos; con la cámara en Fondo borroso en las dos, la tarjeta de la Biblioteca muestra la burbuja sin el cuarto y dice que el proyecto tiene cámara aunque solo la tenga la segunda.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
