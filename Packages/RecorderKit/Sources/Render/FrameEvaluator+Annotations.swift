@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Analysis
+import Foundation
 import ProjectFormat
 import Synchronization
 
@@ -207,6 +208,137 @@ struct AnnotationScene: Sendable {
             }
             return Self.layer(item.annotation, placed, state)
         }
+    }
+
+    // MARK: - Ahead
+
+    /// How far ahead the bitmaps of the layers coming in are drawn (`outputAhead`, `contentAhead`): half a second.
+    static let aheadWindow: Int64 = 500_000_000
+    /// How many frames ahead the steps of an entrance being drawn (`AnnotationLayer.drawn`) are drawn.
+    static let aheadFrames = 3
+    /// How many times over `aheadWindow` the zoom is read for the steps of √2 it reaches.
+    static let zoomSamples = 5
+    /// The most layers coming in a frame hands over: the rest, those after them, are handed over by the frames that follow.
+    static let aheadEntering = 16
+
+    /// What the frames after output time `τ` (frames on the grid of `frameRate`) draw new of the output's annotations, to
+    /// draw their bitmaps ahead (`RenderFrame.annotationsAhead`), all at 1: each one coming in within `aheadWindow`, as its
+    /// first frame shows it, and, while `current` (those `τ` shows) has one being drawn in, those being drawn in in the next
+    /// `aheadFrames` frames. None without annotations of the output.
+    func outputAhead(atOutput τ: Int64, frameRate: Int, current: [AnnotationLayer]) -> [AnnotationAhead] {
+        guard !outputItems.isEmpty, frameRate > 0 else { return [] }
+        var ahead: [AnnotationAhead] = []
+        func add(_ layer: AnnotationLayer) {
+            let wanted = AnnotationAhead(layer: layer, scale: 1)
+            if !ahead.contains(wanted) { ahead.append(wanted) }
+        }
+        for (time, ids) in Self.entering(outputItems, after: τ, frameRate: frameRate) {
+            for layer in output(atOutput: time) where ids.contains(layer.id) { add(layer) }
+        }
+        // Those being drawn in, up to their last step (drawn whole).
+        let drawing = current.filter { $0.drawn < 1 }.map(\.id)
+        if !drawing.isEmpty {
+            for time in Self.nextFrames(after: τ, frameRate: frameRate) {
+                for layer in output(atOutput: time) where drawing.contains(layer.id) { add(layer) }
+            }
+        }
+        return ahead
+    }
+
+    /// What the frames after `frame`, the frame of the take at output time `τ` (frames on the grid of `frameRate`), draw new
+    /// of the annotations stuck to the recording, to draw their bitmaps ahead (`RenderFrame.annotationsAhead`), on `frame`'s
+    /// screen as it is (one whose screen moves meanwhile draws them in its encoding, as without them): each one coming in
+    /// within `aheadWindow`, as its first frame shows it; while `frame` has one being drawn in, those being drawn in in the
+    /// next `aheadFrames` frames; and while the zoom moves, `frame`'s own at each step of √2 it reaches within
+    /// `aheadWindow` (read `zoomSamples` times). Each at the scale (`AnnotationRaster.scale(for:depth:)`) of the depth the
+    /// content will be drawn through at its time, `depth`. None without annotations stuck to the take.
+    func contentAhead(
+        atOutput τ: Int64, frame: RenderFrame, frameRate: Int, depth: (_ output: Int64) -> Double
+    ) -> [AnnotationAhead] {
+        guard !contentItems.isEmpty, frameRate > 0, frame.screen != nil else { return [] }
+        var ahead: [AnnotationAhead] = []
+        func add(_ layer: AnnotationLayer, at time: Int64) {
+            let wanted = AnnotationAhead(layer: layer, scale: AnnotationRaster.scale(for: layer, depth: depth(time)))
+            if !ahead.contains(wanted) { ahead.append(wanted) }
+        }
+        func layers(at time: Int64) -> [AnnotationLayer] {
+            guard let source = timeMap.source(atOutput: time)?.source else { return [] }
+            return content(atSource: source, output: time, frame: frame)
+        }
+        for (time, ids) in Self.entering(contentItems, after: τ, frameRate: frameRate) {
+            for layer in layers(at: time) where ids.contains(layer.id) { add(layer, at: time) }
+        }
+        let drawing = frame.contentAnnotations.filter { $0.drawn < 1 }.map(\.id)
+        if !drawing.isEmpty {
+            for time in Self.nextFrames(after: τ, frameRate: frameRate) {
+                for layer in layers(at: time) where drawing.contains(layer.id) { add(layer, at: time) }
+            }
+        }
+        // The zoom's steps of √2: those it reaches, for the layers shown now.
+        if !frame.contentAnnotations.isEmpty {
+            let now = depth(τ)
+            var depths: [Double] = []
+            for k in 1...Self.zoomSamples {
+                let later = depth(τ + Self.aheadWindow * Int64(k) / Int64(Self.zoomSamples))
+                if later != now, !depths.contains(later) { depths.append(later) }
+            }
+            /// The step of √2 of `scale`: k of √2^k.
+            func level(_ scale: Double) -> Int { Int((2 * log2(scale)).rounded()) }
+            for layer in frame.contentAnnotations {
+                let from = level(AnnotationRaster.scale(for: layer, depth: now))
+                for later in depths {
+                    // Every step between, should the zoom pass more than one between two readings.
+                    let to = level(AnnotationRaster.scale(for: layer, depth: later))
+                    for step in stride(from: from, through: to, by: to < from ? -1 : 1) where step != from {
+                        let scale = AnnotationRaster.scale(for: layer, depth: pow(2, Double(step) / 2))
+                        let wanted = AnnotationAhead(layer: layer, scale: scale)
+                        if level(scale) != from, !ahead.contains(wanted) { ahead.append(wanted) }
+                    }
+                }
+            }
+        }
+        return ahead
+    }
+
+    /// The first frame (on the grid of `frameRate`) of each of `items` coming in after output time `τ` and within
+    /// `aheadWindow` of it, with the ids of those it shows first, in time order; at most `aheadEntering` of them.
+    private static func entering(_ items: [Item], after τ: Int64, frameRate: Int) -> [(time: Int64, ids: [String])] {
+        let (end, overflow) = τ.addingReportingOverflow(aheadWindow)
+        var firsts: [(time: Int64, ids: [String])] = []
+        for item in items.sorted(by: { $0.range.lowerBound < $1.range.lowerBound }).prefix(while: { overflow || $0.range.lowerBound <= end })
+        where item.range.lowerBound > τ && !item.range.isEmpty {
+            guard firsts.reduce(0, { $0 + $1.ids.count }) < aheadEntering else { break }
+            let time = firstFrame(atOrAfter: item.range.lowerBound, frameRate: frameRate)
+            guard item.range.contains(time) else { continue }
+            if let index = firsts.firstIndex(where: { $0.time == time }) {
+                firsts[index].ids.append(item.annotation.id)
+            } else {
+                firsts.append((time, [item.annotation.id]))
+            }
+        }
+        return firsts
+    }
+
+    /// The `aheadFrames` frames on the grid of `frameRate` after output time `τ`.
+    private static func nextFrames(after τ: Int64, frameRate: Int) -> [Int64] {
+        let first = firstFrame(atOrAfter: τ + 1, frameRate: frameRate)
+        guard let index = frameIndex(of: first, frameRate: frameRate) else { return [] }
+        return (0..<aheadFrames).map { TimeMap.frameTime(index + $0, frameRate: frameRate) }
+    }
+
+    /// The first frame on the grid of `frameRate` at or after output time `t`.
+    private static func firstFrame(atOrAfter t: Int64, frameRate: Int) -> Int64 {
+        guard var index = frameIndex(of: t, frameRate: frameRate) else { return t }
+        while index > 0, TimeMap.frameTime(index - 1, frameRate: frameRate) >= t { index -= 1 }
+        while TimeMap.frameTime(index, frameRate: frameRate) < t { index += 1 }
+        return TimeMap.frameTime(index, frameRate: frameRate)
+    }
+
+    /// The index on the grid of `frameRate` of the frame nearest to `t`; `nil` for a time out of range.
+    private static func frameIndex(of t: Int64, frameRate: Int) -> Int? {
+        let index = (Double(t) * Double(frameRate) / 1e9).rounded()
+        guard index.isFinite, index >= 0, index < Double(Int32.max) else { return nil }
+        return Int(index)
     }
 
     /// How many times the texts' lines and line heights were measured, for tests and the measures.

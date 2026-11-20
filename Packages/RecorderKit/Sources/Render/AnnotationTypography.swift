@@ -13,8 +13,9 @@ import ProjectFormat
 /// - The font is the system's (SF Pro), rounded, serif (New York) or mono (SF Mono) (`TextFont`), the designs of the
 ///   system font (`NSFontDescriptor.SystemDesign`), in the weight of `kCTFontWeightTrait` 0, 0.3, 0.4 or 0.56
 ///   (`TextWeight`), asked for `fontLanguage` so a character it lacks falls back the same way on every Mac; `text.size` of
-///   the annotation's unit (the height of its space) tall. CoreText applies its own tracking and optical size for that
-///   size.
+///   the annotation's unit (the height of its space) tall, at the optical size of its size at `referenceUnit` (A6's
+///   review): its shapes and its widths are then in proportion at every size it is drawn at, the preview's, a 4K
+///   export's and a zoom's steps of √2, so a centred line does not move sideways from one to another.
 /// - The lines: the string cut at each new line (a new line at the end starts an empty line), and each piece wrapped by
 ///   words (`CTTypesetterSuggestLineBreak`) to the box's width less its padding on both sides; a word wider than that is
 ///   cut where it must. The words are wrapped as if the unit were `referenceUnit`, the box's width scaled with it, so a
@@ -72,8 +73,12 @@ enum AnnotationTypography {
             return nil
         }
         let traits = [kCTFontWeightTrait: weight(of: text.weight)] as CFDictionary
-        let weighted = CTFontDescriptorCreateCopyWithAttributes(
-            CTFontCopyFontDescriptor(base), [kCTFontTraitsAttribute: traits] as CFDictionary)
+        var attributes: [CFString: Any] = [kCTFontTraitsAttribute: traits]
+        // Its optical size, the size at `referenceUnit`: the same shapes and widths, in proportion, at every size it is
+        // drawn at, as the lines are wrapped at that size (SF's widths change with the optical size below some 28 px).
+        let reference = text.size * referenceUnit
+        if reference > 0, reference.isFinite { attributes[kCTFontOpticalSizeAttribute] = reference }
+        let weighted = CTFontDescriptorCreateCopyWithAttributes(CTFontCopyFontDescriptor(base), attributes as CFDictionary)
         // The same descriptor as AppKit's: its design changed, its weight and its language kept. The system's is as it is.
         let designed =
             text.font == .system

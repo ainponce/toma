@@ -436,10 +436,35 @@ public struct FrameEvaluator: Sendable {
         let τ = TimeMap.outputNanoseconds(seconds: outputTime)
         var frame = try clipFrame(atOutput: τ, cursorImageIsReadable: cursorImageOfTakeIsReadable)
         if timeMap.duration > 0 {
-            frame.outputAnnotations = annotations.output(atOutput: min(max(τ, 0), timeMap.duration - 1))
+            let clamped = min(max(τ, 0), timeMap.duration - 1)
+            frame.outputAnnotations = annotations.output(atOutput: clamped)
+            frame.annotationsAhead = annotationsAhead(of: frame, atOutput: clamped)
         }
         frame.titleCardsAhead = titleCard.ahead(atOutput: τ)
         return frame
+    }
+
+    /// The annotations' layers the frames after `frame`, the frame at output time `τ`, draw new (`RenderFrame.annotationsAhead`,
+    /// A6's review): the output's (`AnnotationScene.outputAhead`), then those stuck to the recording of the take the frame
+    /// shows, by that take's scene (`AnnotationScene.contentAhead`), at the depth its content will be drawn through: the
+    /// frame's (`AnnotationRaster.contentDepth`) times how much its zoom (the card's, in a card's mode) grows by then.
+    private func annotationsAhead(of frame: RenderFrame, atOutput τ: Int64) -> [AnnotationAhead] {
+        var ahead = annotations.outputAhead(atOutput: τ, frameRate: frameRate, current: frame.outputAnnotations)
+        guard let scene = frame.take.map({ $0 == takeID ? self : takeScenes[$0] }) ?? self else { return ahead }
+        let now = AnnotationRaster.contentDepth(of: frame)
+        let paths = scene.paths
+        func zoom(_ t: Int64) -> Double {
+            let depth = frame.isCardMode ? paths.cardZoom?.state(atOutput: t).depth ?? 1 : paths.zoom.state(atOutput: t).depth
+            return depth.isFinite ? max(depth, 1) : 1
+        }
+        var zoomNow: Double?
+        ahead += scene.annotations.contentAhead(atOutput: τ, frame: frame, frameRate: frameRate) { t in
+            guard t != τ else { return now }
+            let start = zoomNow ?? zoom(τ)
+            zoomNow = start
+            return now * zoom(t) / start
+        }
+        return ahead
     }
 
     /// The frame at output time `τ` (clamped to the output, as `TimeMap.source(atOutput:)` clamps it) before the output's

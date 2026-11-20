@@ -63,14 +63,21 @@ enum AnnotationRaster {
     static let stepRing = 0.06
     static let stepNumberSize = 0.5
 
-    /// The scale an annotation stuck to the recording drawn through a zoom of `depth` (`StageTransform.depth`) is drawn at:
-    /// 1 at rest; otherwise the depth rounded up to √2^k (as `TitleTexture.scale(for:)`, which is the window frame's and
-    /// 1 without one), so the bitmap is never magnified and a zoom that moves draws it again only at each step of √2, at
-    /// most what keeps it within `maxSide` and `maxZoomedPixels`. A depth within 10⁻⁹ of a step is that step (√2 is √2, not
-    /// 2, whatever `log2` rounds it to).
+    /// A depth this close above 1 is drawn at 1, as at rest: the end of a zoom that settles does not draw a bitmap at √2
+    /// to shrink it by less than this, and then jump to the one at rest.
+    static let restingDepth = 1.01
+    /// The smallest scale a bitmap is drawn at: √2^−16.
+    static let lowestLevel = -16
+
+    /// The scale an annotation stuck to the recording drawn through a zoom of `depth` (`StageTransform.depth`, or a card's
+    /// content, which can be smaller than the stage) is drawn at: 1 at rest and up to `restingDepth`; otherwise the depth
+    /// rounded up to √2^k (as `TitleTexture.scale(for:)`, which is the window frame's and 1 without one), above 1 or below
+    /// it, so the bitmap is never magnified nor shrunk by more than √2 (which bilinear filtering does without aliasing), and
+    /// a zoom that moves draws it again only at each step of √2; at most what keeps it within `maxSide` and
+    /// `maxZoomedPixels`. A depth within 10⁻⁹ of a step is that step (√2 is √2, not 2, whatever `log2` rounds it to).
     static func scale(for layer: AnnotationLayer, depth: Double) -> Double {
-        guard depth.isFinite, depth > 1, let bounds = bounds(of: layer) else { return 1 }
-        var level = Int(min((2 * log2(depth) - 1e-9).rounded(.up), 64))
+        guard depth.isFinite, depth > 0, depth > restingDepth || depth < 1, let bounds = bounds(of: layer) else { return 1 }
+        var level = Int(min(max((2 * log2(depth) - 1e-9).rounded(.up), Double(lowestLevel)), 64))
         while level > 0 {
             let s = pow(2, Double(level) / 2)
             let width = bounds.width * s + 2 * marginPixels + 2, height = bounds.height * s + 2 * marginPixels + 2
@@ -78,6 +85,12 @@ enum AnnotationRaster {
             level -= 1
         }
         return pow(2, Double(level) / 2)
+    }
+
+    /// The depth the annotations stuck to the recording of `frame` are drawn through (`Compositor.drawContentAnnotations`):
+    /// in a card's mode, the card's content's (the background's without a card); otherwise the stage's; 1 at rest.
+    static func contentDepth(of frame: RenderFrame) -> Double {
+        frame.isCardMode ? frame.card?.content.depth ?? frame.backgroundTransform?.depth ?? 1 : frame.stage?.depth ?? 1
     }
 
     /// The whole pixels of `layer`'s bitmap at `scale`, in its coordinates times `scale`, from the top left: what it touches
@@ -174,7 +187,7 @@ enum AnnotationRaster {
             case let .callout(callout, tail):
                 return canvas.callout(callout, box: layer.rect, tail: tail, unit: layer.unit)
             case let .step(step, number):
-                return canvas.step(step, number: number, rect: layer.rect)
+                return canvas.step(step, number: number, rect: layer.rect, unit: layer.unit)
             case .image, .clip:
                 return false
             }
@@ -559,22 +572,23 @@ private struct Canvas {
 
     // MARK: - Steps
 
-    /// A step (see `AnnotationRaster`'s notes) numbered `number` in `rect`.
-    func step(_ step: StepAnnotation, number: Int, rect: Rect) -> Bool {
+    /// A step (see `AnnotationRaster`'s notes) numbered `number` in `rect`, in a space of `unit`.
+    func step(_ step: StepAnnotation, number: Int, rect: Rect, unit: Double) -> Bool {
         let circle = AnnotationGeometry.stepCircle(in: rect)
         let radius = circle.radius
-        guard radius > 0, radius.isFinite else { return false }
+        guard radius > 0, radius.isFinite, unit > 0, unit.isFinite else { return false }
         func disc(_ r: Double) -> CGPath {
             CGPath(ellipseIn: CGRect(x: circle.center.x - r, y: circle.center.y - r, width: 2 * r, height: 2 * r), transform: nil)
         }
         let white = RGBA(1, 1, 1, 1)
         fillPath(disc(radius), white)
         fillPath(disc(radius * (1 - 2 * AnnotationRaster.stepRing)), step.color)
-        // Its number, white, its glyphs centred in the circle.
+        // Its number, white, its glyphs centred in the circle: a text of 0.5 d (the radius) in its space, so its optical
+        // size is the same at every scale (`AnnotationTypography.font`).
         let text = TextAnnotation(
-            string: String(number), preset: .plain, font: .rounded, weight: .bold, size: AnnotationRaster.stepNumberSize * 2,
-            color: white, fill: nil)
-        guard let font = AnnotationTypography.font(text, unit: radius, scale: scale) else { return true }
+            string: String(number), preset: .plain, font: .rounded, weight: .bold,
+            size: AnnotationRaster.stepNumberSize * 2 * radius / unit, color: white, fill: nil)
+        guard let font = AnnotationTypography.font(text, unit: unit, scale: scale) else { return true }
         var attributes = AnnotationTypography.attributes(font: font)
         attributes[NSAttributedString.Key(kCTForegroundColorAttributeName as String)] = Self.color(white)
         let line = CTLineCreateWithAttributedString(NSAttributedString(string: text.string, attributes: attributes))
@@ -586,16 +600,39 @@ private struct Canvas {
     }
 }
 
+/// A layer a frame hands over to have its bitmap drawn ahead (`RenderFrame.annotationsAhead`), at the scale a frame soon
+/// after will draw it at: one coming in, a step of an entrance being drawn, the next step of √2 of a zoom that moves.
+public struct AnnotationAhead: Equatable, Sendable {
+    public var layer: AnnotationLayer
+    /// The scale of its bitmap (`AnnotationRaster.scale(for:depth:)`; 1 for one of the output).
+    public var scale: Double
+
+    public init(layer: AnnotationLayer, scale: Double) {
+        self.layer = layer
+        self.scale = scale
+    }
+}
+
 /// The bitmaps of the annotations as textures (`AnnotationRaster`), `annotation-1`: each a premultiplied `.bgra8Unorm`
 /// texture of a layer at a scale, kept by what it draws (its content, its box, its space, its unit and how much of its
-/// stroke is drawn: not its opacity, its pop or its rotation, which the compositor applies) and by the scale, the last
-/// `kept` used, and at most `maxBytes` of them, under a lock. A layer the frames go on showing binds a texture made
-/// already; one being drawn in (`draw`) makes one each frame until it is in. A layer with nothing to draw has none.
+/// stroke is drawn: not its opacity, its pop or its rotation, which the compositor applies) and by the scale, under a lock.
+///
+/// - Drawn ahead: each frame hands over the layers the frames soon after it will draw (`RenderFrame.annotationsAhead`:
+///   those coming in within half a second, the next steps of an entrance being drawn, the next step of √2 of a zoom that
+///   moves), and `prepare` draws those neither kept nor being drawn, on a queue of its own in the background, up to
+///   `maxPending` at once: the same function, so the same bytes, as in a frame. A frame that asks for one being drawn
+///   ahead waits for it rather than drawing it again; one that was not drawn ahead (a jump) is drawn in its encoding.
+/// - Kept: the last `kept` used, and at most `maxBytes` of them, the oldest going first, but never one the frame being
+///   drawn or the one before it used or handed over ahead (`frame`: `prepare` ends each frame), however many: a frame
+///   that shows 40 layers, or more than `maxBytes` of them, keeps them all and draws none again the next frame.
+/// - A layer with nothing to draw has none; one CoreGraphics or Metal cannot make is not kept, and its frames try again.
 final class AnnotationRasters: Sendable {
-    /// How many textures are kept.
+    /// How many textures are kept, past those in use.
     static let kept = 32
-    /// The most bytes of textures kept: past them the oldest go first, though the latest is kept whatever its size.
+    /// The most bytes of textures kept, past those in use.
     static let maxBytes = 256 << 20
+    /// The most layers being drawn ahead at once: the rest wait for the frames that follow.
+    static let maxPending = 8
 
     /// What a layer's bitmap depends on.
     private struct Key: Equatable {
@@ -611,58 +648,145 @@ final class AnnotationRasters: Sendable {
         }
     }
 
+    /// A texture of a layer at a scale and the rect it covers in the layer's coordinates.
+    typealias Made = (texture: any MTLTexture, region: Rect)
+
     private struct Entry {
         let key: Key
-        let texture: (any MTLTexture)?
-        let region: Rect
+        let made: Made?
         let bytes: Int
+        /// The last frame that drew it or handed it over ahead (`State.frame`).
+        var used: UInt64
     }
 
     private struct State {
-        /// The textures last used, the latest last.
+        /// The textures kept, the one used last, last.
         var entries: [Entry] = []
         var bytes = 0
+        /// The layers being drawn ahead, with what tells they are done.
+        var pending: [(key: Key, done: DispatchGroup)] = []
+        /// The frame being drawn: `prepare` ends it.
+        var frame: UInt64 = 1
         var drawCount = 0
+        var inlineDrawCount = 0
     }
 
     private let state = Mutex(State())
+    /// Where the layers ahead are drawn, one at a time.
+    private let queue = DispatchQueue(label: "dev.toma.AnnotationRasters", qos: .userInitiated)
 
     init() {}
 
-    /// How many textures have been made, for tests and the measures.
+    /// How many textures have been made, ahead or in a frame, for tests and the measures.
     var drawCount: Int { state.withLock { $0.drawCount } }
-
+    /// How many of them were made in a frame's encoding (`texture(for:scale:device:)` found neither the texture nor its
+    /// drawing ahead), for tests and the measures.
+    var inlineDrawCount: Int { state.withLock { $0.inlineDrawCount } }
     /// How many are kept, and their bytes, for tests.
     var keptCount: (textures: Int, bytes: Int) { state.withLock { ($0.entries.count, $0.bytes) } }
 
     /// The texture of `layer` at `scale` (`AnnotationRaster.bitmap(of:scale:)`) and the rect it covers in the layer's
-    /// coordinates; `nil` when it has nothing to draw. Kept, it is there; otherwise it is drawn now and kept.
+    /// coordinates; `nil` when it has nothing to draw. Kept or drawn ahead, it is there; being drawn ahead, this waits for
+    /// it; otherwise it is drawn now and kept. Marks it used by the frame being drawn.
     /// - Throws: `RenderError.metalResourceUnavailable` if CoreGraphics or Metal cannot make what it needs.
-    func texture(for layer: AnnotationLayer, scale: Double, device: any MTLDevice) throws -> (texture: any MTLTexture, region: Rect)? {
+    func texture(for layer: AnnotationLayer, scale: Double, device: any MTLDevice) throws -> Made? {
         let key = Key(layer, scale: scale)
-        return try state.withLock { state -> (texture: any MTLTexture, region: Rect)? in
-            if let index = state.entries.firstIndex(where: { $0.key == key }) {
-                let found = state.entries.remove(at: index)
-                state.entries.append(found)
-                return found.texture.map { ($0, found.region) }
+        while true {
+            let found: Result<Made?, any Error>? = state.withLock { state in
+                if let index = state.entries.firstIndex(where: { $0.key == key }) {
+                    var found = state.entries.remove(at: index)
+                    found.used = state.frame
+                    state.entries.append(found)
+                    return .success(found.made)
+                }
+                guard !state.pending.contains(where: { $0.key == key }) else { return nil }
+                return Result {
+                    let made = try Self.makeTexture(for: layer, scale: scale, device: device)
+                    Self.keep(key, made, in: &state)
+                    state.inlineDrawCount += 1
+                    return made
+                }
             }
-            let made = try Self.makeTexture(for: layer, scale: scale, device: device)
-            let bytes = made.map { $0.texture.width * $0.texture.height * 4 } ?? 0
-            // The oldest textures' memory goes before the next is kept.
-            while !state.entries.isEmpty, state.entries.count >= Self.kept || state.bytes + bytes > Self.maxBytes {
-                state.bytes -= state.entries.removeFirst().bytes
+            if let found { return try found.get() }
+            // Being drawn ahead: done, it is kept (or, failing, drawn here on the next turn).
+            state.withLock { state in state.pending.first { $0.key == key }?.done }?.wait()
+        }
+    }
+
+    /// Ends the frame being drawn, handing over `ahead` (`RenderFrame.annotationsAhead`): those kept are marked used by it,
+    /// and those neither kept nor being drawn are drawn in the background, up to `maxPending` at once, each kept once
+    /// drawn. Returns at once. Every frame calls it once (`Compositor.drawOverlays`), with none as every frame of phases 1
+    /// and 2: then it only counts the frame.
+    func prepare(_ ahead: [AnnotationAhead], device: any MTLDevice) {
+        let scheduled: [(AnnotationAhead, Key, DispatchGroup)] = state.withLock { state in
+            defer {
+                // What no frame uses any more goes while more are kept than may be.
+                Self.trim(making: 0, bytes: 0, in: &state)
+                state.frame += 1
             }
-            state.entries.append(Entry(key: key, texture: made?.texture, region: made?.region ?? Rect(x: 0, y: 0, width: 0, height: 0), bytes: bytes))
-            state.bytes += bytes
-            state.drawCount += 1
-            return made
+            var scheduled: [(AnnotationAhead, Key, DispatchGroup)] = []
+            for wanted in ahead {
+                let key = Key(wanted.layer, scale: wanted.scale)
+                if let index = state.entries.firstIndex(where: { $0.key == key }) {
+                    state.entries[index].used = state.frame
+                    continue
+                }
+                guard state.pending.count < Self.maxPending, !state.pending.contains(where: { $0.key == key }) else { continue }
+                let done = DispatchGroup()
+                done.enter()
+                state.pending.append((key, done))
+                scheduled.append((wanted, key, done))
+            }
+            return scheduled
+        }
+        guard !scheduled.isEmpty else { return }
+        let device = AheadDevice(device)
+        for (wanted, key, done) in scheduled {
+            queue.async { [self] in
+                let made = AheadRaster(Result { try Self.makeTexture(for: wanted.layer, scale: wanted.scale, device: device.device) })
+                state.withLock { state in
+                    state.pending.removeAll { $0.key == key }
+                    // What could not be made is not kept: its frame tries again.
+                    if case let .success(texture) = made.result, !state.entries.contains(where: { $0.key == key }) {
+                        Self.keep(key, texture, in: &state)
+                    }
+                }
+                done.leave()
+            }
+        }
+    }
+
+    /// Waits until nothing is being drawn ahead, for tests and the measures.
+    func waitUntilDrawnAhead() {
+        while let done = state.withLock({ $0.pending.first?.done }) { done.wait() }
+    }
+
+    /// Keeps `made` of `key`, just drawn, as used by the frame being drawn: the oldest textures go first while more than
+    /// `kept` or `maxBytes` are kept, but never one used by this frame or the one before it.
+    private static func keep(_ key: Key, _ made: Made?, in state: inout State) {
+        let bytes = made.map { $0.texture.width * $0.texture.height * 4 } ?? 0
+        trim(making: 1, bytes: bytes, in: &state)
+        state.entries.append(Entry(key: key, made: made, bytes: bytes, used: state.frame))
+        state.bytes += bytes
+        state.drawCount += 1
+    }
+
+    /// Drops the oldest textures while, with room made for `room` more of `bytes`, more than `kept` or more than `maxBytes`
+    /// would be kept, but never one used by the frame being drawn or the one before it.
+    private static func trim(making room: Int, bytes: Int, in state: inout State) {
+        let inUse = state.frame > 1 ? state.frame - 1 : 0
+        var index = 0
+        while index < state.entries.count, state.entries.count + room > kept || state.bytes + bytes > maxBytes {
+            if state.entries[index].used >= inUse {
+                index += 1
+            } else {
+                state.bytes -= state.entries.remove(at: index).bytes
+            }
         }
     }
 
     /// `layer`'s bitmap at `scale` in a new texture; `nil` when it has nothing to draw.
-    private static func makeTexture(
-        for layer: AnnotationLayer, scale: Double, device: any MTLDevice
-    ) throws -> (texture: any MTLTexture, region: Rect)? {
+    private static func makeTexture(for layer: AnnotationLayer, scale: Double, device: any MTLDevice) throws -> Made? {
         guard let pixels = AnnotationRaster.pixels(of: layer, scale: scale), let bitmap = try AnnotationRaster.bitmap(of: layer, scale: scale)
         else { return nil }
         let (columns, rows) = (pixels.size.x, pixels.size.y)
@@ -674,5 +798,24 @@ final class AnnotationRasters: Sendable {
         }
         texture.replace(region: MTLRegionMake2D(0, 0, columns, rows), mipmapLevel: 0, withBytes: bitmap.bytes, bytesPerRow: columns * 4)
         return (texture, bitmap.region)
+    }
+}
+
+/// A Metal device handed to the queue that draws the annotations' bitmaps ahead: `MTLDevice` is safe to use from any thread.
+private struct AheadDevice: @unchecked Sendable {
+    let device: any MTLDevice
+
+    init(_ device: any MTLDevice) {
+        self.device = device
+    }
+}
+
+/// A texture drawn ahead, handed from the queue that drew it to the textures kept, under their lock: nothing else holds
+/// it, and it is only read once kept.
+private struct AheadRaster: @unchecked Sendable {
+    let result: Result<AnnotationRasters.Made?, any Error>
+
+    init(_ result: Result<AnnotationRasters.Made?, any Error>) {
+        self.result = result
     }
 }
