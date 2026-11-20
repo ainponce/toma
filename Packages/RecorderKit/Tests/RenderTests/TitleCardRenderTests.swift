@@ -58,9 +58,10 @@ private func cardScene(
 /// One colour behind everything, the same under every pixel.
 private let backdrop = RGBA(0.25, 0.25, 0.25, 1)
 
-/// The frame the output shows at output time `τ` before its output's annotations, every cursor image readable.
+/// The frame the output shows at output time `τ` before its output's annotations, every cursor image readable, drawn
+/// still (without the motion blur), as a card holds it.
 private func shown(_ scene: FrameEvaluator, _ τ: Int64) -> RenderFrame {
-    scene.clipFrame(atOutput: τ) { _, _ in true }
+    scene.clipFrame(atOutput: τ, cursorImageIsReadable: { _, _ in true }, blurs: false)
 }
 
 /// The frame with the background alone of `scene`, as a clip of another take shows it.
@@ -129,16 +130,20 @@ private func backgroundAlone(_ scene: FrameEvaluator) -> RenderFrame {
     #expect(colorMiddle.titleCard?.fill == color && colorMiddle.titleCard?.opacity == 1 && colorMiddle.titleCard?.scrim == 0)
     colorMiddle.titleCard = nil
     #expect(colorMiddle == middle)
-    // Color while it fades: the neighbor's frame as it is under the colour at p.
+    // Color while it fades: Stage's frame under the colour at p.
     let colorIn = filled.frame(at: 2.15)
-    var held = shown(filled, 2 * second - 1)
+    var held = TitleCardScene.faded(shown(filled, 2 * second - 1), keeping: 0.5)
     held.titleCard = colorIn.titleCard
-    #expect(colorIn == held && colorIn.titleCard?.opacity == 0.5)
-    // A colour that lets the frame through holds the neighbor's frame under it all the card long: the clip before's in
-    // its first half, the clip after's in its second.
+    #expect(colorIn == held && colorIn.titleCard?.opacity == 0.5 && colorIn.titleCard?.fill == color)
+    // A colour that lets the frame through shows the background alone under it once the card is in: never the
+    // neighbor's cursor, camera or clicks.
     let tinted = cardScene(titleCard(.color(RGBA(0.1, 0.3, 0.6, 0.5))))
-    #expect(tinted.frame(at: 3.4999).screen?.sourceTime == at(2 * second - 1) && tinted.frame(at: 3.4999).cursor != nil)
-    #expect(tinted.frame(at: 3.5).screen?.sourceTime == at(2 * second) && tinted.frame(at: 3.5).titleCard?.opacity == 1)
+    for seconds in [2.3, 3.4999, 3.5, 4.6999] {
+        var frame = tinted.frame(at: seconds)
+        #expect(frame.titleCard?.opacity == 1 && frame.titleCard?.fill?.a == 0.5, "\(seconds) s")
+        frame.titleCard = nil
+        #expect(frame == middle, "\(seconds) s")
+    }
 
     // Blurred frame: the neighbor's screen sharp under the same screen with a blur over all of its crop, and the veil.
     let neighbor = shown(blurred, 2 * second - 1)
@@ -188,7 +193,11 @@ private func busyFrame() -> RenderFrame {
         camera: CameraLayer(trackID: cameraID, sourceTime: base, rect: Rect(x: 1000, y: 500, width: 200, height: 200), cornerRadius: 100),
         background: .color(SIMD4(0.25, 0.25, 0.25, 1)),
         clickEffects: [ClickEffectLayer(kind: .ripple, center: [300, 200], radius: 20, thickness: 4, opacity: 0.8)],
-        keys: KeyOverlayLayer(), captions: caption, captionsAhead: [caption])
+        keys: KeyOverlayLayer(), captions: caption, captionsAhead: [caption],
+        calmZoom: CalmZoomLayer(mode: .dim, amount: 0.9, focus: Rect(x: 200, y: 150, width: 200, height: 100)),
+        contentAnnotations: [AnnotationLayer(
+            id: "a-00000001", content: .shape(ShapeAnnotation(shape: .rect)), rect: Rect(x: 0.2, y: 0.2, width: 0.3, height: 0.2),
+            space: Rect(x: 100, y: 80, width: 640, height: 360), unit: 360, rotation: 0, opacity: 0.8, scale: 1, drawn: 1)])
 }
 
 /// A scene of one card of `background` at 2 s for 3 s between two clips (as `cardScene`'s), for the scene alone.
@@ -217,7 +226,9 @@ private func lonelyScene(_ background: TitleCardBackground, sequence: [Clip]? = 
             switch kind {
             case .blurredFrame:
                 #expect(frame.cursor == nil && frame.camera == nil && frame.clickEffects.isEmpty, "\(at)")
-            case .stage where frame.titleCard?.opacity == 1:
+                #expect(frame.calmZoom == nil && frame.contentAnnotations.isEmpty, "\(at)")
+            case _ where frame.titleCard?.opacity == 1:
+                // Stage and Color, once the card is in: the background alone, under an opaque colour or a translucent one.
                 #expect(frame == { var alone = background; alone.titleCard = frame.titleCard; return alone }(), "\(at)")
             default:
                 break
@@ -230,6 +241,71 @@ private func lonelyScene(_ background: TitleCardBackground, sequence: [Clip]? = 
     #expect(fading.titleCard?.opacity == 0.25)
     #expect(fading.screenOpacity == 0.75 && fading.screen?.opacity == 0.75 && fading.cursor?.opacity == 0.75)
     #expect(fading.camera?.opacity == 0.75 && fading.clickEffects.map(\.opacity) == [0.8 * 0.75])
+}
+
+@Test func theNeighborsLayersOverTheStageGoWithTheCard() throws {
+    let busy = busyFrame()
+    let background = RenderFrame(outputSize: size, gradientStart: .zero, gradientEnd: .one, gradientAngleDegrees: 0)
+    // Stage and Color fade the calm zoom and the annotations stuck to the recording with the screen's group.
+    for kind in [TitleCardBackground.stage, .color(RGBA(0, 0, 0, 0.5))] {
+        let (scene, _) = lonelyScene(kind)
+        let fading = scene.frame(clip: 1, offset: 75_000_000, background: background) { _ in busy }
+        #expect(fading.calmZoom?.amount == 0.9 * 0.75 && fading.calmZoom?.mode == .dim, "\(kind)")
+        #expect(fading.contentAnnotations.map(\.opacity) == [0.8 * 0.75], "\(kind)")
+        #expect(fading.contentAnnotations.map(\.id) == ["a-00000001"], "\(kind)")
+        // At its first instant, the neighbor's as they are.
+        let first = scene.frame(clip: 1, offset: 0, background: background) { _ in busy }
+        #expect(first.calmZoom == busy.calmZoom && first.contentAnnotations == busy.contentAnnotations, "\(kind)")
+        // And none once the card is in.
+        let middle = scene.frame(clip: 1, offset: 1_500_000_000, background: background) { _ in busy }
+        #expect(middle.calmZoom == nil && middle.contentAnnotations.isEmpty, "\(kind)")
+    }
+    // The blurred frame has neither, from its first instant: the screen under them is blurred.
+    let (blurred, _) = lonelyScene(.blurredFrame)
+    for offset in [0, 75_000_000, 1_500_000_000] as [Int64] {
+        let frame = blurred.frame(clip: 1, offset: offset, background: background) { _ in busy }
+        #expect(frame.calmZoom == nil && frame.contentAnnotations.isEmpty && frame.previousScreen == busy.screen, "\(offset)")
+    }
+}
+
+@Test func theNeighborIsHeldWithoutItsMotionBlur() throws {
+    // The camera zooming in at the card's point and the cursor moving, with both blurs on.
+    let scene = cardScene(titleCard(.stage)) { document in
+        document.zoom.regions = [StageDrawing.zoom(1, from: 1.6, to: 3.5, depth: 2)]
+        document.zoom.motionBlur = 1
+        document.cursor.motionBlur = 1
+    }
+    // The output shows the clip before blurred; the card holds it still, as a frozen frame is.
+    let moving = scene.clipFrame(atOutput: 2 * second - 1, cursorImageIsReadable: { _, _ in true })
+    #expect(!moving.subframes.isEmpty)
+    let still = shown(scene, 2 * second - 1)
+    #expect(still.subframes.isEmpty && still.cursorSamples.isEmpty && still.stage.map { $0.depth > 1 } == true)
+    for seconds in [2.0, 2.15, 2.2999] {
+        let frame = scene.frame(at: seconds)
+        var expected = TitleCardScene.faded(still, keeping: 1 - (frame.titleCard?.opacity ?? 0))
+        expected.titleCard = frame.titleCard
+        #expect(frame == expected && frame.subframes.isEmpty && frame.cursorSamples.isEmpty, "\(seconds) s")
+    }
+    let out = scene.frame(at: 4.85)
+    #expect(out.subframes.isEmpty && out.cursorSamples.isEmpty && out.screen?.sourceTime == at(2 * second))
+}
+
+@Test func cardsAheadAreHandedOver() throws {
+    let scene = cardScene(titleCard(.stage))
+    let layer = TitleCardLayer(title: "Capítulo dos", subtitle: "Lo que sigue", style: .centered)
+    // In the second before the card, its texts; never before that, nor in the card or after it.
+    for seconds in [1.0001, 1.5, 1.9999] {
+        #expect(scene.frame(at: seconds).titleCardsAhead == [layer], "\(seconds) s")
+    }
+    for seconds in [0.0, 0.5, 0.9999, 2.0, 3.5, 5.0, 6.5] {
+        #expect(scene.frame(at: seconds).titleCardsAhead.isEmpty, "\(seconds) s")
+    }
+    // A document without cards hands none over, anywhere.
+    let take = StageDrawing.bareTake(seconds: 4)
+    let plain = FrameEvaluator(take: take, events: [], document: EditDocument.legacy(take: take, events: []), outputSize: size)
+    for seconds in stride(from: 0.0, to: 4, by: 0.25) {
+        #expect(plain.frame(at: seconds).titleCardsAhead.isEmpty, "\(seconds) s")
+    }
 }
 
 @Test func twoCardsInARowCut() throws {
@@ -494,15 +570,24 @@ func cardsDrawOnEveryPath() async throws {
         document.zoom.motionBlur = 1
         document.cursor.motionBlur = 1
     }
-    // The camera over every pixel, under a colour fading in: the camera's path, with the card over it.
+    // A card's layer over the camera over every pixel: the camera's path, with the card over it (a card's own frames fade
+    // the camera, so they never take this path).
     let covered = cardScene(titleCard(.color(RGBA(0.1, 0.3, 0.6, 1))), take: cameraTake()) { document in
         document.camera.layouts = [LayoutBlock(
             id: "l-00000001", take: takeID, start: base, end: base.adding(seconds: 4), kind: .cameraFull, instant: true)]
     }
+    var coveredUnderACard = covered.clipFrame(atOutput: 2 * second - 1, cursorImageIsReadable: { _, _ in true })
+    coveredUnderACard.titleCard = covered.frame(at: 2.15).titleCard
+    #expect(!covered.frame(at: 2.15).coveredByCamera)
+    // A card's layer over a frame with the zoom's motion blur: the card itself holds its neighbor still, so this is the
+    // blur's pass with a card in it, as a frame of the output never draws one today.
+    var zoomedUnderACard = zoomed.clipFrame(atOutput: 2 * second - 1, cursorImageIsReadable: { _, _ in true })
+    zoomedUnderACard.titleCard = zoomed.frame(at: 2.15).titleCard
+    #expect(zoomed.frame(at: 2.15).subframes.isEmpty)
     let frames: [(String, RenderFrame)] = [
         ("blurred, middle", blurred.frame(at: 3.5)), ("blurred, in", blurred.frame(at: 2.15)),
         ("stage, in", stage.frame(at: 2.15)), ("stage, middle", stage.frame(at: 3.5)),
-        ("zoomed, in", zoomed.frame(at: 2.15)), ("covered, in", covered.frame(at: 2.15)),
+        ("zoomed, in", zoomedUnderACard), ("covered, in", coveredUnderACard),
     ]
     let drawn = try await offThePool { try frames.map { try drawer.draw($0.1) } }
     for ((name, frame), (bytes, counts)) in zip(frames, drawn) {
@@ -512,11 +597,37 @@ func cardsDrawOnEveryPath() async throws {
     }
     // The blurred frame: the screen twice, once with its blur over all of it.
     #expect(drawn[0].counts.screens == 2 && drawn[0].counts.privacyScreens == 1, "\(drawn[0].counts)")
-    // The zoom's motion blur still fades with the card.
+    // The card is drawn in the motion blur's pass too.
     #expect(!frames[4].1.subframes.isEmpty && drawn[4].counts.accumulations > 0, "\(drawn[4].counts)")
     // The stage at p = 1 is the background and the texts.
     #expect(drawn[3].counts.screens == 0 && drawn[3].counts.cursors == 0)
     #expect(frames[5].1.coveredByCamera && drawn[5].counts.cameras == 1 && drawn[5].counts.backgrounds == 0, "\(drawn[5].counts)")
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func cardTexturesAreDrawnAhead() async throws {
+    let drawer = try CardDrawer()
+    let textures = drawer.compositor.layers.titleCard.textures
+    let scene = cardScene(titleCard(.color(RGBA(0.1, 0.2, 0.3, 1))))
+    // A frame in the second before the card draws its texts' texture in the background.
+    _ = try await offThePool { try drawer.draw(scene.frame(at: 1.5)) }
+    textures.waitUntilDrawnAhead()
+    #expect(textures.drawCount == 1 && textures.inlineDrawCount == 0)
+    // The card's frames find it made, and the frames before it hand nothing over again.
+    let frames = [1.6, 1.9999, 2.0, 2.15, 3.5].map { scene.frame(at: $0) }
+    _ = try await offThePool { try frames.map { try drawer.draw($0) } }
+    textures.waitUntilDrawnAhead()
+    #expect(textures.drawCount == 1 && textures.inlineDrawCount == 0)
+    // Without anything ahead (a jump into the card), it is drawn in the frame.
+    let other = cardScene(titleCard(.stage, title: "Otro"))
+    _ = try await offThePool { try drawer.draw(other.frame(at: 3.5)) }
+    #expect(textures.drawCount == 2 && textures.inlineDrawCount == 1)
+    // A frame drawn while its card is being drawn ahead waits for it rather than drawing it again.
+    let late = cardScene(titleCard(.stage, title: "Tarde"))
+    _ = try await offThePool { try drawer.draw(late.frame(at: 1.9)) }
+    _ = try await offThePool { try drawer.draw(late.frame(at: 2.15)) }
+    textures.waitUntilDrawnAhead()
+    #expect(textures.drawCount == 3 && textures.inlineDrawCount == 1)
 }
 
 // MARK: - The preview and the export
@@ -586,6 +697,9 @@ func previewEqualsExportWithACard() async throws {
             for (time, (export, shown)) in zip(times, zip(exported, previewed)) {
                 #expect(export == shown, "\(background) at \(time) s")
             }
+            // A video two of a frame's layers show at once (the blurred frame over the same one sharp) is decoded once.
+            let keys = renderer.videos(of: try renderer.frame(of: renderer.scene, at: 2.1))
+            #expect(keys.count == Set(keys).count && keys.count == (background == .blurredFrame ? 1 : 0), "\(background): \(keys)")
             // The card is drawn: its middle differs from the frames of the take around it, and from its fade.
             let middle = try #require(times.firstIndex { $0 >= 2.1 })
             #expect(exported[middle] != exported[0] && exported[middle] != exported[times.count - 1], "\(background)")
