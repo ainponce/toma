@@ -66,7 +66,7 @@ private let addedFrom2: [String: JSONValue] = [
     let v2 = try parsed(DesignExample.canonical)
     #expect(v2["documentVersion"] == .integer(2))
     let document = try EditDocument.decode(Data(DesignExample.canonical.utf8))
-    #expect(document.documentVersion == 3)
+    #expect(document.documentVersion == EditDocument.currentVersion)
     #expect(document.transcript == nil)
     #expect(document.captions == .legacy)
     #expect(document.privacy.blocks.isEmpty)
@@ -108,7 +108,7 @@ private let addedFrom2: [String: JSONValue] = [
     #expect(document == (try v3.decoded(as: EditDocument.self)))
     #expect(document == (try EditDocument.decode(json: v1)))
     #expect(document == DesignExample.document)
-    #expect(document.documentVersion == 3)
+    #expect(document.documentVersion == EditDocument.currentVersion)
     // And back, one version at a time.
     #expect(DocumentMigration.reverted(v3, to: 2) == v2)
     #expect(DocumentMigration.reverted(v3, to: 1) == v1)
@@ -125,7 +125,7 @@ private let addedFrom2: [String: JSONValue] = [
         "/camera/syncOffset", "/audio/normalize", "/audio/tracks/*/cleanup",
     ])
     #expect(DocumentMigration.addedPlaces[1] == DocumentMigration.addedCameraFields.map { "/camera/" + $0 })
-    #expect(DocumentMigration.addedPlaces.keys.sorted() == [1, 2])
+    #expect(DocumentMigration.addedPlaces.keys.sorted() == [1, 2, 3])
     var rest = migrated
     rest["documentVersion"] = .integer(2)
     for (place, value) in addedFrom2 {
@@ -181,10 +181,12 @@ private let addedFrom2: [String: JSONValue] = [
 
     #expect(DocumentMigration.isAdditive(from: 1))
     #expect(DocumentMigration.isAdditive(from: 2))
-    #expect(!DocumentMigration.isAdditive(from: 3))
+    // From 3 too, since phase 3 (`DocumentV4Tests`).
+    #expect(DocumentMigration.isAdditive(from: 3))
+    #expect(!DocumentMigration.isAdditive(from: 4))
     #expect(!DocumentMigration.isAdditive(from: 0))
     // No migration from another version, nor of a document of another version.
-    for (document, version) in [(v2, 1), (v2, 3), (migrated, 2), (migrated, 3)] {
+    for (document, version) in [(v2, 1), (v2, 3), (migrated, 2), (migrated, 4)] {
         #expect(throws: EditChangeError.invalidDocument("/documentVersion"), "\(version)") {
             try DocumentMigration.migrate(document, from: version)
         }
@@ -335,7 +337,7 @@ private let addedFrom2: [String: JSONValue] = [
         #expect(DocumentMigration.touchesAddedFields(change, from: 2) == touches, "\(change)")
         #expect(DocumentMigration.touchesAddedFields(change.inverse, from: 2) == touches, "\(change)")
         // Nothing is known to commute with a migration that is not additive.
-        #expect(DocumentMigration.touchesAddedFields(change, from: 3), "\(change)")
+        #expect(DocumentMigration.touchesAddedFields(change, from: EditDocument.currentVersion), "\(change)")
     }
     // From 1, the same rule with its own places.
     #expect(DocumentMigration.touchesAddedFields(try set("/camera/mirror"), from: 1))
@@ -377,7 +379,7 @@ private let addedFrom2: [String: JSONValue] = [
     #expect(DocumentMigration.carried([padding, volume], from: 2, to: 2) == [padding, volume])
     #expect(DocumentMigration.carried([padding, volume], from: 2, to: 3) == [padding, carried])
     #expect(DocumentMigration.carried([padding], from: 3, to: 2) == nil)
-    #expect(DocumentMigration.carried(padding, from: 3) == nil)
+    #expect(DocumentMigration.carried(padding, from: EditDocument.currentVersion) == nil)
 
     // From 1 through both: the whole camera of 1b gains the camera's fields of 1c and of phase 2.
     let v1 = try parsed(DocumentV1Example.canonical)
@@ -414,7 +416,8 @@ private let addedFrom2: [String: JSONValue] = [
         #expect(replayed.version == 3)
         #expect(replayed.document.style.padding == 0.1)
         #expect(replayed.document.captions.show)
-        #expect(replayed.json == (try JSONValue(encoding: replayed.document)))
+        // In version 3 still: the log has no migrate to 4.
+        #expect(replayed.json == DocumentMigration.reverted(try JSONValue(encoding: replayed.document), to: 3))
         // Before the migrate, the JSON stays in version 2.
         let before = try #require(EditReplay.replay(snapshot: nil, entries: Array(read.entries.prefix(2)), createVersion: 2))
         #expect(before.version == 2)

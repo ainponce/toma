@@ -216,21 +216,45 @@ extension JSONValue {
     }
 }
 
-/// The arrays of the edit document whose elements are inserted, removed and replaced, by their pointer.
-public enum EditCollection: String, Sendable {
-    case sequence = "/sequence"
-    case zoomRegions = "/zoom/regions"
-    case zoomSuppressed = "/zoom/suppressed"
-    case cameraChanges = "/camera/changes"
-    case screenChanges = "/screens/changes"
-    case cameraLayouts = "/camera/layouts"
-    // Phase 2 design §8.
-    case privacyBlocks = "/privacy/blocks"
-    /// Only while there is a transcription; its takes are inserted and removed, never replaced (they have no `id`).
-    case transcriptTakes = "/transcript/takes"
+/// The arrays of the edit document whose elements are inserted, removed and replaced, by their pointer (its `rawValue`,
+/// the pointer's string). A struct, not an enum, from phase 3 (plan decision 5), so that it can name the collection of
+/// one member of an object: the ranges of a track (`gainRanges(track:)`).
+public struct EditCollection: RawRepresentable, Hashable, Sendable {
+    /// The array, as a pointer: read with `JSONPointer(_:)`, never by splitting `rawValue` at `/` (a track's key has one,
+    /// written `~1`).
+    public let pointer: JSONPointer
 
-    var pointer: JSONPointer {
-        JSONPointer(components: rawValue.split(separator: "/").map(String.init))
+    public var rawValue: String { pointer.string }
+
+    /// `nil` if `rawValue` is not a pointer, or is the whole document.
+    public init?(rawValue: String) {
+        guard let pointer = try? JSONPointer(rawValue), !pointer.components.isEmpty else { return nil }
+        self.pointer = pointer
+    }
+
+    private init(_ components: String...) {
+        pointer = JSONPointer(components: components)
+    }
+
+    public static let sequence = EditCollection("sequence")
+    public static let zoomRegions = EditCollection("zoom", "regions")
+    public static let zoomSuppressed = EditCollection("zoom", "suppressed")
+    public static let cameraChanges = EditCollection("camera", "changes")
+    public static let screenChanges = EditCollection("screens", "changes")
+    public static let cameraLayouts = EditCollection("camera", "layouts")
+    // Phase 2 design §8.
+    public static let privacyBlocks = EditCollection("privacy", "blocks")
+    /// Only while there is a transcription; its takes are inserted and removed, never replaced (they have no `id`).
+    public static let transcriptTakes = EditCollection("transcript", "takes")
+    // Phase 3 design §10.
+    public static let annotations = EditCollection("annotations", "items")
+    public static let music = EditCollection("music", "items")
+    public static let markers = EditCollection("markers", "items")
+
+    /// The stretches at another volume of the track whose key in `AudioPlan.tracks` is `key` (`take-001/mic`):
+    /// `/audio/tracks/take-001~1mic/ranges`. Only while the track is there.
+    public static func gainRanges(track key: String) -> EditCollection {
+        EditCollection("audio", "tracks", key, "ranges")
     }
 }
 
@@ -364,6 +388,9 @@ extension EditDocument {
         case "captions": return member(CaptionPlan.self) { $0.captions = $1 }
         case "privacy": return member(PrivacyPlan.self) { $0.privacy = $1 }
         case "keys": return member(KeyOverlayPlan.self) { $0.keys = $1 }
+        case "annotations": return member(AnnotationPlan.self) { $0.annotations = $1 }
+        case "music": return member(MusicPlan.self) { $0.music = $1 }
+        case "markers": return member(MarkerPlan.self) { $0.markers = $1 }
         default: return nil
         }
     }

@@ -378,10 +378,11 @@ extension JSONValue {
 // MARK: - The document of version 3
 
 @Test func version3ExampleRoundTripsByteForByte() throws {
+    // Since phase 3 the document is of version 4 (`DocumentV4Tests`): the example is what it is in version 3.
     let document = DocumentV3Example.document
-    #expect(document.documentVersion == 3)
-    #expect(EditDocument.currentVersion == 3)
-    #expect(try pretty(document) == DocumentV3Example.canonical)
+    #expect(document.documentVersion == EditDocument.currentVersion)
+    let v3 = try #require(DocumentMigration.reverted(JSONValue(encoding: document), to: 3))
+    #expect(try pretty(v3) == DocumentV3Example.canonical)
     #expect(try EditDocument.decode(Data(DocumentV3Example.canonical.utf8)) == document)
     #expect(try EditDocument.decode(json: parsed(DocumentV3Example.canonical)) == document)
     // Compact, as a `create` line holds it, too.
@@ -548,25 +549,26 @@ extension JSONValue {
     }
 }
 
-@Test func version4IsRefused() throws {
-    #expect(throws: EditDocumentError.newerVersion(4)) {
-        try EditDocument.decode(Data(#"{"documentVersion":4,"aspect":"4:3"}"#.utf8))
+@Test func aVersionNewerThanTheCurrentIsRefused() throws {
+    // Of version 5 since phase 3, whose document is of version 4.
+    #expect(throws: EditDocumentError.newerVersion(5)) {
+        try EditDocument.decode(Data(#"{"documentVersion":5,"aspect":"4:3"}"#.utf8))
     }
-    let newer = DocumentV3Example.canonical.replacingOccurrences(of: "\"documentVersion\" : 3", with: "\"documentVersion\" : 4")
+    let newer = DocumentV3Example.canonical.replacingOccurrences(of: "\"documentVersion\" : 3", with: "\"documentVersion\" : 5")
     #expect(newer != DocumentV3Example.canonical)
-    #expect(throws: EditDocumentError.newerVersion(4)) { try EditDocument.decode(Data(newer.utf8)) }
-    #expect(throws: EditDocumentError.newerVersion(4)) { try EditDocument.decode(json: parsed(newer)) }
-    // Inside the `create` of a log too, and a `migrate` to 4.
-    let line = #"{"app":{"name":"Toma","version":"0.5.0"},"document":"# + (try compact(parsed(newer))) + #","seq":1,"type":"create"}"#
-    #expect(throws: EditDocumentError.newerVersion(4)) { try EditLogEntry(jsonLine: line) }
+    #expect(throws: EditDocumentError.newerVersion(5)) { try EditDocument.decode(Data(newer.utf8)) }
+    #expect(throws: EditDocumentError.newerVersion(5)) { try EditDocument.decode(json: parsed(newer)) }
+    // Inside the `create` of a log too, and a `migrate` to 5.
+    let line = #"{"app":{"name":"Toma","version":"0.6.0"},"document":"# + (try compact(parsed(newer))) + #","seq":1,"type":"create"}"#
+    #expect(throws: EditDocumentError.newerVersion(5)) { try EditLogEntry(jsonLine: line) }
     try withTemporaryDirectory { dir in
         let url = dir.appending(path: "edit-log.jsonl")
         try Data((line + "\n").utf8).write(to: url)
-        #expect(throws: EditDocumentError.newerVersion(4)) { try EditLogReader.read(url) }
-        let create = EditLogEntry.create(seq: 1, document: DocumentV3Example.document, app: AppInfo(name: "Toma", version: "0.4.0"))
-        let migrate = try EditLogEntry.migrate(seq: 2, from: 3, to: 4).jsonLine()
+        #expect(throws: EditDocumentError.newerVersion(5)) { try EditLogReader.read(url) }
+        let create = EditLogEntry.create(seq: 1, document: DocumentV3Example.document, app: AppInfo(name: "Toma", version: "0.5.0"))
+        let migrate = try EditLogEntry.migrate(seq: 2, from: 4, to: 5).jsonLine()
         try Data((try create.jsonLine() + "\n" + migrate + "\n").utf8).write(to: url)
-        #expect(throws: EditDocumentError.newerVersion(4)) { try EditLogReader.read(url) }
+        #expect(throws: EditDocumentError.newerVersion(5)) { try EditLogReader.read(url) }
     }
 }
 

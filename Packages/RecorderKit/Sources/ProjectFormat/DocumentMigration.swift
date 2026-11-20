@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /// The migrations of the edit document from one `documentVersion` to the next, on its JSON (1c design §13.2, phase 2
-/// design §8): pure functions, so the same document always migrates the same, wherever it is read.
+/// design §8, phase 3 design §10): pure functions, so the same document always migrates the same, wherever it is read.
 ///
 /// Each one is a row of a table (plan decision 3): the places it adds, as JSON pointers (`*` standing for each member of
-/// the object it is in), each with its value, frozen. From 1 to 2 it adds the camera's layouts and look; from 2 to 3 the
-/// captions, the privacy blocks, the keys on screen and the new fields of the stage, the camera and the sound, all with
-/// the values that draw and sound exactly what phase 1 did, and it changes nothing else. One algorithm migrates
-/// (`migrate`), goes back (`reverted`) and tells what commutes with a migration (`touchesAddedFields`) for every row.
+/// the object it is in, or each element of the array), each with its value, frozen. From 1 to 2 it adds the camera's
+/// layouts and look; from 2 to 3 the captions, the privacy blocks, the keys on screen and the new fields of the stage, the
+/// camera and the sound, all with the values that draw and sound exactly what phase 1 did; from 3 to 4 the annotations,
+/// the music, the markers, each clip's `audioShift`, the automatic zoom's `mode` and each track's `ranges`, with the
+/// values that draw and sound exactly what phase 2 did. None changes anything else. One algorithm migrates (`migrate`),
+/// goes back (`reverted`) and tells what commutes with a migration (`touchesAddedFields`) for every row.
 ///
-/// Both are *additive*: every place the older version writes still exists, with the same meaning, so a change of the
+/// All are *additive*: every place the older version writes still exists, with the same meaning, so a change of the
 /// older version commutes with the migration once it is carried through it (`carried(_:from:)`): one that writes a place
 /// holding a place the migration adds (a whole `TrackGain`, the whole `style`) gets it in its values, at its frozen value.
 /// Only a change that writes a place the migration adds, or under one, the whole document or `documentVersion` does not
@@ -28,20 +30,21 @@ public enum DocumentMigration {
 
     /// One row of the table: what the migration from a version writes, and what the next version can hold that it
     /// cannot.
-    private struct Migration: Sendable {
+    fileprivate struct Migration: Sendable {
         /// Each place it adds, in order, and the value it writes there. Frozen, never taken from the defaults of the
         /// types, which a later version may change: a document migrates the same in every version of the app.
         let added: [(place: [String], value: JSONValue)]
-        /// The places of the next version that are left out at their legacy value (an optional that is `nil`): a document
-        /// that has one has no older version.
+        /// The places of the next version that are left out at their legacy value (an optional that is `nil`; `*` for
+        /// each member or element, as in `added`): a document that has one has no older version.
         let absent: [[String]]
-        /// The values the next version can have at a place the older one has too, which the older one cannot: a
-        /// document that has one has no older version. A later version that adds a case to a type of an older one (an
-        /// aspect, a frame) adds it here.
+        /// The values the next version can have at a place the older one has too, which the older one cannot (`*` for
+        /// each member or element, as in `added`): a document that has one has no older version. A later version that
+        /// adds a case to a type of an older one (an aspect, a frame) adds it here.
         let newValues: [(place: [String], value: JSONValue)]
     }
 
-    /// The migrations, by the version they migrate from: 1c design §13.2 and phase 2 design §8.
+    /// The migrations, by the version they migrate from: 1c design §13.2, phase 2 design §8 and phase 3 design §10 (plan
+    /// decision 4 of phase 3).
     private static let migrations: [Int: Migration] = [
         1: Migration(
             added: [
@@ -92,25 +95,43 @@ public enum DocumentMigration {
                 (["aspect"], .string("4:5")), (["aspect"], .string("4:3")),
                 (["aspect"], .string("3:4")), (["aspect"], .string("auto")),
             ]),
+        3: Migration(
+            added: [
+                (["annotations"], .object(["items": .array([])])),
+                (["markers"], .object(["items": .array([])])),
+                (
+                    ["music"],
+                    .object([
+                        "ducking": .object([
+                            "amount": .integer(-12), "attack": .number(0.3), "enabled": .bool(true), "release": .number(0.8),
+                        ]),
+                        "items": .array([]),
+                    ])
+                ),
+                (["sequence", "*", "audioShift"], .integer(0)),
+                (["zoom", "auto", "mode"], .string("classic")),
+                (["audio", "tracks", "*", "ranges"], .array([])),
+            ],
+            absent: [["sequence", "*", "content"], ["zoom", "regions", "*", "mode"], ["zoom", "regions", "*", "loupe"]],
+            newValues: []),
     ]
 
     /// `json`, a document of `version`, in the next version: the places of `addedPlaces[version]` at their frozen values
     /// (over any value they already had) and `documentVersion` one more. Throws `invalidDocument` at `/documentVersion`
     /// from a version that has no migration or for a document that is not of `version`, at the pointer of an object it
     /// writes in that is missing or is not an object (`/camera` from 1; `/style`, `/camera`, `/audio`, `/audio/tracks` or
-    /// one of its members from 2), and at what only the next version can hold, which a document of `version` never has
-    /// (from 2: a `/transcript`, or a `device` at `/style/frame/type`): the same places `reverted` refuses.
+    /// one of its members from 2; `/sequence` or one of its clips, `/zoom`, `/zoom/auto`, `/audio`, `/audio/tracks` or one
+    /// of its members from 3), and at what only the next version can hold, which a document of `version` never has (from
+    /// 2: a `/transcript`, or a `device` at `/style/frame/type`; from 3: a clip's `content`, a region's `mode` or `loupe`,
+    /// at the first one, as `/sequence/2/content`): the same places `reverted` refuses.
     public static func migrate(_ json: JSONValue, from version: Int) throws(EditChangeError) -> JSONValue {
         guard let migration = migrations[version], case .object(let document) = json,
             document["documentVersion"] == .integer(Int64(version))
         else {
             throw .invalidDocument("/documentVersion")
         }
-        for place in migration.absent where json.value(at: JSONPointer(components: place)) != nil {
-            throw .invalidDocument(JSONPointer(components: place).string)
-        }
-        for (place, value) in migration.newValues where json.value(at: JSONPointer(components: place)) == value {
-            throw .invalidDocument(JSONPointer(components: place).string)
+        if let held = json.firstPlaceNotHeld(by: migration) {
+            throw .invalidDocument(JSONPointer(components: held).string)
         }
         var migrated = json
         for (place, value) in migration.added {
@@ -120,7 +141,7 @@ public enum DocumentMigration {
         return migrated
     }
 
-    /// Whether the migration from `version` only adds places, at values that change nothing: from 1 and from 2.
+    /// Whether the migration from `version` only adds places, at values that change nothing: from 1, 2 and 3.
     public static func isAdditive(from version: Int) -> Bool {
         migrations[version] != nil
     }
@@ -138,22 +159,25 @@ public enum DocumentMigration {
     /// Whether `change`, a line written before the migration from `version`, does not commute with it even carried
     /// through it (`carried(_:from:)` is `nil`): it writes the whole document, `documentVersion`, a place the migration
     /// adds or one under it (from 1: one of `addedCameraFields` of `/camera`; from 2: `/captions`, `/style/reframe`,
-    /// `/audio/tracks/<track>/cleanup`…), or a value that holds a place it adds where that place cannot be written (not an
-    /// object on the way, or there already with another value). Then the `migrate` cuts the history before it, as in 1b.
-    /// A change of a place that holds one the migration adds (`/camera`, `/style`, `/audio/tracks/<track>`) commutes,
-    /// carried. Always `true` for a migration that is not additive, with which nothing is known to commute.
+    /// `/audio/tracks/<track>/cleanup`…; from 3: `/markers`, `/music/ducking/amount`, `/sequence/<i>/audioShift`,
+    /// `/zoom/auto/mode`, `/audio/tracks/<track>/ranges`…), or a value that holds a place it adds where that place
+    /// cannot be written (not an object on the way, or there already with another value). Then the `migrate` cuts the
+    /// history before it, as in 1b. A change of a place that holds one the migration adds (`/camera`, `/style`,
+    /// `/audio/tracks/<track>`, a clip of `/sequence`, `/zoom/auto`) commutes, carried. Always `true` for a migration
+    /// that is not additive, with which nothing is known to commute.
     public static func touchesAddedFields(_ change: EditChange, from version: Int) -> Bool {
         carried(change, from: version) == nil
     }
 
-    /// `change`, a line written in `version`, as it is in the next version: what the migration from `version` does to
-    /// the document it does to the values the change writes, so applying it after the migration gives the migrated
-    /// document of applying it before. A value written at a place that holds a place the migration adds (a `set` of
-    /// `/audio/tracks/<track>` from 2, or the elements of a collection that hold one) gets that place at its frozen value
-    /// (`cleanup = 0`); a value of `null` (a member not there, plan decision 4) stays `null`; every other value stays as it
-    /// is. `nil` when it does not commute (`touchesAddedFields`): from a version without an additive migration, for the
-    /// whole document or `documentVersion`, a place the migration adds or one under it, and a value where the place
-    /// cannot be written (not an object on the way, or there already with another value).
+    /// `change`, a line written in `version`, as it is in the next version: what the migration from `version` does to the
+    /// document it does to the values the change writes, so applying it after the migration gives the migrated document of
+    /// applying it before. A value written at a place that holds a place the migration adds (a `set` of
+    /// `/audio/tracks/<track>` from 2 or 3, or the elements of a collection that hold one, as the clips of `/sequence` from
+    /// 3) gets that place at its frozen value (`cleanup = 0`, `ranges = []`, `audioShift = 0`); a value of `null` (a member
+    /// not there, plan decision 4) stays `null`; every other value stays as it is. `nil` when it does not commute
+    /// (`touchesAddedFields`): from a version without an additive migration, for the whole document or `documentVersion`, a
+    /// place the migration adds or one under it, and a value where the place cannot be written (not an object on the way,
+    /// or there already with another value).
     ///
     /// The replay, `UndoHistory`, `LogCompaction` and the editor all carry the changes of before a `migrate` that keeps
     /// the history, so an undo or a redo after it applies them to the migrated document. The other way is never needed:
@@ -252,12 +276,7 @@ public enum DocumentMigration {
     /// `json`, a document of `version + 1`, in `version`, the one `migration` migrates from: `nil` if it holds what that
     /// version cannot.
     private static func step(_ json: JSONValue, down migration: Migration, to version: Int) -> JSONValue? {
-        for place in migration.absent where json.value(at: JSONPointer(components: place)) != nil {
-            return nil
-        }
-        for (place, value) in migration.newValues where json.value(at: JSONPointer(components: place)) == value {
-            return nil
-        }
+        guard json.firstPlaceNotHeld(by: migration) == nil else { return nil }
         var reverted = json
         for (place, value) in migration.added {
             guard reverted.remove(value, at: place[...]) else { return nil }
@@ -328,6 +347,49 @@ extension EditChange {
 }
 
 extension JSONValue {
+    /// The first place of this document, as it is (`*` taken for each member or element), that the version
+    /// `migration` migrates from cannot hold: one of `absent` that is there, or one of `newValues` with its value. `nil`
+    /// if the older version holds all of it.
+    fileprivate func firstPlaceNotHeld(by migration: DocumentMigration.Migration) -> [String]? {
+        for place in migration.absent {
+            if let found = firstPlace(at: place[...], under: [], where: { _ in true }) { return found }
+        }
+        for (place, value) in migration.newValues {
+            if let found = firstPlace(at: place[...], under: [], where: { $0 == value }) { return found }
+        }
+        return nil
+    }
+
+    /// The first place at `place` of this value (`*` for each member, in key order, or each element) whose value
+    /// matches `condition`, under `path`; `nil` if there is none.
+    private func firstPlace(
+        at place: ArraySlice<String>, under path: [String], where condition: (JSONValue) -> Bool
+    ) -> [String]? {
+        guard let key = place.first else { return condition(self) ? path : nil }
+        let rest = place.dropFirst()
+        switch self {
+        case let .object(members):
+            if key == "*" {
+                for member in members.keys.sorted() {
+                    if let found = members[member]?.firstPlace(at: rest, under: path + [member], where: condition) { return found }
+                }
+                return nil
+            }
+            return members[key]?.firstPlace(at: rest, under: path + [key], where: condition)
+        case let .array(elements):
+            if key == "*" {
+                for (index, element) in elements.enumerated() {
+                    if let found = element.firstPlace(at: rest, under: path + [String(index)], where: condition) { return found }
+                }
+                return nil
+            }
+            guard let index = JSONPointer.arrayIndex(key), elements.indices.contains(index) else { return nil }
+            return elements[index].firstPlace(at: rest, under: path + [key], where: condition)
+        default:
+            return nil
+        }
+    }
+
     /// Writes `value` at `place` of this object, under `path` of the document: each object on the way must be there
     /// (`invalidDocument` at its pointer if it is missing or is not an object), and `*` writes under each member, or each
     /// element of an array.

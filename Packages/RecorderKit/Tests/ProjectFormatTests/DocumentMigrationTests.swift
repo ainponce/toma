@@ -482,9 +482,10 @@ enum CameraSectionExample {
     #expect(try DocumentMigration.migrate(handWritten, from: 1) == migrated)
 
     #expect(DocumentMigration.isAdditive(from: 1))
-    // From 2 too, since phase 2 (`MigrationTo3Tests`).
+    // From 2 too, since phase 2 (`MigrationTo3Tests`), and from 3 since phase 3 (`DocumentV4Tests`).
     #expect(DocumentMigration.isAdditive(from: 2))
-    #expect(!DocumentMigration.isAdditive(from: 3))
+    #expect(DocumentMigration.isAdditive(from: 3))
+    #expect(!DocumentMigration.isAdditive(from: 4))
     #expect(!DocumentMigration.isAdditive(from: 0))
     // No migration from another version, nor of a document of another version.
     for (document, version) in [(v1, 2), (v1, 0), (migrated, 1), (migrated, 3)] {
@@ -668,7 +669,7 @@ enum CameraSectionExample {
         #expect(DocumentMigration.touchesAddedFields(change, from: 1) == touches, "\(change)")
         #expect(DocumentMigration.touchesAddedFields(change.inverse, from: 1) == touches, "\(change)")
         // Nothing is known to commute with a migration that is not additive.
-        #expect(DocumentMigration.touchesAddedFields(change, from: 3), "\(change)")
+        #expect(DocumentMigration.touchesAddedFields(change, from: EditDocument.currentVersion), "\(change)")
     }
 }
 

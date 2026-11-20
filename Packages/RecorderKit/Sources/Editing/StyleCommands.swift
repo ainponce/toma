@@ -265,7 +265,7 @@ struct DocumentChanges {
     }
 
     private static func pointer(_ collection: EditCollection) -> JSONPointer {
-        JSONPointer(components: collection.rawValue.split(separator: "/").map(String.init))
+        collection.pointer
     }
 }
 

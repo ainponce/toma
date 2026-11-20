@@ -140,6 +140,70 @@ func localizedTitle(_ label: EditLabel) -> String {
             comment: "Undo label (Edit ▸ Undo «…»): how the pressed keys are shown on the output was changed")
     case .speedTyping:
         String(localized: "Speed Up Typing", comment: "Undo label (Edit ▸ Undo «…»): the parts where the user types were sped up")
+    // Phase 3 (design §10, plan decision 17).
+    case .annotationAdd:
+        String(localized: "Add Annotation", comment: "Undo label (Edit ▸ Undo «…»): an annotation was added over the video")
+    case .annotationChange:
+        String(
+            localized: "Change Annotation",
+            comment: "Undo label (Edit ▸ Undo «…»): an annotation's text, color, style, place or size was changed")
+    case .annotationMove:
+        String(localized: "Move Annotation", comment: "Undo label (Edit ▸ Undo «…»): an annotation was moved on the timeline")
+    case .annotationTrim:
+        String(localized: "Trim Annotation", comment: "Undo label (Edit ▸ Undo «…»): an edge of an annotation was trimmed on the timeline")
+    case .annotationLayer:
+        String(
+            localized: "Change Layer Order",
+            comment: "Undo label (Edit ▸ Undo «…»): an annotation was brought forward or sent backward")
+    case .annotationDelete:
+        String(localized: "Delete Annotation", comment: "Undo label (Edit ▸ Undo «…»): annotations were deleted")
+    case .clipFreeze:
+        String(localized: "Freeze Frame", comment: "Undo label (Edit ▸ Undo «…»): a frozen frame was added at the playhead")
+    case .clipCard:
+        String(localized: "Add Title Card", comment: "Undo label (Edit ▸ Undo «…»): a title card was added to the video")
+    case .clipMedia:
+        String(localized: "Add Clip", comment: "Undo label (Edit ▸ Undo «…»): an imported video clip was added to the video")
+    case .clipContent:
+        String(
+            localized: "Change Clip",
+            comment: "Undo label (Edit ▸ Undo «…»): a frozen frame, a title card or an imported clip was changed")
+    case .zoomMode:
+        String(
+            localized: "Change Zoom Mode",
+            comment: "Undo label (Edit ▸ Undo «…»): a zoom's mode (Classic, Highlight, Dim, Loupe) or its loupe was changed")
+    case .audioRange:
+        String(
+            localized: "Change Range Volume",
+            comment: "Undo label (Edit ▸ Undo «…»): the volume of a stretch of an audio track was changed")
+    case .audioShift:
+        String(
+            localized: "Move Audio Cut",
+            comment: "Undo label (Edit ▸ Undo «…»): the sound's cut between two parts was moved before or after the picture's")
+    case .musicAdd: String(localized: "Add Music", comment: "Undo label (Edit ▸ Undo «…»): a piece of music was added")
+    case .musicChange:
+        String(
+            localized: "Change Music",
+            comment: "Undo label (Edit ▸ Undo «…»): a piece of music's volume, fades, loop or source was changed")
+    case .musicMove:
+        String(localized: "Move Music", comment: "Undo label (Edit ▸ Undo «…»): a piece of music was moved on the timeline")
+    case .musicTrim:
+        String(localized: "Trim Music", comment: "Undo label (Edit ▸ Undo «…»): an edge of a piece of music was trimmed")
+    case .musicDelete: String(localized: "Delete Music", comment: "Undo label (Edit ▸ Undo «…»): pieces of music were deleted")
+    case .musicDucking:
+        String(
+            localized: "Change Music Ducking",
+            comment: "Undo label (Edit ▸ Undo «…»): how the music goes down while someone speaks was changed")
+    case .takeRerecord:
+        String(
+            localized: "Re-record from Here",
+            comment: "Undo label (Edit ▸ Undo «…»): a new take recorded from the playhead replaced the rest of the video")
+    case .takeUse:
+        String(localized: "Use Take", comment: "Undo label (Edit ▸ Undo «…»): another take was put in the video from the playhead")
+    case .markerAdd: String(localized: "Add Marker", comment: "Undo label (Edit ▸ Undo «…»): a marker was added at the playhead")
+    case .markerRename: String(localized: "Rename Marker", comment: "Undo label (Edit ▸ Undo «…»): a marker was named or renamed")
+    case .markerMove:
+        String(localized: "Move Marker", comment: "Undo label (Edit ▸ Undo «…»): a marker was moved on the timeline")
+    case .markerDelete: String(localized: "Delete Marker", comment: "Undo label (Edit ▸ Undo «…»): a marker was deleted")
     }
 }
 

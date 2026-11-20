@@ -491,6 +491,17 @@
         }
       }
     },
+    "Add Annotation" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): an annotation was added over the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar anotación"
+          }
+        }
+      }
+    },
     "Add Blur" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): a blur block was added",
       "localizations" : {
@@ -513,6 +524,17 @@
         }
       }
     },
+    "Add Clip" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): an imported video clip was added to the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar un clip"
+          }
+        }
+      }
+    },
     "Add Layout" : {
       "comment" : "The timeline's track bar menu: makes a layout block at the playhead",
       "localizations" : {
@@ -531,6 +553,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agregar un bloque de disposición"
+          }
+        }
+      }
+    },
+    "Add Marker" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a marker was added at the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar marcador"
+          }
+        }
+      }
+    },
+    "Add Music" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a piece of music was added",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar música"
+          }
+        }
+      }
+    },
+    "Add Title Card" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a title card was added to the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar placa"
           }
         }
       }
@@ -1471,6 +1526,17 @@
         }
       }
     },
+    "Change Annotation" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): an annotation's text, color, style, place or size was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la anotación"
+          }
+        }
+      }
+    },
     "Change Background" : {
       "comment" : "An undo step: the background",
       "localizations" : {
@@ -1592,6 +1658,17 @@
         }
       }
     },
+    "Change Clip" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a frozen frame, a title card or an imported clip was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el clip"
+          }
+        }
+      }
+    },
     "Change Corners" : {
       "comment" : "An undo step: the screen's corners",
       "localizations" : {
@@ -1658,6 +1735,17 @@
         }
       }
     },
+    "Change Layer Order" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): an annotation was brought forward or sent backward",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el orden de las capas"
+          }
+        }
+      }
+    },
     "Change Layout" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): a camera layout block's layout, transition or bubble style was changed; also the VoiceOver action on a block",
       "localizations" : {
@@ -1665,6 +1753,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cambiar la disposición"
+          }
+        }
+      }
+    },
+    "Change Music" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a piece of music's volume, fades, loop or source was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la música"
+          }
+        }
+      }
+    },
+    "Change Music Ducking" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): how the music goes down while someone speaks was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la bajada de la música"
           }
         }
       }
@@ -1698,6 +1808,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cambiar la disposición del proyecto"
+          }
+        }
+      }
+    },
+    "Change Range Volume" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the volume of a stretch of an audio track was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el volumen del tramo"
           }
         }
       }
@@ -1764,6 +1885,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cambiar el zoom"
+          }
+        }
+      }
+    },
+    "Change Zoom Mode" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a zoom's mode (Classic, Highlight, Dim, Loupe) or its loupe was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el modo del zoom"
           }
         }
       }
@@ -2666,6 +2798,17 @@
         }
       }
     },
+    "Delete Annotation" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): annotations were deleted",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar la anotación"
+          }
+        }
+      }
+    },
     "Delete Block" : {
       "comment" : "Camera tab: deletes the selected layout block",
       "localizations" : {
@@ -2706,6 +2849,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Borrar el bloque de disposición"
+          }
+        }
+      }
+    },
+    "Delete Marker" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a marker was deleted",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar el marcador"
+          }
+        }
+      }
+    },
+    "Delete Music" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): pieces of music were deleted",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar la música"
           }
         }
       }
@@ -3560,6 +3725,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Libre"
+          }
+        }
+      }
+    },
+    "Freeze Frame" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a frozen frame was added at the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Congelar cuadro"
           }
         }
       }
@@ -4863,6 +5039,28 @@
         }
       }
     },
+    "Move Annotation" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): an annotation was moved on the timeline",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover la anotación"
+          }
+        }
+      }
+    },
+    "Move Audio Cut" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the sound's cut between two parts was moved before or after the picture's",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover el corte del audio"
+          }
+        }
+      }
+    },
     "Move Blur" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): a blur block was moved on the timeline",
       "localizations" : {
@@ -4903,6 +5101,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mover a la izquierda"
+          }
+        }
+      }
+    },
+    "Move Marker" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a marker was moved on the timeline",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover el marcador"
+          }
+        }
+      }
+    },
+    "Move Music" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a piece of music was moved on the timeline",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover la música"
           }
         }
       }
@@ -6127,6 +6347,17 @@
         }
       }
     },
+    "Re-record from Here" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a new take recorded from the playhead replaced the rest of the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regrabar desde acá"
+          }
+        }
+      }
+    },
     "Read-Only" : {
       "comment" : "The library: a project on a disk that cannot be written",
       "localizations" : {
@@ -6530,6 +6761,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Renombrar"
+          }
+        }
+      }
+    },
+    "Rename Marker" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a marker was named or renamed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Renombrar el marcador"
           }
         }
       }
@@ -9603,6 +9845,17 @@
         }
       }
     },
+    "Trim Annotation" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): an edge of an annotation was trimmed on the timeline",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recortar la anotación"
+          }
+        }
+      }
+    },
     "Trim Blur" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): an edge of a blur block was trimmed",
       "localizations" : {
@@ -9632,6 +9885,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Recortar el bloque de disposición"
+          }
+        }
+      }
+    },
+    "Trim Music" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): an edge of a piece of music was trimmed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recortar la música"
           }
         }
       }
@@ -9806,6 +10070,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mayúsculas"
+          }
+        }
+      }
+    },
+    "Use Take" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): another take was put in the video from the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar la toma"
           }
         }
       }

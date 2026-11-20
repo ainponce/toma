@@ -12,12 +12,13 @@ import Foundation
 public struct EditDocument: Codable, Equatable, Sendable {
     /// The version of the document this app writes; it reads an older one migrated (`DocumentMigration`) and refuses a
     /// newer one (`decode(_:)`).
-    public static let currentVersion = 3
+    public static let currentVersion = 4
 
     /// The version of the document within format version 3: 1 in milestone 1b; 2 from 1c, with the camera's layouts
     /// and look (1c design §13.1); 3 from phase 2, with the transcription, the captions, the privacy blocks, the keys on
-    /// screen and the new fields of the stage, the camera and the sound (phase 2 design §8). A decoded document is always
-    /// of `currentVersion`.
+    /// screen and the new fields of the stage, the camera and the sound (phase 2 design §8); 4 from phase 3, with the
+    /// annotations, the music, the markers, the clips with content, the cuts of the sound, the calm zooms and the volume
+    /// of a stretch (phase 3 design §10). A decoded document is always of `currentVersion`.
     public var documentVersion: Int
     /// The `seq` of the last line of the edit log this document already includes.
     public var logSequence: Int
@@ -39,6 +40,11 @@ public struct EditDocument: Codable, Equatable, Sendable {
     public var captions: CaptionPlan
     public var privacy: PrivacyPlan
     public var keys: KeyOverlayPlan
+    // Version 4 (phase 3 design §10). Their defaults are the values the migration from version 3 gives them, which draw
+    // and sound exactly what phase 2 did.
+    public var annotations: AnnotationPlan
+    public var music: MusicPlan
+    public var markers: MarkerPlan
 
     public init(
         documentVersion: Int,
@@ -55,7 +61,10 @@ public struct EditDocument: Codable, Equatable, Sendable {
         transcript: Transcript? = nil,
         captions: CaptionPlan = .legacy,
         privacy: PrivacyPlan = .legacy,
-        keys: KeyOverlayPlan = .legacy
+        keys: KeyOverlayPlan = .legacy,
+        annotations: AnnotationPlan = .legacy,
+        music: MusicPlan = .legacy,
+        markers: MarkerPlan = .legacy
     ) {
         self.documentVersion = documentVersion
         self.logSequence = logSequence
@@ -72,6 +81,9 @@ public struct EditDocument: Codable, Equatable, Sendable {
         self.captions = captions
         self.privacy = privacy
         self.keys = keys
+        self.annotations = annotations
+        self.music = music
+        self.markers = markers
     }
 
     /// Decodes an encoded document with `ProjectJSON.decoder()`, as `init(from:)` does: an older one migrated to
@@ -105,6 +117,7 @@ public struct EditDocument: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case documentVersion, logSequence, aspect, frameRate, sequence, screens, style, cursor, zoom, camera, audio
         case transcript, captions, privacy, keys
+        case annotations, music, markers
     }
 
     /// Reads `documentVersion` first, on its own: a document newer than `currentVersion`, which this version may not
@@ -145,7 +158,10 @@ public struct EditDocument: Codable, Equatable, Sendable {
             transcript: try container.decodeIfPresent(Transcript.self, forKey: .transcript),
             captions: try container.decode(CaptionPlan.self, forKey: .captions),
             privacy: try container.decode(PrivacyPlan.self, forKey: .privacy),
-            keys: try container.decode(KeyOverlayPlan.self, forKey: .keys))
+            keys: try container.decode(KeyOverlayPlan.self, forKey: .keys),
+            annotations: try container.decode(AnnotationPlan.self, forKey: .annotations),
+            music: try container.decode(MusicPlan.self, forKey: .music),
+            markers: try container.decode(MarkerPlan.self, forKey: .markers))
     }
 
     /// `json`, a document of `version`, migrated up to `currentVersion`.
@@ -230,7 +246,8 @@ public enum Aspect: String, Codable, Sendable, CaseIterable {
     }
 }
 
-/// One stretch of a take in the output: its source times `[start, end)` played at `speed`.
+/// One stretch of a take in the output: its source times `[start, end)` played at `speed`; or, from version 4, with
+/// `content`, what it shows instead at the point `start == end` of its take (phase 3 design §9 and §10).
 public struct Clip: Codable, Equatable, Sendable {
     /// `c-` and 8 hex.
     public var id: String
@@ -240,13 +257,24 @@ public struct Clip: Codable, Equatable, Sendable {
     public var end: HostTime
     /// 0.25 to 16 (`ClipSpeed.range`), and read through `ClipSpeed.clamped(_:)`.
     public var speed: Double
+    /// A frozen frame, a title card or an imported clip instead of the stretch, from version 4; `nil`, a stretch of the
+    /// take, is left out of the JSON.
+    public var content: ClipContent?
+    /// Where the sound cuts against the picture at the start of this clip, in ns of output, from version 4: negative
+    /// sooner (a J cut, this clip is heard before it is seen), positive later (an L cut, the clip before it is still
+    /// heard). Always written.
+    public var audioShift: Int64
 
-    public init(id: String, take: String, start: HostTime, end: HostTime, speed: Double) {
+    public init(
+        id: String, take: String, start: HostTime, end: HostTime, speed: Double, content: ClipContent? = nil, audioShift: Int64 = 0
+    ) {
         self.id = id
         self.take = take
         self.start = start
         self.end = end
         self.speed = speed
+        self.content = content
+        self.audioShift = audioShift
     }
 }
 
@@ -676,6 +704,10 @@ public struct AutoZoomSettings: Codable, Equatable, Sendable {
     public var follow: Bool
     /// The planner, with its version (`autoZoom-1`).
     public var planner: String
+    /// The mode of the automatic blocks without one of their own (phase 3 design §6), from version 4. Always written in
+    /// a document; settings saved by phases 1 and 2 (`default-style.json`, a `.tomastyle`) have none, and read as
+    /// `classic`.
+    public var mode: ZoomMode
 
     public init(
         enabled: Bool,
@@ -686,7 +718,8 @@ public struct AutoZoomSettings: Codable, Equatable, Sendable {
         leadIn: Double,
         leadOut: Double,
         follow: Bool,
-        planner: String
+        planner: String,
+        mode: ZoomMode = .classic
     ) {
         self.enabled = enabled
         self.triggers = triggers
@@ -697,6 +730,26 @@ public struct AutoZoomSettings: Codable, Equatable, Sendable {
         self.leadOut = leadOut
         self.follow = follow
         self.planner = planner
+        self.mode = mode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled, triggers, holdWhileTyping, depth, groupGap, leadIn, leadOut, follow, planner, mode
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            enabled: try container.decode(Bool.self, forKey: .enabled),
+            triggers: try container.decode(ZoomTriggers.self, forKey: .triggers),
+            holdWhileTyping: try container.decode(Bool.self, forKey: .holdWhileTyping),
+            depth: try container.decode(Double.self, forKey: .depth),
+            groupGap: try container.decode(Double.self, forKey: .groupGap),
+            leadIn: try container.decode(Double.self, forKey: .leadIn),
+            leadOut: try container.decode(Double.self, forKey: .leadOut),
+            follow: try container.decode(Bool.self, forKey: .follow),
+            planner: try container.decode(String.self, forKey: .planner),
+            mode: try container.decodeIfPresent(ZoomMode.self, forKey: .mode) ?? .classic)
     }
 }
 
@@ -718,9 +771,15 @@ public struct ZoomRegion: Codable, Equatable, Sendable {
     public var focus: ZoomFocus
     /// Whether it cuts in and out instead of moving with the spring.
     public var instant: Bool
+    /// How it shows its focus, from version 4; `nil`, left out of the JSON, is `classic` for a manual block and
+    /// `AutoZoomSettings.mode` for an automatic one.
+    public var mode: ZoomMode?
+    /// Its lens in `loupe` mode, from version 4; `nil`, left out of the JSON, is `LoupeStyle.default`.
+    public var loupe: LoupeStyle?
 
     public init(
-        id: String, take: String, start: HostTime, end: HostTime, origin: Origin, depth: Double? = nil, focus: ZoomFocus, instant: Bool
+        id: String, take: String, start: HostTime, end: HostTime, origin: Origin, depth: Double? = nil, focus: ZoomFocus, instant: Bool,
+        mode: ZoomMode? = nil, loupe: LoupeStyle? = nil
     ) {
         self.id = id
         self.take = take
@@ -730,6 +789,8 @@ public struct ZoomRegion: Codable, Equatable, Sendable {
         self.depth = depth
         self.focus = focus
         self.instant = instant
+        self.mode = mode
+        self.loupe = loupe
     }
 }
 
@@ -916,10 +977,38 @@ public struct TrackGain: Codable, Equatable, Sendable {
     /// 0 to 1: how much of the voice isolated from the noise goes into the mix, over the track as recorded (phase 2
     /// design §5.6, `soundIsolation-2`), from version 3.
     public var cleanup: Double
+    /// The stretches of the track at another volume (phase 3 design §7.2), from version 4: anchored to the source
+    /// (`EditCollection.gainRanges(track:)`). Always written.
+    public var ranges: [GainRange]
 
-    public init(gain: Double, muted: Bool, cleanup: Double = 0) {
+    public init(gain: Double, muted: Bool, cleanup: Double = 0, ranges: [GainRange] = []) {
         self.gain = gain
         self.muted = muted
         self.cleanup = cleanup
+        self.ranges = ranges
+    }
+}
+
+/// Over the source times `[start, end)` of `take`, a track sounds at `gain` (phase 3 design §7.2), with fades of 50 ms at
+/// its edges.
+public struct GainRange: Codable, Equatable, Sendable {
+    /// `g-` and 8 random hex digits.
+    public var id: String
+    public var take: String
+    public var start: HostTime
+    /// Excluded.
+    public var end: HostTime
+    /// In dB, from `silence` (−∞) to +12.
+    public var gain: Double
+
+    /// The gain that is −∞ dB: silence.
+    public static let silence = -120.0
+
+    public init(id: String, take: String, start: HostTime, end: HostTime, gain: Double) {
+        self.id = id
+        self.take = take
+        self.start = start
+        self.end = end
+        self.gain = gain
     }
 }

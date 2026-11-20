@@ -481,15 +481,16 @@ private func encodedInVersion2(_ document: EditDocument) throws -> String {
 
 @Test func newerDocumentVersionIsRefused() throws {
     // Read before the rest: the rest of a newer document need not decode.
-    #expect(throws: EditDocumentError.newerVersion(4)) {
-        try EditDocument.decode(Data(#"{"documentVersion":4,"aspect":"4:3"}"#.utf8))
+    #expect(throws: EditDocumentError.newerVersion(5)) {
+        try EditDocument.decode(Data(#"{"documentVersion":5,"aspect":"4:3"}"#.utf8))
     }
-    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 2", with: "\"documentVersion\" : 4")
+    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 2", with: "\"documentVersion\" : 5")
     #expect(newer != DesignExample.canonical)
-    #expect(throws: EditDocumentError.newerVersion(4)) { try EditDocument.decode(Data(newer.utf8)) }
-    #expect(throws: EditDocumentError.newerVersion(4)) {
+    #expect(throws: EditDocumentError.newerVersion(5)) { try EditDocument.decode(Data(newer.utf8)) }
+    #expect(throws: EditDocumentError.newerVersion(5)) {
         try EditDocument.decode(json: ProjectJSON.decoder().decode(JSONValue.self, from: Data(newer.utf8)))
     }
+    #expect(throws: DecodingError.self) { try EditDocument.decode(Data(#"{"documentVersion":4,"aspect":"4:3"}"#.utf8)) }
     #expect(throws: DecodingError.self) { try EditDocument.decode(Data(#"{"documentVersion":3,"aspect":"4:3"}"#.utf8)) }
     #expect(throws: DecodingError.self) { try EditDocument.decode(Data(#"{"documentVersion":2,"aspect":"4:3"}"#.utf8)) }
     // An older one is migrated first, and one that cannot be is no document either.
@@ -502,13 +503,13 @@ private func encodedInVersion2(_ document: EditDocument) throws -> String {
     struct Entry: Decodable {
         var document: EditDocument
     }
-    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 2", with: "\"documentVersion\" : 4")
+    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 2", with: "\"documentVersion\" : 5")
     #expect(newer != DesignExample.canonical)
-    #expect(throws: EditDocumentError.newerVersion(4)) {
+    #expect(throws: EditDocumentError.newerVersion(5)) {
         try ProjectJSON.decoder().decode(Entry.self, from: Data("{\"document\" : \(newer)}".utf8))
     }
-    #expect(throws: EditDocumentError.newerVersion(5)) {
-        try ProjectJSON.decoder().decode([EditDocument].self, from: Data(#"[{"documentVersion":5,"aspect":"4:3"}]"#.utf8))
+    #expect(throws: EditDocumentError.newerVersion(6)) {
+        try ProjectJSON.decoder().decode([EditDocument].self, from: Data(#"[{"documentVersion":6,"aspect":"4:3"}]"#.utf8))
     }
     let current = try ProjectJSON.decoder().decode(Entry.self, from: Data("{\"document\" : \(DesignExample.canonical)}".utf8))
     #expect(current.document == DesignExample.document)

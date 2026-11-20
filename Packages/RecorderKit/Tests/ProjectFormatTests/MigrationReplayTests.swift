@@ -179,7 +179,10 @@ extension JSONValue {
         ("the same one twice", [create, try padding(2), migrate, .migrate(seq: 4, from: 1, to: 2), try mirror(5)], 4, 2),
         (
             "one this app has no migration for",
-            [create, try padding(2), migrate, .migrate(seq: 4, from: 2, to: 3), .migrate(seq: 5, from: 3, to: 4), try mirror(6)], 5, 3
+            [
+                create, try padding(2), migrate, .migrate(seq: 4, from: 2, to: 3), .migrate(seq: 5, from: 3, to: 4),
+                .migrate(seq: 6, from: 4, to: 5), try mirror(7),
+            ], 6, 4
         ),
     ]
     for (name, entries, mismatch, version) in cases {
@@ -254,9 +257,9 @@ extension JSONValue {
 
         // A migrate to a version newer than this app's is never cut, nor the one before it: a newer app wrote it, and
         // the read refuses the log.
-        let newer = headText + migrate + "\n" + (try EditLogEntry.migrate(seq: 4, from: 3, to: 4).jsonLine()) + "\n"
+        let newer = headText + migrate + "\n" + (try EditLogEntry.migrate(seq: 4, from: 4, to: 5).jsonLine()) + "\n"
         try Data(newer.utf8).write(to: url)
-        #expect(throws: EditDocumentError.newerVersion(4)) { try EditLogReader.read(url) }
+        #expect(throws: EditDocumentError.newerVersion(5)) { try EditLogReader.read(url) }
         #expect(try EditLogReader.truncateIncompleteTail(url) == false)
         #expect(try SafeRead.regularFile(at: url) == Data(newer.utf8))
     }
@@ -370,7 +373,7 @@ extension JSONValue {
     mirrored.camera.mirror = true
     let newer = EditLogEntry.create(seq: 1, document: mirrored, app: app)
     #expect(throws: (any Error).self) { try newer.jsonLine(writingDocumentAt: 1) }
-    #expect(throws: (any Error).self) { try create.jsonLine(writingDocumentAt: 4) }
+    #expect(throws: (any Error).self) { try create.jsonLine(writingDocumentAt: 5) }
 
     // Every other line is written as it is.
     for entry in [try padding(2), .undo(seq: 3, group: 2), .redo(seq: 4, group: 2), .migrate(seq: 5, from: 1, to: 2)] {
