@@ -436,9 +436,9 @@ public struct FrameEvaluator: Sendable {
     /// annotations, as its clip shows it, with the recorded cursor images `cursorImageIsReadable` says can be read (by take,
     /// as `RenderFrame.take` names it, and hash): the background alone for an output of 0 s and a clip of a take the
     /// scene does not draw (one the manifest does not have, or any other in a scene of one take); a clip of another take
-    /// of `takes` is its scene's frame (`clipFrame(of:atOutput:cursorImageIsReadable:neighbor:)`), marked with its take
-    /// (`RenderFrame.take`) and its person's mask read apart (`keptApart(_:take:)`); a clip of the scene's own take, as
-    /// that function says.
+    /// of `takes` is its scene's frame (`clipFrame(of:atOutput:take:cursorImageIsReadable:neighbor:)`), marked with its
+    /// take (`RenderFrame.take`) and its person's mask read apart (`keptApart(_:take:)`); a clip of the scene's own take,
+    /// as that function says.
     func clipFrame(
         atOutput τ: Int64, cursorImageIsReadable: (_ take: String?, _ hash: String) throws -> Bool
     ) rethrows -> RenderFrame {
@@ -446,41 +446,48 @@ public struct FrameEvaluator: Sendable {
         let take = document.sequence[shown.clip].take
         guard take != takeID else {
             return try clipFrame(
-                of: shown, atOutput: τ, cursorImageIsReadable: { try cursorImageIsReadable(nil, $0) },
+                of: shown, atOutput: τ, take: nil, cursorImageIsReadable: { try cursorImageIsReadable(nil, $0) },
                 neighbor: { try clipFrame(atOutput: $0, cursorImageIsReadable: cursorImageIsReadable) })
         }
         guard let scene = takeScenes[take] else { return backgroundFrame }
-        let frame = try scene.clipFrame(
-            of: shown, atOutput: τ, cursorImageIsReadable: { try cursorImageIsReadable(take, $0) },
+        return try scene.clipFrame(
+            of: shown, atOutput: τ, take: take, cursorImageIsReadable: { try cursorImageIsReadable(take, $0) },
             neighbor: { try clipFrame(atOutput: $0, cursorImageIsReadable: cursorImageIsReadable) })
-        return Self.keptApart(frame, take: take)
     }
 
     /// The frame at output time `τ` of the clip `shown` names, one of this scene's take, showing its source instant, with
     /// the take's recorded cursor images `cursorImageIsReadable` says can be read: for a clip with content (phase 3 base
     /// plan decision 8), a frozen frame's instant drawn at the clip's start without the motion blur, or the scene of a
     /// title card or of an imported clip over the background alone, a title card fading against `neighbor`, the frame
-    /// the output shows at an output time (of whichever take); the take's frame of the instant shown otherwise, as in
-    /// phase 2.
+    /// the output shows at an output time (of whichever take, finished by its own scene); the take's frame of the
+    /// instant shown otherwise, as in phase 2.
+    ///
+    /// `take` is the take as `RenderFrame.take` names it, `nil` when this scene is the one of the project's own take:
+    /// for another one, each frame this scene makes is kept apart from the project's take (`keptApart(_:take:)`) as it
+    /// is made, and only then (the frozen frame, the take's frame, the background a title card or an imported clip is
+    /// drawn over), never again after: a title card's frame is not, as its neighbor's frame is already its own take's, so
+    /// a frame's take and its mask's reader id are set once, by the scene of the take they are of.
     private func clipFrame(
-        of shown: (clip: Int, source: HostTime), atOutput τ: Int64, cursorImageIsReadable: (_ hash: String) throws -> Bool,
-        neighbor: (_ output: Int64) throws -> RenderFrame
+        of shown: (clip: Int, source: HostTime), atOutput τ: Int64, take: String?,
+        cursorImageIsReadable: (_ hash: String) throws -> Bool, neighbor: (_ output: Int64) throws -> RenderFrame
     ) rethrows -> RenderFrame {
+        /// `frame`, made by this scene, as the renderer reads it.
+        func made(_ frame: RenderFrame) -> RenderFrame { take.map { Self.keptApart(frame, take: $0) } ?? frame }
         if let (k, offset) = timeMap.contentOffset(atOutput: τ), let content = document.sequence[k].content {
             switch content {
             case .freeze:
-                return try takeFrame(
+                return made(try takeFrame(
                     atOutput: timeMap.clipOutputStarts[k], source: shown.source, blurs: false,
-                    cursorImageIsReadable: cursorImageIsReadable)
+                    cursorImageIsReadable: cursorImageIsReadable))
             case .card:
-                return try titleCard.frame(clip: k, offset: offset, background: backgroundFrame, neighbor: neighbor)
+                return try titleCard.frame(clip: k, offset: offset, background: made(backgroundFrame), neighbor: neighbor)
             case .media:
-                return mediaClip.frame(clip: k, offset: offset, background: backgroundFrame)
+                return mediaClip.frame(clip: k, offset: offset, background: made(backgroundFrame))
             }
         }
         // The output time shown, as `source(atOutput:)` clamps it.
         let output = min(max(τ, 0), timeMap.duration - 1)
-        return try takeFrame(atOutput: output, source: shown.source, blurs: true, cursorImageIsReadable: cursorImageIsReadable)
+        return made(try takeFrame(atOutput: output, source: shown.source, blurs: true, cursorImageIsReadable: cursorImageIsReadable))
     }
 
     /// `frame`, of a clip of another take `take` than the scene's own, as the renderer reads it apart from the scene's

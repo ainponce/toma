@@ -37,26 +37,33 @@ public enum PreviewPreparation {
     static let queue = DispatchQueue(label: "dev.toma.EditorPrepare", qos: .userInitiated)
 
     /// Reads take `take` of the package at `url` (the last one when `nil`) and prepares its preview at
-    /// `outputSize`, on `queue`.
-    /// - Throws: `PreviewPreparationError.unfinished` for a take the preview shows (every take its document's sequence
-    ///   shows, `LoadedProject.takesShown(by:)`) marked `recording`, `cannotDraw` if its first frame cannot be drawn, and
-    ///   the errors of `LoadedProject.load` and `FrameRenderer.init`.
-    public static func prepare(url: URL, take: String?, outputSize: SIMD2<Int>) async throws -> PreparedPreview {
+    /// `outputSize`, on `queue`, of `document` (the take's legacy document, `EditDocument.legacy(for:)`, when `nil`).
+    /// - Throws: `PreviewPreparationError.unfinished` for a take the preview shows marked `recording` (any take of the
+    ///   package `document`'s sequence shows, `LoadedProject.takesShown(by:)`: the take itself for the legacy document),
+    ///   `cannotDraw` if its first frame cannot be drawn, and the errors of `LoadedProject.load` and `FrameRenderer.init`.
+    public static func prepare(
+        url: URL, take: String?, outputSize: SIMD2<Int>, document: EditDocument? = nil
+    ) async throws -> PreparedPreview {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
-                continuation.resume(with: Result { try prepareBlocking(url: url, take: take, outputSize: outputSize) })
+                continuation.resume(with: Result {
+                    try prepareBlocking(url: url, take: take, outputSize: outputSize, document: document)
+                })
             }
         }
     }
 
     /// `prepare`, on the caller's thread. Blocks: never call it from a Swift concurrency thread.
-    static func prepareBlocking(url: URL, take: String?, outputSize: SIMD2<Int>) throws -> PreparedPreview {
+    static func prepareBlocking(
+        url: URL, take: String?, outputSize: SIMD2<Int>, document: EditDocument? = nil
+    ) throws -> PreparedPreview {
         let project = try LoadedProject.load(url, take: take)
-        for shown in project.takesShown(by: .legacy(for: project)) where shown.take.status == .recording {
+        let document = document ?? .legacy(for: project)
+        for shown in project.takesShown(by: document) where shown.take.status == .recording {
             throw PreviewPreparationError.unfinished(takeID: shown.take.id)
         }
         // Its own renderer: an export makes another one.
-        let renderer = try FrameRenderer(project: project, outputSize: outputSize)
+        let renderer = try FrameRenderer(project: project, document: document, outputSize: outputSize)
         let preview = PreviewRenderer(renderer: renderer)
         do {
             _ = try preview.snapshot(at: 0)  // loads the first segment's track now
