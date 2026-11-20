@@ -60,7 +60,7 @@ private let backdrop = RGBA(0.25, 0.25, 0.25, 1)
 
 /// The frame the output shows at output time `τ` before its output's annotations, every cursor image readable.
 private func shown(_ scene: FrameEvaluator, _ τ: Int64) -> RenderFrame {
-    scene.clipFrame(atOutput: τ) { _ in true }
+    scene.clipFrame(atOutput: τ) { _, _ in true }
 }
 
 /// The frame with the background alone of `scene`, as a clip of another take shows it.
