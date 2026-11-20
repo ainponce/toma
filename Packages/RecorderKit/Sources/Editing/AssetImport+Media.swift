@@ -21,7 +21,7 @@ extension AssetImport {
     /// is not named as a file of its kind (judged by its name alone, never opened), is not there, is not a regular file
     /// (never waited on: a FIFO is told by `fstat` first), is larger than `kind`'s limit, or is not one AVFoundation
     /// reads (`AVURLAsset`: readable, with a duration) with a track of its kind with a duration, of H.264, HEVC or
-    /// ProRes for a clip (`clipCodecs`). `nil` for an image or a `.cube`, which `refusal(of:as:)` judges. A cancellation
+    /// ProRes for a clip (`clipCodecs`). `nil` for an image or a `.cube`, which `screened(_:as:)` judges. A cancellation
     /// stays one: `.saveFailed(.ECANCELED)` if the caller's task is cancelled before AVFoundation reads the file or
     /// while it does, as `importAsset` gives up when cancelled; never `.notPlayable`, which would say the file is at
     /// fault.

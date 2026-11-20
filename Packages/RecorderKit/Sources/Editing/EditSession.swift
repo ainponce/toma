@@ -529,7 +529,10 @@ public final class EditSession {
     /// `.lut` the `.cube` at `url` for the camera's colors (`AssetImport.copyLUT`, phase 2 design §6.3), or with `.video`
     /// or `.audio` the clip or the sound at `url` (phase 3), for the step that names it, which comes after:
     /// `.imported(path)` once it is on the drive. The file is decoded first, on the queue of files, as the package's asset
-    /// reader decodes one: `.notAnImage` if it does not, and nothing is written. A `.cube` is read and parsed first instead
+    /// reader decodes one: `.notAnImage` if it does not, and nothing is written. A TIFF, a GIF or a PDF is converted to
+    /// PNG there instead (`AssetImport.convertedPNG(of:extension:)`, phase 3 design §5.4), once: `.notAnImage` if it does
+    /// not convert, and nothing is written; that PNG is what is placed, however many times the copy is tried, never the
+    /// file read again. A `.cube` is read and parsed first instead
     /// (`CubeLUT.parse`): `.notALUT(reason)` if it is not a 3D LUT, `.notAnImage` if it cannot be read at all, and nothing
     /// is written; the copy parses it again, so what is placed is what was parsed. A clip or a sound is opened with
     /// AVFoundation first (`AssetImport.mediaRefusal`): `.notPlayable` if it does not play, and nothing is written; it is
@@ -545,11 +548,17 @@ public final class EditSession {
     /// changed the package (it is opened again), as with `perform`.
     public func importAsset(_ url: URL, kind: AssetKind = .image) async -> AssetImportOutcome {
         guard isEditable else { return .notEditable }
+        // A TIFF's, a GIF's or a PDF's PNG, converted once here.
+        let converted: Data?
         if kind.isMedia {
             if let refusal = await AssetImport.mediaRefusal(of: url, as: kind) { return refusal }
+            converted = nil
         } else {
             do {
-                if let refusal = try await Self.run(on: files, { AssetImport.refusal(of: url, as: kind) }) { return refusal }
+                switch try await Self.run(on: files, { AssetImport.screened(url, as: kind) }) {
+                case let .refused(outcome): return outcome
+                case let .accepted(png): converted = png
+                }
             } catch {
                 return .notAnImage
             }
@@ -584,7 +593,9 @@ public final class EditSession {
         while true {
             let package = ProjectPackage(url: packageURL)
             let placed = (try? await Self.run(on: files) { () -> Result<String, AssetImport.Failure> in
-                Result { () throws(AssetImport.Failure) in try AssetImport.place(url, into: package, as: kind) }
+                Result { () throws(AssetImport.Failure) in
+                    try AssetImport.place(url, into: package, as: kind, converted: converted)
+                }
             }) ?? .failure(.destination(POSIXError(.EIO)))
             switch placed {
             case let .success(path):
