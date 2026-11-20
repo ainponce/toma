@@ -129,6 +129,17 @@ private struct Phase2Manifest: Decodable {
     #expect(TrackRecord.systemAudioTrackID(bundleID: "ñ", taken: []) == "system-audio--")
     #expect(TrackRecord.systemAudioTrackID(bundleID: "dev.toma_Año 2/x", taken: []) == "system-audio-dev-toma-A-o-2-x")
     #expect(TrackRecord.systemAudioTrackID(bundleID: "", taken: []) == "system-audio-")
+    // Without case: the id names a folder, and APFS ignores case by default.
+    #expect(TrackRecord.systemAudioTrackID(bundleID: "com.foo.app", taken: ["system-audio-com-Foo-app"]) == "system-audio-com-foo-app-2")
+    #expect(TrackRecord.systemAudioTrackID(bundleID: "com.Foo.app", taken: ["SYSTEM-AUDIO-COM-FOO-APP", "system-audio-com-foo-APP-2"])
+        == "system-audio-com-Foo-app-3")
+    var folders: Set<String> = []
+    for bundle in ["com.foo.app", "com.Foo.app", "COM.FOO.APP", "com.foo.App"] {
+        let id = TrackRecord.systemAudioTrackID(bundleID: bundle, taken: folders)
+        #expect(!folders.contains { $0.lowercased() == id.lowercased() }, "\(bundle) → \(id)")
+        folders.insert(id)
+    }
+    #expect(Set(folders.map { $0.lowercased() }).count == 4)
     for bundle in ["com.apple.Safari", "ñ", "../../escape", "a b\tc", "😀.app", "", "UPPER.lower.123"] {
         let id = TrackRecord.systemAudioTrackID(bundleID: bundle, taken: ["system-audio-x"])
         #expect(ProjectPackage.isValidTrackID(id), "\(bundle) → \(id)")
@@ -187,6 +198,66 @@ private struct Phase2Manifest: Decodable {
             #expect(reread.takes.map(\.id) == ["take-001", "take-002"])
             #expect(reread.takes[0] == store.manifest.takes[0])
         }
+    }
+}
+
+/// Raising the version and adding the take that needs it are one write: the disk has both or neither, so a cut between
+/// them never leaves a package of one take at 5, which the app of phase 2 would refuse.
+@Test func raisingAndAddingATakeIsOneWrite() throws {
+    try withTemporaryDirectory { dir in
+        let package = try ProjectPackage.create(in: dir, name: "One write", app: testApp, now: testDate)
+        let store = try ManifestStore(package: package)
+        try store.update { $0.takes.append(take("take-001")) }
+        let before = try Data(contentsOf: package.manifestURL)
+
+        // A write that fails: the disk keeps the manifest of before, of 3 with one take, whole.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: package.url.path)
+        do {
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: package.url.path) }
+            #expect(throws: (any Error).self) {
+                try store.update(raisingTo: 5) { $0.takes.append(take("take-002", status: .recording)) }
+            }
+            #expect(try Data(contentsOf: package.manifestURL) == before)
+            // In memory, the take and its version together, written together next.
+            #expect(store.manifest.formatVersion == 5 && store.manifest.takes.map(\.id) == ["take-001", "take-002"])
+        }
+        try store.flushPending()
+        let written = try ManifestStore(package: package).manifest
+        #expect(written.formatVersion == 5)
+        #expect(written.takes.map(\.id) == ["take-001", "take-002"])
+
+        // At the version or past it, it stays: nothing goes down.
+        try store.update(raisingTo: 4) { $0.takes[1].status = .complete }
+        #expect(try ManifestStore(package: package).manifest.formatVersion == 5)
+        let five = try Data(contentsOf: package.manifestURL)
+        // Past the newest, or a body that throws: nothing changes.
+        #expect(throws: ManifestStoreError.unsupportedVersion(6)) {
+            try store.update(raisingTo: 6) { $0.takes.append(take("take-003")) }
+        }
+        struct Abort: Error {}
+        #expect(throws: Abort.self) {
+            try store.update(raisingTo: 5) { manifest in
+                manifest.takes.append(take("take-003"))
+                throw Abort()
+            }
+        }
+        #expect(try Data(contentsOf: package.manifestURL) == five)
+        #expect(store.manifest.takes.count == 2)
+    }
+    // A package of 1 or 2 is not moved by a take: only its first edit moves it, to 3.
+    try withTemporaryDirectory { dir in
+        let package = try ProjectPackage.create(in: dir, name: "Old", app: testApp, now: testDate)
+        var old = try ManifestStore(package: package).manifest
+        old.formatVersion = 2
+        old.projectID = nil
+        try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(old), to: package.manifestURL)
+        let before = try Data(contentsOf: package.manifestURL)
+        let store = try ManifestStore(package: package)
+        #expect(throws: ManifestStoreError.notRecordable(2)) {
+            try store.update(raisingTo: 5) { $0.takes.append(take("take-001")) }
+        }
+        #expect(try Data(contentsOf: package.manifestURL) == before)
+        #expect(store.manifest == old)
     }
 }
 

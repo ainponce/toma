@@ -12,9 +12,9 @@ import Synchronization
 ///
 /// The store keeps the manifest's `formatVersion` as it was read: a package's version is decided when it is
 /// created and nothing rewrites it, so a version 1 package stays at version 1. The one exception is
-/// `raiseFormatVersion(to:)`, which the recorder calls before it writes what only version 4 defines (a track of a
-/// device, a `keyPress` event) or adds a second take, which only version 5 allows: a single take without them leaves a
-/// version 3 package at 3.
+/// `raiseFormatVersion(to:)` and `update(raisingTo:_:)`, which the recorder calls as it writes what only version 4
+/// defines (a track of a device, a `keyPress` event) or adds a second take, which only version 5 allows: a single take
+/// without them leaves a version 3 package at 3.
 ///
 /// Use one `ManifestStore` per package, in a single writer process: every write goes
 /// through the same `manifest.json.tmp`, so two writers would overwrite each other's
@@ -51,10 +51,36 @@ public final class ManifestStore: Sendable {
     /// `body` runs while the store's lock is held, and the lock is not recursive:
     /// `body` must never call back into this store.
     public func update(_ body: (inout Manifest) throws -> Void) throws {
+        try apply(raisingTo: nil, body)
+    }
+
+    /// `update(_:)` in a package moved to format `version` by the same write, when it is at an earlier one (as
+    /// `raiseFormatVersion(to:)` moves it; at `version` or later it stays where it is): the disk has the manifest before
+    /// or after both, never the new version without the change, nor the change without it. The recorder adds a take that
+    /// needs a version this way (a second take, 5; a take with a device's track, 4), so a write cut between the two
+    /// never leaves a package of one take at a version an older app refuses.
+    ///
+    /// Throws `ManifestStoreError.unsupportedVersion` for a version after `Manifest.newestFormatVersion`, and
+    /// `ManifestStoreError.notRecordable` for a package of version 1 or 2 that `version` would move: nothing changes. A
+    /// write that fails keeps the change, its version with it, in memory, as `update(_:)` does: the next `update` or
+    /// `flushPending()` writes them together.
+    public func update(raisingTo version: Int, _ body: (inout Manifest) throws -> Void) throws {
+        try apply(raisingTo: version, body)
+    }
+
+    /// `update(_:)`, raised to `version` when there is one (`update(raisingTo:_:)`).
+    private func apply(raisingTo version: Int?, _ body: (inout Manifest) throws -> Void) throws {
+        if let version, version > Manifest.newestFormatVersion { throw ManifestStoreError.unsupportedVersion(version) }
         try state.withLock { state in
             var manifest = state.manifest
             try body(&manifest)
             manifest.formatVersion = state.manifest.formatVersion
+            if let version, manifest.formatVersion < version {
+                guard Manifest.recordableFormatVersions.contains(manifest.formatVersion) else {
+                    throw ManifestStoreError.notRecordable(manifest.formatVersion)
+                }
+                manifest.formatVersion = version
+            }
             if manifest.formatVersion < 4, manifest.needsFormatVersion4 {
                 throw ManifestStoreError.needsFormatVersion(4)
             }
@@ -72,8 +98,8 @@ public final class ManifestStore: Sendable {
     }
 
     /// Moves the package to format `version`, with one write, when it is at an earlier one; does nothing when it is at
-    /// `version` or later (a version only goes up). The recorder calls it with 4 before it adds a track of a device or
-    /// writes the first `keyPress` event of a take, and with 5 before it adds a take to a package that has one.
+    /// `version` or later (a version only goes up). The recorder calls it with 4 before it writes the first `keyPress`
+    /// event of a take; a take that needs a version is added with `update(raisingTo:_:)`, in one write.
     ///
     /// Throws `ManifestStoreError.unsupportedVersion` for a version after `Manifest.newestFormatVersion`, and
     /// `ManifestStoreError.notRecordable` for a package of version 1 or 2 (before `Manifest.recordableFormatVersions`):

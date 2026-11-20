@@ -142,7 +142,9 @@ public struct TrackRecord: Codable, Equatable, Sendable {
     /// The id of the track of system audio of the app `bundleID`: `system-audio-` and the bundle identifier with every
     /// character (Unicode scalar) that is not an ASCII letter or digit as a `-`, so it is a track id a reader of phase 2
     /// takes (`ProjectPackage.isValidTrackID`): `com.apple.Safari` is `system-audio-com-apple-Safari`. If that is in
-    /// `taken`, the first of `-2`, `-3`… after it that is not.
+    /// `taken`, the first of `-2`, `-3`… after it that is not. `taken` is compared without case: the id names the
+    /// track's folder, and on a volume that ignores case (APFS by default) `com.Foo.app` and `com.foo.app` would share
+    /// one.
     public static func systemAudioTrackID(bundleID: String, taken: Set<String>) -> String {
         let sanitized = String(String.UnicodeScalarView(bundleID.unicodeScalars.map { scalar -> Unicode.Scalar in
             switch scalar.value {
@@ -151,9 +153,10 @@ public struct TrackRecord: Codable, Equatable, Sendable {
             }
         }))
         let id = "system-audio-" + sanitized
-        guard taken.contains(id) else { return id }
+        let taken = Set(taken.map { $0.lowercased() })
+        guard taken.contains(id.lowercased()) else { return id }
         var number = 2
-        while taken.contains("\(id)-\(number)") { number += 1 }
+        while taken.contains("\(id)-\(number)".lowercased()) { number += 1 }
         return "\(id)-\(number)"
     }
 }

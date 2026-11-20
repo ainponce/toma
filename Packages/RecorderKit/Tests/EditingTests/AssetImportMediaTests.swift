@@ -210,3 +210,29 @@ private enum MediaFixture {
         await session.close()
     }
 }
+
+/// A cancelled import stays a cancellation: never "Couldn't open the file.", and nothing is written.
+@MainActor @Test func aCancelledImportIsACancellation() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await MediaFixture.package(in: dir)
+        let clip = dir.appending(path: "Clip.mov")
+        try FileManager.default.copyItem(at: project.package.segmentURL(take: "take-001", track: "display-1", index: 1), to: clip)
+        let session = try await EditSession.open(project.package.url, take: nil, context: MediaFixture.context(caches: dir.appending(path: "Caches")))
+
+        // Cancelled before AVFoundation reads it: a task that cancels itself first.
+        let refusal = await Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await AssetImport.mediaRefusal(of: clip, as: .video)
+        }.value
+        #expect(refusal == .saveFailed(.ECANCELED))
+        let imported = await Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await session.importAsset(clip, kind: .video)
+        }.value
+        #expect(imported == .saveFailed(.ECANCELED))
+        #expect(!FileManager.default.fileExists(atPath: project.package.assetsURL.path))
+        // Not cancelled, the same file plays.
+        #expect(await AssetImport.mediaRefusal(of: clip, as: .video) == nil)
+        await session.close()
+    }
+}

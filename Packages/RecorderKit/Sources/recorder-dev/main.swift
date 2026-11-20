@@ -43,7 +43,7 @@ struct SynthRecord: AsyncParsableCommand {
             Creates <directory>/synth-<date>-<time>.toma and prints its absolute path as the first line \
             once recording has started. Warnings follow as "warning: …" lines, and a summary of the take \
             once it is closed. With --into, the take is added to that package instead (the next take-NNN; a \
-            package that has a take goes to version 5 first).
+            package that has a take goes to version 5 with it).
 
             The tracks, in this order: display-1 at the origin of the global space (or, with --window, \
             window-4242 at (100, 80)), display-2 and further ones each to the left of the one before (--displays), camera \
