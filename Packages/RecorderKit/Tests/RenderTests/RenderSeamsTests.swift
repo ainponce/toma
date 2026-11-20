@@ -190,7 +190,9 @@ private struct SeamDrawer: @unchecked Sendable {
         ShaderSource.deviceFrameMetal, ShaderSource.privacyMetal, ShaderSource.cameraLookMetal, ShaderSource.keysMetal,
         ShaderSource.captionsMetal,
     ]
-    #expect(ShaderSource.metal == ShaderSource.coreMetal + layers.joined())
+    // Phase 3 adds its layers after phase 2's, in their draw order (`RenderSeams3Tests`).
+    let phase3 = [ShaderSource.mediaClipMetal, ShaderSource.calmZoomMetal, ShaderSource.annotationsMetal, ShaderSource.titleCardMetal]
+    #expect(ShaderSource.metal == ShaderSource.coreMetal + (layers + phase3).joined())
     // The base adds no shader of its own: the library is phase 1's, and each layer's part is its milestone's, all of them
     // written by now (the device frame's and the camera look's, 2b's; privacy's and the keys', 2c's; the captions', 2a's).
     #expect(layers.allSatisfy { !$0.isEmpty })

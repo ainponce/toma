@@ -73,6 +73,14 @@ import Testing
         (0..<(3 * second / 2), 0), ((3 * second / 2)..<(5 * second / 2), 2 * second), ((5 * second / 2)..<(4 * second), 4 * second),
     ]
 
+    /// `frame` without what is prepared ahead of time (A6's and A8's), which only warms caches.
+    private static func shown(_ frame: RenderFrame) -> RenderFrame {
+        var frame = frame
+        frame.titleCardsAhead = []
+        frame.annotationsAhead = []
+        return frame
+    }
+
     @Test func everyReaderTakesAContentClip() async throws {
         try await withTemporaryDirectory { dir in
             let project = try await Self.take(in: dir)
@@ -92,7 +100,9 @@ import Testing
             for (output, shift) in Self.stretches {
                 for τ in stride(from: output.lowerBound, to: output.upperBound, by: 10_000_000) {
                     let frame = drawn.frame(at: Double(τ + shift) / 1e9) { _ in true }
-                    #expect(frame == reference.frame(at: Double(τ) / 1e9) { _ in true }, "\(τ) + \(shift)")
+                    // What is drawn ahead of time (a card or an annotation about to come) differs near a content clip by
+                    // design; the frame shown is the same.
+                    #expect(Self.shown(frame) == Self.shown(reference.frame(at: Double(τ) / 1e9) { _ in true }), "\(τ) + \(shift)")
                     #expect(frame.screen?.sourceTime == plain.sequence[0].start.adding(seconds: Double(τ) / 1e9), "\(τ)")
                     #expect(frame.cursor != nil, "\(τ)")
                 }
