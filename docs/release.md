@@ -1119,6 +1119,11 @@ Con macOS 26, el modelo del idioma instalado y Ajustes ▸ General ▸ «Transcr
 - En un proyecto de dos tomas (la segunda agregada con Tomas ▸ «Agregar al final» o regrabada) en «Como la grabación», con la segunda grabada en otra pantalla de otra proporción (la de la MacBook y un monitor 16:9): la vista previa, el MP4 y el GIF tienen la forma de la pantalla de la toma del primer clip; en el tramo de la otra toma su pantalla entra entera, centrada, y un zoom con foco fijo, el cursor y la burbuja caen donde apuntan, sin correrse a un costado. Mover al principio un clip de la otra toma cambia la forma de las tres a la suya.
 - Con las dos tomas en la secuencia: Regenerar los zooms automáticos y Seguir el cursor cambian los bloques y las pantallas de las dos, y dejan los del usuario; Aplicar un estilo (y el estilo por defecto) cambia el estilo del proyecto y vuelve a planear los zooms de las dos; con la cámara en Fondo borroso en las dos, la tarjeta de la Biblioteca muestra la burbuja sin el cuarto y dice que el proyecto tiene cámara aunque solo la tenga la segunda.
 
+**Las anotaciones dibujadas** (A6)
+
+- Exportar en 4K un proyecto con un texto de cada estilo (Simple, Etiqueta, Tercio inferior y Título), una flecha curva, una forma, un globo y un paso, unos pegados a la grabación con un zoom de 2× que entra y otros de la salida: en el video los textos y los trazos se ven nítidos (sin bordes borrosos ni escalones) en reposo y mientras el zoom entra, los textos se cortan en las mismas palabras que en la vista previa, y la punta de cada flecha pegada sigue sobre el mismo botón durante todo el zoom.
+- En la Mac base (M1), reproducir la vista previa en 1080p con diez anotaciones a la vista (y una flecha y una forma que se trazan al entrar): sigue a 60 fps, sin saltos cuando aparecen todas juntas.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
