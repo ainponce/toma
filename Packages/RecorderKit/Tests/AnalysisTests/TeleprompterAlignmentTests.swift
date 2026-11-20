@@ -84,7 +84,7 @@ private func alignment(at position: Int = 0) -> TeleprompterAlignment {
     @Test func accentsAndPunctuationDoNotBlockAMatch() {
         var state = alignment(at: 5)  // next: "nuestra aplicación para grabar pantallas"
         state.hear(["Nuestra", "aplicacion"])
-        #expect(state.position == 8)
+        #expect(state.position == 7)
     }
 
     @Test func adLibsDoNotMove() {
