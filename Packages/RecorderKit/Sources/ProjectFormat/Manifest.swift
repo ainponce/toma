@@ -28,18 +28,20 @@ public struct Rect: Codable, Equatable, Sendable {
 public struct Manifest: Codable, Equatable, Sendable {
     /// The version new packages are created with. A package keeps the version it was created with until the user
     /// edits it or records what an older app cannot read: recovery never rewrites it (a version 1 package it touches
-    /// stays at version 1), the first edit of a version 1 or 2 package upgrades it to version 3, with `upgradedFrom`, and
-    /// a version 3 package goes to version 4 only when a take records a track of a device or a key press
-    /// (`ManifestStore.raiseFormatVersion(to:)`). A package without them stays at 3, which the app of phase 1 opens.
+    /// stays at version 1), the first edit of a version 1 or 2 package upgrades it to version 3, with `upgradedFrom`, a
+    /// version 3 package goes to version 4 only when a take records a track of a device or a key press, and a package
+    /// goes to version 5 only when it gets a second take (`ManifestStore.raiseFormatVersion(to:)`). A package without
+    /// them stays at 3, which the app of phase 1 opens.
     public static let currentFormatVersion = 3
-    /// The newest version this version writes and reads: 4, with the tracks of an iPhone or iPad (`TrackKind.device`,
-    /// `.deviceAudio`) and `keyPress` events. A manifest of a later version was written by a newer Toma.
-    public static let newestFormatVersion = 4
+    /// The newest version this version writes and reads: 5, a package with two takes or more (`needsFormatVersion5`);
+    /// 4 has the tracks of an iPhone or iPad (`TrackKind.device`, `.deviceAudio`) and `keyPress` events. A manifest of
+    /// a later version was written by a newer Toma.
+    public static let newestFormatVersion = 5
     /// The versions this version reads. A manifest of any other version is refused before it is decoded.
-    public static let supportedFormatVersions = 1...4
+    public static let supportedFormatVersions = 1...5
     /// The versions a take is recorded into: an older package gets what its version does not define only through its
     /// first edit, which upgrades it to 3.
-    public static let recordableFormatVersions = 3...4
+    public static let recordableFormatVersions = 3...5
 
     public var formatVersion: Int
     public var app: AppInfo
@@ -72,6 +74,11 @@ public struct Manifest: Codable, Equatable, Sendable {
     public var needsFormatVersion4: Bool {
         takes.contains { take in take.tracks.contains { $0.kind.requiresFormatVersion4 } }
     }
+
+    /// Whether the package has two takes or more, which only version 5 allows (design §11): the app of phase 2 would open
+    /// the last one with the document of the first. Tracks of one app each (`TrackRecord.appBundleID`) do not need it:
+    /// the reader of phase 2 mixes them as they are.
+    public var needsFormatVersion5: Bool { takes.count > 1 }
 }
 
 /// One recording session: every track recorded between Record and Stop.
@@ -113,12 +120,44 @@ public struct TrackRecord: Codable, Equatable, Sendable {
     public var kind: TrackKind
     public var source: TrackSource
     public var segments: [SegmentRecord]
+    /// The bundle identifier of the one app a track of system audio records, in a take that records each app in a
+    /// track of its own (design §7.1); the app is also in `source.name` and `source.includedBundleIDs`, which a reader
+    /// of phase 2 reads. `nil` (left out) in any other track, and in every track before phase 3.
+    public var appBundleID: String?
+    /// The name of that app, as the take saw it. `nil` (left out) where `appBundleID` is.
+    public var appName: String?
 
-    public init(id: String, kind: TrackKind, source: TrackSource, segments: [SegmentRecord]) {
+    public init(
+        id: String, kind: TrackKind, source: TrackSource, segments: [SegmentRecord], appBundleID: String? = nil,
+        appName: String? = nil
+    ) {
         self.id = id
         self.kind = kind
         self.source = source
         self.segments = segments
+        self.appBundleID = appBundleID
+        self.appName = appName
+    }
+
+    /// The id of the track of system audio of the app `bundleID`: `system-audio-` and the bundle identifier with every
+    /// character (Unicode scalar) that is not an ASCII letter or digit as a `-`, so it is a track id a reader of phase 2
+    /// takes (`ProjectPackage.isValidTrackID`): `com.apple.Safari` is `system-audio-com-apple-Safari`. If that is in
+    /// `taken`, the first of `-2`, `-3`… after it that is not. `taken` is compared without case: the id names the
+    /// track's folder, and on a volume that ignores case (APFS by default) `com.Foo.app` and `com.foo.app` would share
+    /// one.
+    public static func systemAudioTrackID(bundleID: String, taken: Set<String>) -> String {
+        let sanitized = String(String.UnicodeScalarView(bundleID.unicodeScalars.map { scalar -> Unicode.Scalar in
+            switch scalar.value {
+            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A: scalar
+            default: "-"
+            }
+        }))
+        let id = "system-audio-" + sanitized
+        let taken = Set(taken.map { $0.lowercased() })
+        guard taken.contains(id.lowercased()) else { return id }
+        var number = 2
+        while taken.contains("\(id)-\(number)".lowercased()) { number += 1 }
+        return "\(id)-\(number)"
     }
 }
 

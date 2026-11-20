@@ -10,12 +10,18 @@ public enum AssetKind: Sendable {
     case image
     /// A 3D LUT for the camera's colors (phase 2 design §6.3, `PackageFileKind.lut`): a `.cube`.
     case lut
+    /// A clip (phase 3 design §5.4, `PackageFileKind.video`): a MOV, an MP4 or an M4V of H.264, HEVC or ProRes.
+    case video
+    /// A sound (phase 3 design §7.7, `PackageFileKind.audio`): an M4A, an MP3, a WAV, an AIFF or a CAF.
+    case audio
 
-    /// The extensions a file of this kind is taken with, lowercased (`jpeg` as `jpg`).
+    /// The extensions a file of this kind is taken with, lowercased (`jpeg` as `jpg`, `aif` as `aiff`).
     var extensions: [String] {
         switch self {
         case .image: AssetImport.allowedExtensions
         case .lut: ["cube"]
+        case .video: ["mov", "mp4", "m4v"]
+        case .audio: ["m4a", "mp3", "wav", "aiff", "caf"]
         }
     }
 
@@ -24,6 +30,16 @@ public enum AssetKind: Sendable {
         switch self {
         case .image: .asset
         case .lut: .lut
+        case .video: .video
+        case .audio: .audio
+        }
+    }
+
+    /// Whether a file of this kind is judged by whether it plays (`AssetImport.mediaRefusal`): a clip or a sound.
+    var isMedia: Bool {
+        switch self {
+        case .image, .lut: false
+        case .video, .audio: true
         }
     }
 }
@@ -57,6 +73,11 @@ public enum AssetImportOutcome: Equatable, Sendable {
     /// A `.cube` (`AssetKind.lut`) that was read and is not a 3D LUT Toma reads, with the reason (phase 2 design §6.3): a
     /// 1D one, a broken one, one larger than `CubeLUT.maxBytes`. Nothing was written.
     case notALUT(CubeLUTError)
+    /// A clip or a sound (`AssetKind.video`, `.audio`) that does not play (`AssetImport.mediaRefusal`): not named as one
+    /// of its kind, not there or not a regular file, too large, not read by AVFoundation, without a track of its kind
+    /// with duration (of H.264, HEVC or ProRes for a clip), or changed while it was copied. "Couldn't open the file."
+    /// Nothing was written.
+    case notPlayable
 }
 
 /// Copies an image of the user's into a package's `assets/` for a background (design §6.1): named by its content, so the
@@ -122,6 +143,9 @@ public enum AssetImport {
     /// LUT.
     static func refusal(of url: URL, as kind: AssetKind) -> AssetImportOutcome? {
         switch kind {
+        case .video, .audio:
+            // Judged by `mediaRefusal`, which waits for AVFoundation.
+            return nil
         case .image:
             return decodes(url) ? nil : .notAnImage
         case .lut:
@@ -169,7 +193,7 @@ public enum AssetImport {
         defer { close(source.fd) }
         let name: String
         switch kind {
-        case .image:
+        case .image, .video, .audio:
             do {
                 name = try hash(source.fd) + "." + source.ext
             } catch {
@@ -238,14 +262,17 @@ public enum AssetImport {
     // MARK: - Private
 
     private static func `extension`(of url: URL) -> String {
-        let ext = url.pathExtension.lowercased()
-        return ext == "jpeg" ? "jpg" : ext
+        switch url.pathExtension.lowercased() {
+        case "jpeg": "jpg"
+        case "aif": "aiff"
+        case let ext: ext
+        }
     }
 
     /// The user's file at `url` as `kind`, opened for reading as `openSource` opens it, with its size and its extension
-    /// as it is named in the package: one of `kind.extensions`, or `unsupported`. A `.cube` larger than its limit is
-    /// `notALUT(.tooLarge)`, never read.
-    private static func openSource(_ url: URL, as kind: AssetKind) throws(Failure) -> (fd: Int32, size: off_t, ext: String) {
+    /// as it is named in the package: one of `kind.extensions`, or `unsupported` (never opened). A `.cube` larger than
+    /// its limit is `notALUT(.tooLarge)`, never read.
+    static func openSource(_ url: URL, as kind: AssetKind) throws(Failure) -> (fd: Int32, size: off_t, ext: String) {
         let ext = Self.extension(of: url)
         guard kind.extensions.contains(ext) else { throw .unsupported(ext) }
         do {

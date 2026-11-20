@@ -69,8 +69,8 @@ private func removeEventLog(of package: ProjectPackage) throws {
     }
 }
 
-/// A manifest of format version 5 that this version's `Manifest` cannot decode.
-private let newerManifest = Data(#"{"formatVersion":5,"projects":[{"takes":[]}]}"#.utf8)
+/// A manifest of format version 6 that this version's `Manifest` cannot decode.
+private let newerManifest = Data(#"{"formatVersion":6,"projects":[{"takes":[]}]}"#.utf8)
 
 @Test func scanFlagsNewerFormatVersionWithoutRecoveringIt() async throws {
     try await withTemporaryDirectory { dir in
@@ -86,8 +86,8 @@ private let newerManifest = Data(#"{"formatVersion":5,"projects":[{"takes":[]}]}
             return
         }
         #expect(found == package)
-        #expect(reason == "format version 5 is newer than 4")
-        await #expect(throws: RecoveryError.unsupportedFormatVersion(5)) {
+        #expect(reason == "format version 6 is newer than 5")
+        await #expect(throws: RecoveryError.unsupportedFormatVersion(6)) {
             try await TakeRecovery.recover(package: package, takeID: "take-001")
         }
         #expect(try Data(contentsOf: package.manifestURL) == newerManifest)
@@ -204,9 +204,10 @@ private let newerManifest = Data(#"{"formatVersion":5,"projects":[{"takes":[]}]}
         // A recorder wrote the manifest and is gone already.
         await #expect(throws: RecoveryError.anotherTakeRecording) {
             try await TakeRecovery.recover(package: package, takeID: "take-001") {
-                try ManifestStore(package: package).update {
-                    $0.takes.append(makeTake("take-002", status: .complete, tracks: []))
-                }
+                // As a recorder adds a take to a package that has one: at version 5 first.
+                let store = try ManifestStore(package: package)
+                try store.raiseFormatVersion(to: 5)
+                try store.update { $0.takes.append(makeTake("take-002", status: .complete, tracks: [])) }
             }
         }
         #expect(try takeOnDisk(package, "take-001").status == .recording)
@@ -318,7 +319,7 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
     }
 }
 
-@Test func readersAcceptFourAndCallFiveNewer() async throws {
+@Test func readersAcceptFourAndCallSixNewer() async throws {
     try await withTemporaryDirectory { dir in
         // A take of an iPhone left open by a crash, in a package of version 4: found, recovered, and kept at 4.
         let phone = TrackSource(name: "iPhone", deviceUniqueID: "00008110-000A1234")
@@ -347,13 +348,13 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
             #expect(try manifestOnDisk(package).formatVersion == 4)
         }
 
-        // Version 5 is newer: needs repair, never recovered nor touched.
-        let newer = Data(#"{"formatVersion":5,"takes":[]}"#.utf8)
+        // Version 6 is newer: needs repair, never recovered nor touched.
+        let newer = Data(#"{"formatVersion":6,"takes":[]}"#.utf8)
         try newer.write(to: package.manifestURL)
         #expect(RecoveryScanner.scan(directory: dir) == [
-            .needsRepair(package: package, reason: "format version 5 is newer than 4"),
+            .needsRepair(package: package, reason: "format version 6 is newer than 5"),
         ])
-        await #expect(throws: RecoveryError.unsupportedFormatVersion(5)) {
+        await #expect(throws: RecoveryError.unsupportedFormatVersion(6)) {
             try await TakeRecovery.recover(package: package, takeID: "take-001")
         }
         #expect(try Data(contentsOf: package.manifestURL) == newer)

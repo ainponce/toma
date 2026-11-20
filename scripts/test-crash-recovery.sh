@@ -22,6 +22,9 @@
 # export-gif (/usr/bin/time -l) of a 10 s and of a 60 s take at 800 px must be the same within 10 %.
 # Eighth, the keys (keys_case): synth-record --keys killed with SIGKILL while it types; the recovered package must be at
 # version 4, with every keyPress line whole and the keys typed so far in order, and verify must pass.
+# Ninth, a second take (second_take_case): synth-record --into a package with take-001 and an edit, killed with SIGKILL
+# while it records take-002; the package must be at version 5, take-002 recovered, and take-001 and the editor's files
+# unchanged byte for byte.
 # Run with `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -606,6 +609,86 @@ PY
   echo "keys crash case passed"
 }
 
+# A second take (phase 3, base plan Task B3; design §11): synth-record --into adds take-002 to a package that has take-001
+# and an edit, and is killed with SIGKILL while it records. The package went to version 5 before take-002 reached the
+# manifest (the app of phase 2 says "newer version" instead of opening the last take); after the recovery take-002 is
+# recovered and passes verify, and take-001 (its record in the manifest, its folder) and the editor's files are the same
+# byte for byte.
+second_take_case() {
+  local TMP PID PKG BEFORE RECORD WAITED=0
+  TMP=$(mktemp -d)
+  echo "== a second take: synth-record --into a package with take-001 and an edit, kill -9 at 6 s (in $TMP)"
+  "$BIN" synth-record "$TMP" --duration 3 > "$TMP/first.out"
+  PKG=$(head -1 "$TMP/first.out")
+  if ! grep -q '^  "formatVersion" : 3,$' "$PKG/manifest.json"; then
+    echo "FAIL: a package of one take is not at version 3"
+    exit 1
+  fi
+  # An edit: edit-stress killed once it saved a step, so edit.json or edit-log.jsonl are there.
+  "$BIN" edit-stress "$PKG" --caches "$TMP/caches" --seed 7 > "$TMP/stress.out" 2> "$TMP/stress.err" &
+  PID=$!
+  until grep -q '^confirmed [0-9]' "$TMP/stress.out" 2>/dev/null; do
+    if ! kill -0 "$PID" 2>/dev/null || [ "$WAITED" -ge 200 ]; then
+      echo "FAIL: edit-stress saved no step to the package of take-001:"
+      cat "$TMP/stress.err"
+      kill -9 "$PID" 2>/dev/null || true
+      exit 1
+    fi
+    sleep 0.1
+    WAITED=$((WAITED + 1))
+  done
+  kill -9 "$PID"
+  wait "$PID" 2>/dev/null || true
+  if [ ! -s "$PKG/edit-log.jsonl" ]; then
+    echo "FAIL: the edit left no edit-log.jsonl"
+    exit 1
+  fi
+  # Every file but the manifest (the take's folder, the editor's files, the cache), and take-001's record.
+  BEFORE=$( (cd "$PKG" && find . -type f ! -path ./manifest.json ! -path './takes/take-002/*' -print0 | sort -z | xargs -0 shasum) | shasum)
+  take_record() {
+    python3 -I -c 'import json, sys; m = json.load(open(sys.argv[1])); print(json.dumps([t for t in m["takes"] if t["id"] == sys.argv[2]], sort_keys=True))' "$PKG/manifest.json" "$1"
+  }
+  RECORD=$(take_record take-001)
+
+  "$BIN" synth-record "$TMP" --into "$PKG" --duration 20 > "$TMP/second.out" &
+  PID=$!
+  until [ -s "$TMP/second.out" ]; do
+    if ! kill -0 "$PID" 2>/dev/null; then
+      echo "FAIL: synth-record --into exited before it started recording"
+      wait "$PID" || true
+      exit 1
+    fi
+    sleep 0.1
+  done
+  if ! grep -q '^  "formatVersion" : 5,$' "$PKG/manifest.json" || [ "$(take_record take-002)" = "[]" ]; then
+    echo "FAIL: take-002 records in a package that is not at version 5, or that does not list it"
+    exit 1
+  fi
+  sleep 6
+  kill -9 "$PID"
+  wait "$PID" 2>/dev/null || true
+  "$BIN" recover "$TMP" | tee "$TMP/recover.out"
+  if ! grep -q "^recovered: .* take-002$" "$TMP/recover.out"; then
+    echo "FAIL: take-002 was not recovered"
+    exit 1
+  fi
+  if ! python3 -I -c 'import json, sys; m = json.load(open(sys.argv[1])); s = {t["id"]: t["status"] for t in m["takes"]}; sys.exit(not (m["formatVersion"] == 5 and s == {"take-001": "complete", "take-002": "recovered"}))' "$PKG/manifest.json"; then
+    echo "FAIL: after the recovery the package is not at version 5 with take-001 complete and take-002 recovered"
+    exit 1
+  fi
+  if [ "$(take_record take-001)" != "$RECORD" ]; then
+    echo "FAIL: the second take changed take-001's record in the manifest"
+    exit 1
+  fi
+  if [ "$( (cd "$PKG" && find . -type f ! -path ./manifest.json ! -path './takes/take-002/*' -print0 | sort -z | xargs -0 shasum) | shasum)" != "$BEFORE" ]; then
+    echo "FAIL: the second take or its recovery changed a file of take-001 or of the editor"
+    exit 1
+  fi
+  "$BIN" verify "$PKG" --min-duration 2 --max-drop-ratio 0.01
+  rm -rf "$TMP"
+  echo "second take crash case passed"
+}
+
 run_case "" export
 run_case "--static-after 2"
 run_case "--displays 2 --camera --system-audio" export "display-1 display-2 camera mic system-audio"
@@ -614,4 +697,5 @@ edit_case
 library_case
 gif_case
 keys_case
+second_take_case
 echo "crash test passed"

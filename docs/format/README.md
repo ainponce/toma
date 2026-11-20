@@ -1532,7 +1532,7 @@ La versión 4 llega con la fase 2, para las tomas que graban un iPhone o un iPad
 
 Cuándo un paquete pasa a la versión 4:
 
-- **Un paquete pasa a 4 solo cuando una toma los usa**: la grabación sube el manifiesto a 4 (`ManifestStore.raiseFormatVersion(to: 4)`, una escritura) antes de sumar la primera pista `device` o `deviceAudio` o de escribir la primera línea `keyPress`. Si no, sigue en 3 y lo abre la app de la fase 1. Un manifiesto de una versión anterior a 4 nunca se escribe con una pista `device` o `deviceAudio` (`ManifestStoreError.needsFormatVersion(4)`), y una subida que no se pudo escribir deja la versión como estaba.
+- **Un paquete pasa a 4 solo cuando una toma los usa**: la grabación sube el manifiesto a 4 en la misma escritura que suma el registro de una toma con una pista `device` o `deviceAudio` (`ManifestStore.update(raisingTo:_:)`), o con una escritura propia (`ManifestStore.raiseFormatVersion(to: 4)`) antes de escribir la primera línea `keyPress`. Si no, sigue en 3 y lo abre la app de la fase 1. Un manifiesto de una versión anterior a 4 nunca se escribe con una pista `device` o `deviceAudio` (`ManifestStoreError.needsFormatVersion(4)`), y una subida que no se pudo escribir deja la versión como estaba.
 - La versión solo sube, y solo desde 3: un paquete v1 o v2 pasa a 3 con su primera edición y no se graba en él (`Manifest.recordableFormatVersions`, `3...4`), así que nunca salta a 4.
 - Una vez en 4, el paquete se queda en 4: nada lo baja, y las tomas siguientes y la recuperación lo escriben en 4 aunque no tengan pistas de dispositivo ni teclas. El documento de edición no cambia por la versión 4.
 
@@ -1550,7 +1550,7 @@ Cómo graba las teclas esta versión (`KeyPressRecorder`, solo en las tomas con 
 - `key` es lo que escribe la misma tecla **sin ningún modificador**, en la misma distribución y también sin teclas muertas: `"4"` en ⌘⇧4 (donde `chars` es `"$"`), `"7"` en el ⌘⇧7 de un teclado en español (donde `chars` es `"/"`), `"a"` en ⇧A. Es la etiqueta de la tecla en un atajo, sea cual sea el teclado. Falta donde falta `chars`. Es opcional: un lector la usa si está y, en una línea sin ella (de antes de que se escribiera), puede volver de `chars` a la tecla como en un teclado de EE. UU. (`keyOverlay-1` lo hace así). Con la entrada segura activa no hay línea, así que tampoco `key`.
 - `mods` lleva solo cinco bits de `CGEventFlags` (`KeyPressRecorder.modifierMask`, 10354688 = `0x9E0000`): ⇧ 131072 (`0x20000`), ⌃ 262144 (`0x40000`), ⌥ 524288 (`0x80000`), ⌘ 1048576 (`0x100000`) y fn 8388608 (`0x800000`, que macOS pone también en las flechas y las teclas de función). No quedan Bloq Mayús, el bit del teclado numérico ni los del dispositivo. El lector acepta cualquier valor de 32 bits (como el `256` del ejemplo de arriba); la grabación solo escribe esos bits.
 - **Con la entrada segura de macOS activa no hay línea** (`IsSecureEventInputEnabled()`, leída en cada tecla, al llegar al tap y otra vez justo antes de escribirla, después de la subida a 4): ni lo que se escribe en un campo de contraseña ni la ↩ que lo cierra. La protección cubre los campos en los que la app activa la entrada segura, como hacen los campos de contraseña; un campo de una app que no la activa se graba como cualquier otro. Tampoco hay líneas en pausa (el teclado no se escucha), de antes del comienzo o de la reanudación, ni después del final de la toma.
-- **El paquete sube a 4 justo antes de la primera línea**: la grabación llama a `ManifestStore.raiseFormatVersion(to: 4)` una vez por toma, en la cola de las teclas, antes de escribir la primera `keyPress`. Si esa subida falla (por ejemplo, con el disco lleno), la toma no escribe ninguna tecla más, así que nunca queda una línea `keyPress` en un paquete 3. Una toma con la opción prendida en la que no se tocó ninguna tecla (o solo con la entrada segura activa) deja el paquete en 3. Una toma con una pista `device` o `deviceAudio` sube a 4 antes de que su registro llegue al manifiesto.
+- **El paquete sube a 4 justo antes de la primera línea**: la grabación llama a `ManifestStore.raiseFormatVersion(to: 4)` una vez por toma, en la cola de las teclas, antes de escribir la primera `keyPress`. Si esa subida falla (por ejemplo, con el disco lleno), la toma no escribe ninguna tecla más, así que nunca queda una línea `keyPress` en un paquete 3. Una toma con la opción prendida en la que no se tocó ninguna tecla (o solo con la entrada segura activa) deja el paquete en 3. Una toma con una pista `device` o `deviceAudio` sube a 4 con la misma escritura que lleva su registro al manifiesto.
 
 ### Las pistas de un iPhone o un iPad
 
@@ -1560,3 +1560,52 @@ Cómo graba las teclas esta versión (`KeyPressRecorder`, solo en las tomas con 
 - Una toma con una pista `device` empieza en el editor con el marco del dispositivo (`deviceFrame-1`, Oscuro: iPhone si el lado corto sobre el lado largo de `globalFrame` es 0,6 o menos, en cualquier orientación, iPad si no) y sin el cursor, que no graba; el zoom automático no planea nada sin clics y el zoom a mano funciona como en cualquier toma.
 - `deviceAudio` es el sonido que llega por el mismo cable, del mismo dispositivo (su `source` lleva el mismo `name` y `deviceUniqueID`, sin `globalFrame`), en el formato propio del dispositivo y en una pista aparte de `mic` y `systemAudio`.
 - Desconectar el cable termina el segmento abierto de las dos pistas (`streamError`); al volver a conectar **el mismo** dispositivo (el mismo `deviceUniqueID`, nunca otro que esté conectado), las dos siguen en segmentos nuevos, como cualquier pista que se reinicia.
+
+## Cambios de la versión 5
+
+La versión 5 llega con la fase 3, para los paquetes con dos tomas o más. Los paquetes nuevos se siguen creando con `formatVersion: 3` (`Manifest.currentFormatVersion`); la versión más nueva que escribe y lee esta versión es la 5 (`Manifest.newestFormatVersion`).
+
+Cuándo un paquete pasa a la versión 5:
+
+- **Un paquete pasa a 5 solo al tener dos tomas** (`Manifest.needsFormatVersion5`): la grabación sube el manifiesto a 5 en la misma escritura que suma el registro de una toma nueva a un paquete que ya tiene una (`ManifestStore.update(raisingTo:_:)`). Un paquete de una toma nunca sube por esto. El motivo: la app de la fase 2 abriría la última toma, con el documento de la primera (fondo y silencio) o, sin documento, la toma nueva en lugar de la editada; con la versión 5 dice que el proyecto es de una versión más nueva y no lo toca.
+- Un manifiesto de una versión anterior a 5 nunca se escribe con una toma agregada a otra (`ManifestStoreError.needsFormatVersion(5)`). Un paquete que ya tiene dos tomas por debajo de 5 (ninguna app lo escribe: la fase 1 y la 2 graban una toma por paquete) se sigue cerrando y recuperando: lo que se rechaza es la toma agregada, nunca un cambio de las que están.
+- La subida cambia solo `formatVersion`. **Una toma nueva nunca toca las de antes**: su registro en el manifiesto, su carpeta, `edit.json`, `edit-log.jsonl` y `assets/` quedan igual byte a byte, también si la toma nueva se corta (un corte de energía o un `kill -9` la dejan para recuperar, como a cualquier toma; lo comprueba `make crash-test`). Como la subida y el registro van en una sola escritura atómica, un corte deja el manifiesto de antes (en su versión, con las tomas de antes; a lo sumo queda la carpeta vacía de la toma nueva, que nadie lista) o el nuevo (en 5, con la toma nueva): nunca un paquete de una toma en 5, que la app de la fase 2 rechazaría.
+- La versión solo sube, y solo desde 3 o 4 (`Manifest.recordableFormatVersions`, `3...5`): un paquete v1 o v2 pasa a 3 con su primera edición antes de grabar en él.
+
+Las pistas de audio del sistema por app (diseño §7.1) **no suben la versión**: una toma que graba cada app en su propia pista sigue en la suya (3, o 4 con un iPhone o las teclas).
+
+- El id de la pista es `system-audio-` y el bundle id de la app con todo carácter (escalar Unicode) que no es una letra o un dígito ASCII cambiado por `-` (`TrackRecord.systemAudioTrackID(bundleID:taken:)`), y `-2`, `-3`… si ya está tomado: `com.apple.Safari` es `system-audio-com-apple-Safari`. Es un id de pista válido (letras, dígitos y `-`).
+- Campos nuevos de la pista, opcionales, al final: `appBundleID` (el bundle id de la app) y `appName` (su nombre); faltan en cualquier otra pista. La app también va en `source.name` y `source.includedBundleIDs`, como en una pista de *Solo estas apps*.
+
+  ```json
+  {
+    "appBundleID" : "com.apple.Safari",
+    "appName" : "Safari",
+    "id" : "system-audio-com-apple-Safari",
+    "kind" : "systemAudio",
+    "segments" : [ … ],
+    "source" : {
+      "includedBundleIDs" : [
+        "com.apple.Safari"
+      ],
+      "name" : "Safari"
+    }
+  }
+  ```
+- El lector de la fase 2 ignora los campos nuevos, acepta el id y mezcla cada pista `systemAudio` por su clave `<toma>/<pista>`, a 1 sin entrada en el documento, con los canales de la más ancha (comprobado contra `main` a78fbe1: `threeAppTracksMixAsTheirSum`, `appTrackDecodesInThePhase2Reader`). Si una recuperación de la fase 2 reescribe el manifiesto, se pierden solo `appBundleID` y `appName`.
+
+Archivos nuevos del paquete, que tampoco suben la versión (los nombra el documento de edición):
+
+| Qué | Dónde, y el nombre exacto | Límite | Formatos |
+|---|---|---|---|
+| Clip propio | `assets/<sha>.<ext>`, `[0-9a-f]{32}\.(mov\|mp4\|m4v)` | 16 GiB | H.264, HEVC o ProRes, con duración |
+| Audio propio | `assets/<sha>.<ext>`, `[0-9a-f]{32}\.(m4a\|mp3\|wav\|aiff\|caf)` (un `.aif` se nombra `aiff`) | 2 GiB | una pista de audio con duración |
+| Guion | `script.txt`, en la raíz del paquete | 1 MiB | texto UTF-8 |
+
+- **Los clips y el audio** se copian a `assets/` como las imágenes (clon de APFS, nombre por los primeros 16 bytes del SHA-256, el mismo archivo una sola vez), después de comprobar que se reproducen: AVFoundation los abre (legibles y con duración) y tienen una pista de su tipo con duración, de H.264, HEVC o ProRes en un clip. Lo que no, no se copia. Desde el paquete, AVFoundation (que abre un archivo por su ruta y sigue enlaces) recibe la ruta solo después de `ProjectPackage.mediaAsset(_:as:)`: el nombre exacto, la carpeta `assets/`, ningún enlace en el camino (`openat` con `O_NOFOLLOW` desde la carpeta del paquete) y un archivo común dentro del límite, mirado con `fstatat` sin abrirlo (un FIFO nunca se abre). Lo que no cumple se trata como ausente.
+- **`script.txt`** es el guion del teleprompter del proyecto (diseño §8.5). Se escribe entero y atómico (`ProjectPackage.writeScript`: `script.txt.tmp`, `F_FULLFSYNC` y `renameat` desde el descriptor de la carpeta del paquete; un enlace en su lugar se reemplaza, nunca se sigue) y se lee con `SafePackageFile` (`readScript`): un enlace, algo que no es un archivo común, uno de más de 1 MiB o bytes que no son UTF-8 son como si no hubiera guion.
+
+Compatibilidad:
+
+- **El lector acepta 1…5** (`Manifest.supportedFormatVersions`, `1...5`) y rechaza cualquier otra antes de decodificar el manifiesto: un manifiesto de la versión 6 o más es de una Toma más nueva (*versión más nueva* en la biblioteca, *para reparar* en la recuperación, que no lo toca).
+- La app de la fase 2 (lector de `1...4`) dice que un paquete v5 es de una versión más nueva y no lo toca; la de la fase 1 (`1...3`), lo mismo. Un paquete de una toma sigue en 3 o 4 aunque tenga pistas por app, clips, audio o guion: su manifiesto lo leen igual (lo que pueden abrir lo decide además la versión del documento de edición).

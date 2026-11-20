@@ -194,8 +194,8 @@ extension EditorModel {
             case let .imported(path):
                 imageImport = .idle
                 setBackground(.image(file: path))
-            case .notAnImage, .notALUT:
-                // `.notALUT` is only a `.cube`'s, never an image's.
+            case .notAnImage, .notALUT, .notPlayable:
+                // `.notALUT` is only a `.cube`'s and `.notPlayable` a clip's or a sound's, never an image's.
                 imageImport = .notAnImage
             case .saveFailed:
                 // Cancelled by the user while it waited for room on a full disk: nothing to say.

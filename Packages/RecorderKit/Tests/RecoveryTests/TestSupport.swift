@@ -12,14 +12,17 @@ func makePackage(in directory: URL, name: String = "Test") throws -> ProjectPack
     try ProjectPackage.create(in: directory, name: name, app: AppInfo(name: "Tests", version: "0"), now: Date())
 }
 
-/// Adds `take` to the manifest and creates its folder and one folder per track, like the recorder.
+/// Adds `take` to the manifest and creates its folder and one folder per track, like the recorder: in a package that
+/// has a take already, after raising it to version 5 (`Manifest.needsFormatVersion5`).
 func addTake(_ take: TakeRecord, to package: ProjectPackage) throws {
     try FileManager.default.createDirectory(at: package.takeDirectory(take.id), withIntermediateDirectories: false)
     for track in take.tracks {
         try FileManager.default.createDirectory(
             at: package.trackDirectory(take: take.id, track: track.id), withIntermediateDirectories: false)
     }
-    try ManifestStore(package: package).update { $0.takes.append(take) }
+    let store = try ManifestStore(package: package)
+    if !store.manifest.takes.isEmpty { try store.raiseFormatVersion(to: 5) }
+    try store.update { $0.takes.append(take) }
 }
 
 func manifestOnDisk(_ package: ProjectPackage) throws -> Manifest {

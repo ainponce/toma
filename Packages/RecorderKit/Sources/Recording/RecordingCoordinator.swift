@@ -76,7 +76,7 @@ public enum RecordingError: Error, Equatable {
     case volumeNotAllowed(VolumeEligibility)
     case alreadyStarted
     case notRecording
-    /// The package is of this format version, outside `Manifest.recordableFormatVersions` (3 and 4): a take is only
+    /// The package is of this format version, outside `Manifest.recordableFormatVersions` (3 to 5): a take is only
     /// recorded into a package of those, so an older one never gets what its version does not define.
     case notCurrentFormatVersion(Int)
 }
@@ -250,7 +250,8 @@ public actor RecordingCoordinator {
     ///
     /// Throws `volumeNotAllowed`, `notEnoughDiskSpace` or `notCurrentFormatVersion` before creating
     /// anything. The take's record must reach the manifest on disk before anything is recorded, in a package
-    /// raised to version 4 first if a source's track needs it (`TrackKind.requiresFormatVersion4`): if those
+    /// raised in the same write to version 4 if a source's track needs it (`TrackKind.requiresFormatVersion4`), or to 5
+    /// if the package has a take already (`Manifest.needsFormatVersion5`; the takes there are never touched): if those
     /// writes fail (after one retry with the reserve's room when they ran out of space), the lock and the
     /// reserve are released and the error is rethrown, leaving at most an empty take folder. If a source
     /// fails to start, the sources already started are stopped, the take is closed as `complete` with what
@@ -310,23 +311,33 @@ public actor RecordingCoordinator {
             id: takeID, status: .recording, startedAt: startedAt,
             tracks: sources.map { TrackRecord(id: $0.trackID, kind: $0.kind, source: $0.sourceInfo, segments: []) },
             cameraStyle: initialCameraStyle)
-        // A take with a track only version 4 defines (an iPhone's) raises the package to 4 first: the store refuses
-        // that record in a package of 3, and a take without one leaves it at 3.
-        let needsFormatVersion4 = sources.contains { $0.kind.requiresFormatVersion4 }
+        // A take with a track only version 4 defines (an iPhone's) raises the package to 4: the store refuses that
+        // record in a package of 3, and a take without one leaves it at 3. A take added to a package that has one raises
+        // it to 5 (design §11): the app of phase 2 would open the last take with the first one's document, and says
+        // "newer version" instead. The highest version needed, in the same write as the record
+        // (`update(raisingTo:_:)`): never a package of one take at a version it does not need. The takes there stay as
+        // they are.
+        let raisedVersion: Int? =
+            if !store.manifest.takes.isEmpty { 5 } else if sources.contains(where: { $0.kind.requiresFormatVersion4 }) { 4 } else { nil }
+        let addTake = {
+            if let raisedVersion {
+                try store.update(raisingTo: raisedVersion) { $0.takes.append(record) }
+            } else {
+                try store.update { $0.takes.append(record) }
+            }
+        }
         // A take the manifest does not list is invisible to recovery and the editor: nothing is recorded
         // until it is on disk.
         do {
             do {
-                if needsFormatVersion4 { try store.raiseFormatVersion(to: 4) }
-                try store.update { $0.takes.append(record) }
+                try addTake()
             } catch where isOutOfSpace(error) {
                 reserve.release()
                 if store.manifest.takes.contains(where: { $0.id == takeID }) {
+                    // In memory with its version: written together.
                     try store.flushPending()
                 } else {
-                    // The raise ran out of space: nothing of the take is in memory yet. Does nothing once at 4.
-                    if needsFormatVersion4 { try store.raiseFormatVersion(to: 4) }
-                    try store.update { $0.takes.append(record) }
+                    try addTake()
                 }
                 diskFilled()  // still starting: the take stops as `diskFull` once it has started
             }

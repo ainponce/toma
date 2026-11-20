@@ -141,6 +141,8 @@ private func take(_ id: String) -> TakeRecord {
     try await withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
         let store = try ManifestStore(package: package)
+        // Many takes: a package of version 5 (`Manifest.needsFormatVersion5`).
+        try store.raiseFormatVersion(to: 5)
         try await withThrowingTaskGroup(of: Void.self) { group in
             for i in 1...800 {
                 group.addTask { try store.update { $0.takes.append(take("take-\(i)")) } }
@@ -182,6 +184,8 @@ private final class ReaderCounters: Sendable {
             counters.finished.store(true, ordering: .releasing)
         }.start()
         while !counters.started.load(ordering: .acquiring) { try await Task.sleep(for: .milliseconds(1)) }
+        // Many takes: a package of version 5 (`Manifest.needsFormatVersion5`).
+        try store.raiseFormatVersion(to: 5)
         for i in 1...200 {
             try store.update { $0.takes.append(take("take-\(i)")) }
         }
@@ -218,6 +222,8 @@ private final class ReaderCounters: Sendable {
     try withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
         let store = try ManifestStore(package: package)
+        // Two takes: a package of version 5 (`Manifest.needsFormatVersion5`).
+        try store.raiseFormatVersion(to: 5)
 
         try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: package.url.path)
         #expect(throws: (any Error).self) { try store.update { $0.takes.append(take("take-001")) } }

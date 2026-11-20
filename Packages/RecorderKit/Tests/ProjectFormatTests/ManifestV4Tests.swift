@@ -136,8 +136,8 @@ private func recordingTake(_ tracks: [TrackRecord]) -> TakeRecord {
     }
 }
 
-@Test func raiseOnlyGoesUpToFour() throws {
-    #expect(Manifest.newestFormatVersion == 4)
+@Test func raiseOnlyGoesUpToTheNewest() throws {
+    #expect(Manifest.newestFormatVersion == 5)
     try withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Raise", app: testApp, now: testDate)
         let store = try ManifestStore(package: package)
@@ -153,7 +153,7 @@ private func recordingTake(_ tracks: [TrackRecord]) -> TakeRecord {
         #expect(store.manifest.formatVersion == 4)
         #expect(try Data(contentsOf: package.manifestURL) == marked)
 
-        #expect(throws: ManifestStoreError.unsupportedVersion(5)) { try store.raiseFormatVersion(to: 5) }
+        #expect(throws: ManifestStoreError.unsupportedVersion(6)) { try store.raiseFormatVersion(to: 6) }
         #expect(store.manifest.formatVersion == 4)
         #expect(try Data(contentsOf: package.manifestURL) == marked)
         #expect(try ManifestStore(package: package).manifest.formatVersion == 4)
@@ -172,12 +172,12 @@ private func recordingTake(_ tracks: [TrackRecord]) -> TakeRecord {
             let before = try Data(contentsOf: package.manifestURL)
 
             let store = try ManifestStore(package: package)
-            for target in [3, 4] {
+            for target in [3, 4, 5] {
                 #expect(throws: ManifestStoreError.notRecordable(version), "\(version) to \(target)") {
                     try store.raiseFormatVersion(to: target)
                 }
             }
-            #expect(throws: ManifestStoreError.unsupportedVersion(5)) { try store.raiseFormatVersion(to: 5) }
+            #expect(throws: ManifestStoreError.unsupportedVersion(6)) { try store.raiseFormatVersion(to: 6) }
             try store.raiseFormatVersion(to: version)
             #expect(store.manifest.formatVersion == version)
             #expect(try Data(contentsOf: package.manifestURL) == before)
@@ -231,11 +231,11 @@ private func recordingTake(_ tracks: [TrackRecord]) -> TakeRecord {
     }
 }
 
-@Test func readersAcceptFourAndCallFiveNewer() async throws {
+@Test func readersAcceptFourAndCallSixNewer() async throws {
     #expect(Manifest.currentFormatVersion == 3)
-    #expect(Manifest.newestFormatVersion == 4)
-    #expect(Manifest.supportedFormatVersions == 1...4)
-    #expect(Manifest.recordableFormatVersions == 3...4)
+    #expect(Manifest.newestFormatVersion == 5)
+    #expect(Manifest.supportedFormatVersions == 1...5)
+    #expect(Manifest.recordableFormatVersions == 3...5)
     try await withTemporaryDirectory { dir in
         let builder = try TakeBuilder(in: dir, name: "iPhone", formatVersion: 4)
         try await builder.addVideoTrack(
@@ -254,9 +254,9 @@ private func recordingTake(_ tracks: [TrackRecord]) -> TakeRecord {
         #expect(loaded.take.tracks.map(\.kind) == [.device, .deviceAudio])
         #expect(loaded.events.contains(key))
 
-        // A manifest of version 5, which this version's `Manifest` may not decode: refused before decoding it.
-        try Data(#"{"formatVersion":5,"somethingNew":true}"#.utf8).write(to: builder.package.manifestURL)
-        #expect(throws: LoadedProjectError.unsupportedFormatVersion(5)) { try LoadedProject.load(builder.package.url) }
+        // A manifest of version 6, which this version's `Manifest` may not decode: refused before decoding it.
+        try Data(#"{"formatVersion":6,"somethingNew":true}"#.utf8).write(to: builder.package.manifestURL)
+        #expect(throws: LoadedProjectError.unsupportedFormatVersion(6)) { try LoadedProject.load(builder.package.url) }
     }
 }
 
