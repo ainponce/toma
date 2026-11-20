@@ -43,13 +43,21 @@ struct PipelineContext: Sendable {
     /// Changes one track of the take in the manifest. A failed write is reported as
     /// `manifestWriteFailed`; the change stays in memory and the next write retries it. A write that
     /// failed for lack of space is retried at once, after the reserve is given back.
+    ///
+    /// With `segmentRotation` (the Replay's working package, never recovered) the change is only staged in memory
+    /// (`ManifestStore.stage`): the Replay writes it every `syncInterval`, off the capture queues.
     func updateTrack(_ trackID: String, _ change: (inout TrackRecord) -> Void) {
+        let body = { (manifest: inout Manifest) in
+            guard let take = manifest.takes.firstIndex(where: { $0.id == takeID }),
+                  let track = manifest.takes[take].tracks.firstIndex(where: { $0.id == trackID })
+            else { return }
+            change(&manifest.takes[take].tracks[track])
+        }
         do {
-            try store.update { manifest in
-                guard let take = manifest.takes.firstIndex(where: { $0.id == takeID }),
-                      let track = manifest.takes[take].tracks.firstIndex(where: { $0.id == trackID })
-                else { return }
-                change(&manifest.takes[take].tracks[track])
+            if segmentRotation != nil {
+                try store.stage(body)
+            } else {
+                try store.update(body)
             }
         } catch {
             if isOutOfSpace(error) {
@@ -323,9 +331,11 @@ actor TrackPipeline: CaptureSink {
     /// at its last sample anyway (fases 4 y 5 plan 5c, decision 2).
     static let rotationWait: Duration = .seconds(1)
 
-    /// Only with `segmentRotation` (the Replay's freeze): closes the open segment `rotated`, waits until it is finished
-    /// (durable, its end in the manifest) and returns its index; `nil` if no segment had started, and always without
-    /// `segmentRotation`.
+    /// Only with `segmentRotation` (the Replay's freeze): closes the open segment `rotated`, waits until it and every
+    /// segment of the track closed before it are finished (each one's end in the manifest) and returns its index; `nil` if
+    /// no segment had started (after the segments being finished are), and always without `segmentRotation`. A segment
+    /// closed a moment earlier by a rotation by duration, still finishing its file, is never left out of what it answers.
+    /// The files are not synced here: the Replay syncs the ones a save clones (`ReplayCoordinator.freeze()`).
     ///
     /// The next sample closes it and opens the next segment at its time, as a rotation by duration does. A video track
     /// that took no frame since `clock() − heartbeatSafetyMargin` (a still screen) closes there at once and seeds the next
@@ -335,11 +345,14 @@ actor TrackPipeline: CaptureSink {
     func rotate() async -> Int? {
         dispatchPrecondition(condition: .onQueue(queue))
         guard context.segmentRotation != nil else { return nil }
-        return await withCheckedContinuation { (answer: CheckedContinuation<Int?, Never>) in
+        let rotated = await withCheckedContinuation { (answer: CheckedContinuation<Int?, Never>) in
             queue.async {
                 self.assumeIsolated { $0.requestRotation(answer) }
             }
         }
+        // Each close finishes in a task of its own, and a short segment can finish before a long one closed earlier.
+        await waitForFinishing()
+        return rotated
     }
 
     // MARK: - Jobs
@@ -425,13 +438,13 @@ actor TrackPipeline: CaptureSink {
             context.warnings.yield(.writerFailed(track: trackID))
             if diskFull { context.onDiskFull() }
         }
-        // The manifest only says the segment ended once what it says is on the disk.
+        // The manifest only says the segment ended once what it says is on the disk. Not the Replay's working package,
+        // which is never recovered: its capture queues never wait for a sync, and a save syncs what it clones.
         if segment.fd >= 0 {
-            do { try DurableFile.fullSync(segment.fd) } catch { errors.append(error) }
+            if context.segmentRotation == nil {
+                do { try DurableFile.fullSync(segment.fd) } catch { errors.append(error) }
+            }
             Darwin.close(segment.fd)
-        } else if context.segmentRotation != nil, segment.startHostTime != nil {
-            // The Replay's: a save clones the file as it is, so it is synced even without the descriptor kept open.
-            do { try Self.fullSync(segment.url) } catch { errors.append(error) }
         }
         if let end, segment.startHostTime != nil {
             let index = segment.index
@@ -715,7 +728,8 @@ actor TrackPipeline: CaptureSink {
     }
 
     private func syncSegmentFile() {
-        guard let segment = state.segment, segment.fd >= 0 else { return }
+        // Not the Replay's: its working package is never recovered.
+        guard context.segmentRotation == nil, let segment = state.segment, segment.fd >= 0 else { return }
         do {
             try DurableFile.barrierSync(segment.fd)
         } catch {
@@ -865,18 +879,12 @@ actor TrackPipeline: CaptureSink {
     /// No sample closed segment `index` within `rotationWait` of `rotate()`: a still video rotates seeded, anything else
     /// closes at its last sample and the next sample opens the next segment.
     private func rotationWaitEnded(segment index: Int) {
-        guard let segment = state.segment, segment.index == index, segment.rotationRequested else { return }
+        // Never while closing: a rotation then would open a writer and its file as the track comes down.
+        guard case .running = state.phase, let segment = state.segment, segment.index == index, segment.rotationRequested
+        else { return }
         segment.rotationWait = nil
         if case .video = media, rotateIfStill(segment) { return }
         closeSegment(reason: .rotated, at: segment.latestTime ?? context.clock())
-    }
-
-    /// Opens the file at `url` (never through a link), full-syncs it and closes it.
-    private static func fullSync(_ url: URL) throws {
-        let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
-        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-        defer { Darwin.close(fd) }
-        try DurableFile.fullSync(fd)
     }
 
     private static func nanoseconds(of duration: Duration) -> UInt64 {

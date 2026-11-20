@@ -205,6 +205,57 @@ extension RealTimeRecordingTests {
             }
         }
 
+        /// A save right after a rotation by duration: the segment it closed may still be finishing its file when the
+        /// forced rotation's own (short) segment is done. `rotate()` answers only once both are.
+        @Test func forcedRotationWaitsForTheCloseBeforeIt() async throws {
+            try await withTemporaryDirectory { directory in
+                let gate = Gate()
+                let rig = try PipelineRig(
+                    in: directory, source: SyntheticVideoSource(width: 320, height: 180, framesPerSecond: 30), rotation: .seconds(1),
+                    writerFactory: gatedWriter(holding: "seg-0001.mov", until: gate))
+                try await rig.pipeline.start()
+                // Segment 1 rotated by duration and is held finishing; segment 2 is open.
+                #expect(await eventually { rig.segments.count == 2 })
+                #expect(rig.segments[0].endHostTime == nil)
+                let answered = Mutex(false)
+                let rotation = Task {
+                    let index = await rig.pipeline.rotate()
+                    answered.withLock { $0 = true }
+                    return index
+                }
+                // Segment 2 closes and finishes first; the answer still waits for segment 1.
+                #expect(await eventually { rig.segments.count == 3 && rig.segments[1].endHostTime != nil })
+                try await Task.sleep(for: .milliseconds(200))
+                #expect(!answered.withLock { $0 })
+                gate.open()
+                #expect(await rotation.value == 2)
+                let segments = rig.segments
+                #expect(segments[0].endReason == .rotated && segments[1].endReason == .rotated)
+                #expect(segments[0].endHostTime == segments[1].startHostTime)
+                _ = try await rig.close()
+            }
+        }
+
+        /// The Replay's working package is never recovered: its capture queues only change the manifest in memory, and
+        /// the Replay writes it.
+        @Test func rotationKeepsTheManifestInMemory() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try PipelineRig(
+                    in: directory, source: SyntheticVideoSource(width: 320, height: 180, framesPerSecond: 30), rotation: .seconds(1))
+                try await rig.pipeline.start()
+                try await Task.sleep(for: .milliseconds(2500))
+                let onDisk = { () throws -> [SegmentRecord] in
+                    let manifest = try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: rig.package.manifestURL))
+                    return manifest.takes.first?.tracks.first?.segments ?? []
+                }
+                #expect(rig.segments.count >= 3)
+                #expect(try onDisk().isEmpty)
+                try rig.store.flushPending()
+                #expect(try onDisk() == rig.segments)
+                _ = try await rig.close()
+            }
+        }
+
         @Test func aPipelineWithoutRotationNeverRotates() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = try PipelineRig(
@@ -239,12 +290,15 @@ extension RealTimeRecordingTests {
         /// each one (the delivery that rotated, and the lag of the frames after it). `TOMA_BENCH=1` only.
         @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
         func replayRotationCost() async throws {
+          for rotation in [nil, Duration.seconds(10)] {
             try await withTemporaryDirectory { directory in
                 let timed = TimedSource(inner: SyntheticVideoSource(width: 3840, height: 2160, framesPerSecond: 60))
-                let rig = try PipelineRig(in: directory, source: timed, rotation: .seconds(10))
+                let rig = try PipelineRig(in: directory, source: timed, rotation: rotation)
                 try await rig.pipeline.start()
                 try await Task.sleep(for: .seconds(60))
                 let segments = try await rig.close()
+                print("replayRotationCost: rotation \(rotation.map { "\($0)" } ?? "none"): "
+                    + RealTimeRecordingTests.ReplayCoordinatorTests.describe(timed.deliveries, rate: 60))
 
                 let deliveries = timed.deliveries
                 var lines: [String] = []
@@ -262,6 +316,7 @@ extension RealTimeRecordingTests {
                     + "\(deliveries.count) frames, median delivery \(String(format: "%.2f", typical * 1000)) ms")
                 for line in lines { print("replayRotationCost: " + line) }
             }
+          }
         }
     }
 }
@@ -331,6 +386,73 @@ let patientWriter: WriterFactory = { url, media in
         return input.isReadyForMoreMediaData
     }
     return writer
+}
+
+/// A door a task waits at until the test opens it; once open, it stays open.
+final class Gate: Sendable {
+    private let state = Mutex<(open: Bool, waiting: [CheckedContinuation<Void, Never>])>((false, []))
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let open = state.withLock { state in
+                if !state.open { state.waiting.append(continuation) }
+                return state.open
+            }
+            if open { continuation.resume() }
+        }
+    }
+
+    func open() {
+        let waiting = state.withLock { state in
+            state.open = true
+            defer { state.waiting = [] }
+            return state.waiting
+        }
+        for continuation in waiting { continuation.resume() }
+    }
+}
+
+/// Real writers, but the one of the segment file named `name` (of any track) finishes its file only once `gate` opens.
+func gatedWriter(holding name: String, until gate: Gate) -> WriterFactory {
+    { url, media in
+        let writer = try FragmentedTrackWriter(url: url, media: media)
+        return url.lastPathComponent == name ? GatedWriter(inner: writer, gate: gate) : writer
+    }
+}
+
+/// A real writer whose `finish` waits for a gate first.
+final class GatedWriter: TrackWriting {
+    private let inner: FragmentedTrackWriter
+    private let gate: Gate
+
+    init(inner: FragmentedTrackWriter, gate: Gate) {
+        self.inner = inner
+        self.gate = gate
+    }
+
+    var onStart: ((HostTime) -> Void)? {
+        get { inner.onStart }
+        set { inner.onStart = newValue }
+    }
+
+    var formatDescription: CMFormatDescription? { inner.formatDescription }
+    var failure: NSError? { inner.failure }
+    var droppedSampleCount: Int { inner.droppedSampleCount }
+    var lastWrittenAudio: AudioFilePosition? { inner.lastWrittenAudio }
+    var lastVideoFrame: CMSampleBuffer? { inner.lastVideoFrame }
+
+    func append(_ sample: CMSampleBuffer) throws {
+        try inner.append(sample)
+    }
+
+    func appendHeartbeat(at time: HostTime) throws {
+        try inner.appendHeartbeat(at: time)
+    }
+
+    nonisolated(nonsending) func finish(at stopTime: HostTime) async throws -> SegmentResult {
+        await gate.wait()
+        return try await inner.finish(at: stopTime)
+    }
 }
 
 /// Whether the first video sample of the movie at `url` is a sync sample (a key frame), read without decoding.
