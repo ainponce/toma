@@ -17,6 +17,20 @@ public struct EditPoints: Sendable {
 
     /// `markers`: the source instants of the take's `marker` events. In 1b a project has one take, the sequence's.
     public init(document: EditDocument, timeMap: TimeMap, markers: [HostTime]) {
+        var outputs: [Int64] = []
+        if let take = document.sequence.first?.take {
+            outputs = markers.compactMap { timeMap.output(atSource: $0, take: take) }
+        }
+        self.init(document: document, timeMap: timeMap, markerOutputs: outputs)
+    }
+
+    /// The markers that show (`MarkerList.visible`), of every take, instead of the first take's recorded ones.
+    public init(document: EditDocument, timeMap: TimeMap, recorded: MarkerList.Recorded) {
+        let shown = MarkerList.visible(document: document, recorded: recorded, timeMap: timeMap)
+        self.init(document: document, timeMap: timeMap, markerOutputs: shown.map(\.output))
+    }
+
+    private init(document: EditDocument, timeMap: TimeMap, markerOutputs: [Int64]) {
         var points = timeMap.clipOutputStarts + [0, timeMap.duration]
         for region in document.zoom.regions where region.start < region.end {
             if let range = timeMap.outputRange(ofSource: region.start..<region.end, take: region.take) {
@@ -28,9 +42,7 @@ public struct EditPoints: Sendable {
         }
         points += document.camera.changes.compactMap { timeMap.output(atSource: $0.t, take: $0.take) }
         points += document.screens.changes.compactMap { timeMap.output(atSource: $0.t, take: $0.take) }
-        if let take = document.sequence.first?.take {
-            points += markers.compactMap { timeMap.output(atSource: $0, take: take) }
-        }
+        points += markerOutputs
         all = Set(points).sorted()
     }
 
