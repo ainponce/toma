@@ -68,6 +68,66 @@ public enum TranscriptCommands {
         return lost
     }
 
+    // MARK: - Several takes
+
+    /// Puts the takes of `transcript` in the document's transcription, each in the place of the one of its take there,
+    /// and the others as they are (phase 3 design §8.1, plan 3d decision 16): what the user corrected in a take that was
+    /// not transcribed again stays. The transcription gets `transcript`'s language and engine. One step,
+    /// `transcript.create` with target `/transcript`, as the phase 2's:
+    ///
+    /// - A take there already is removed and the new one inserted in its place (`EditCollection.transcriptTakes`, whose
+    ///   takes are never replaced); another entry of the same take after it (a transcription edited by hand) is removed.
+    /// - A take the transcription does not have goes after the others, in the order of `transcript`.
+    /// - Without a transcription, it is `create`: the captions shown with it.
+    ///
+    /// With a transcription, `nil` if that changes nothing or `transcript` has no take.
+    public static func mergeTakes(_ doc: EditDocument, _ transcript: Transcript) -> EditStep? {
+        guard let old = doc.transcript else { return create(doc, transcript) }
+        // The first take of `transcript` of each id, in its order.
+        var brought: [String: TranscriptTake] = [:]
+        var order: [TranscriptTake] = []
+        for take in transcript.takes where brought[take.take] == nil {
+            brought[take.take] = take
+            order.append(take)
+        }
+        guard !order.isEmpty else { return nil }
+        var changes = DocumentChanges()
+        changes.set(["transcript", "language"], from: old.language, to: transcript.language)
+        changes.set(["transcript", "engine"], from: old.engine, to: transcript.engine)
+        var placed: Set<String> = []
+        var duplicates: [Int] = []
+        for (index, take) in old.takes.enumerated() {
+            guard let new = brought[take.take] else { continue }
+            guard placed.insert(take.take).inserted else {
+                duplicates.append(index)
+                continue
+            }
+            if new != take {
+                changes.remove(take, from: .transcriptTakes, at: index)
+                changes.insert(new, into: .transcriptTakes, at: index)
+            }
+        }
+        for index in duplicates.reversed() { changes.remove(old.takes[index], from: .transcriptTakes, at: index) }
+        var count = old.takes.count - duplicates.count
+        for take in order where !placed.contains(take.take) {
+            changes.insert(take, into: .transcriptTakes, at: count)
+            count += 1
+        }
+        return changes.step(label: .transcriptCreate, target: "/transcript")
+    }
+
+    /// `lostCorrections(_:_:)` of the takes `takes` alone (by their ids): how many corrections the user made in them that
+    /// transcribing them again into `new` would lose. The other takes of `old` are kept by `mergeTakes`, so none of
+    /// theirs is lost.
+    public static func lostCorrections(_ old: Transcript, _ new: Transcript, inTakes takes: Set<String>) -> Int {
+        func only(_ transcript: Transcript) -> Transcript {
+            var transcript = transcript
+            transcript.takes.removeAll { !takes.contains($0.take) }
+            return transcript
+        }
+        return lostCorrections(only(old), only(new))
+    }
+
     // MARK: - Cut and restore
 
     /// The source the text's ⌫ cuts for the words `words` of take `take` (design §5.3): from `cutLead` before the first

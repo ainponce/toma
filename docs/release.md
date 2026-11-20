@@ -1068,6 +1068,10 @@ La vara del agente fueron las medidas (sonoridad, pico, costura, mono, graves y 
 - Anotar el que no convence y por qué (un instrumento, el tempo, una parte que cansa, el crujido de Foco, el bombeo de Pulso, el anticipo de la vuelta): se cambia antes del merge a `main` (decisión 4 del plan 3c); después del merge, otro sonido es `music-2`.
 - Sin la app: `swift run -c release --package-path Packages/RecorderKit recorder-dev music --out /tmp/toma-music --theme focus` (o `drive`, `pulse`) y `afplay /tmp/toma-music/focus.caf` (`docs/music.md`, «Escucharlos»); `afplay` toca una vuelta sola.
 
+**La voz con una pista por app** (T7)
+
+- Grabar 30 s sin micrófono, Por app con Música (sonando todo el tiempo, con una canción con voz) y Safari con un video de alguien hablando la mitad del tiempo, y transcribir: el texto es lo que dice la persona del video, no la letra de la canción, aunque Música esté primera en el manifiesto. Con el micrófono prendido se transcribe el micrófono, como en la fase 2.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

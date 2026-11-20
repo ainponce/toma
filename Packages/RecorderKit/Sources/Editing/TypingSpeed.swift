@@ -13,6 +13,9 @@ import ProjectFormat
 ///   made, and the sped piece goes on to the edge of the clip (or to the next sped piece) instead; a piece that would last
 ///   less than a frame once sped is not sped.
 /// - Every id and number of the rule is frozen with its id: a change to any of them is a new rule.
+/// - With several takes in the sequence (phase 3 design §8.1, plan 3d decision 17), each take's typing is found in its
+///   own clips by its own events, and every take's stretches are sped up in the one step; with one take, it is the
+///   phase 2's.
 public enum TypingSpeed {
     public static let id = "typingSpeed-1"
     /// The speeds the popover offers.
@@ -46,17 +49,25 @@ public enum TypingSpeed {
 
     /// What `apply` with `speed` would give.
     public static func summary(_ doc: EditDocument, take: TakeRecord, events: [InputEvent], speed: Double) -> Summary {
+        summary(doc, takes: [(take, events)], speed: speed)
+    }
+
+    /// What `apply(_:takes:speed:makeID:)` with `speed` would give: the stretches of every take, and what they last.
+    public static func summary(_ doc: EditDocument, takes: [(TakeRecord, [InputEvent])], speed: Double) -> Summary {
         let speed = ClipSpeed.clamped(speed)
-        var stretches = Set<Int>()
-        var (before, after): (Int64, Int64) = (0, 0)
-        for clip in plan(doc, take: take, events: events, speed: speed) {
-            for piece in clip.pieces where piece.speed != 1 {
-                stretches.formUnion(piece.stretches)
-                before += Int64(piece.end.nanoseconds - piece.start.nanoseconds)
-                after += TimeMap.outputDuration(of: piece.clip(id: "", take: take.id))
+        var (count, before, after): (Int, Int64, Int64) = (0, 0, 0)
+        for (take, events) in distinct(takes) {
+            var stretches = Set<Int>()
+            for clip in plan(doc, take: take, events: events, speed: speed) {
+                for piece in clip.pieces where piece.speed != 1 {
+                    stretches.formUnion(piece.stretches)
+                    before += Int64(piece.end.nanoseconds - piece.start.nanoseconds)
+                    after += TimeMap.outputDuration(of: piece.clip(id: "", take: take.id))
+                }
             }
+            count += stretches.count
         }
-        return Summary(count: stretches.count, before: before, after: after)
+        return Summary(count: count, before: before, after: after)
     }
 
     /// The step that speeds the stretches up to `speed` (clamped to `ClipSpeed.range`), the new clips with the ids
@@ -65,8 +76,18 @@ public enum TypingSpeed {
     public static func apply(
         _ doc: EditDocument, take: TakeRecord, events: [InputEvent], speed: Double, makeID: (String) -> String
     ) -> EditStep? {
+        apply(doc, takes: [(take, events)], speed: speed, makeID: makeID)
+    }
+
+    /// `apply(_:take:events:speed:makeID:)` of every take of `takes` (each with its events; a take given twice, the first
+    /// time), in one step: the clips of each take split by its own stretches, the new ids made in the order of the
+    /// sequence, whatever the order of `takes`.
+    public static func apply(
+        _ doc: EditDocument, takes: [(TakeRecord, [InputEvent])], speed: Double, makeID: (String) -> String
+    ) -> EditStep? {
         let speed = ClipSpeed.clamped(speed)
-        let clips = plan(doc, take: take, events: events, speed: speed)
+        // Each take's clips are its own, so the plans never share one.
+        let clips = distinct(takes).flatMap { plan(doc, take: $0.0, events: $0.1, speed: speed) }.sorted { $0.index < $1.index }
         guard !clips.isEmpty else { return nil }
         var ids = Set(doc.sequence.map(\.id))
         var changes = SequenceChanges(doc.sequence)
@@ -90,6 +111,12 @@ public enum TypingSpeed {
     }
 
     // MARK: - Private
+
+    /// `takes` with each take once (by its id), the first time it is given.
+    private static func distinct(_ takes: [(TakeRecord, [InputEvent])]) -> [(TakeRecord, [InputEvent])] {
+        var seen: Set<String> = []
+        return takes.filter { seen.insert($0.0.id).inserted }
+    }
 
     /// A piece of a clip: at 1× or sped, with the stretches it holds.
     private struct Piece {
