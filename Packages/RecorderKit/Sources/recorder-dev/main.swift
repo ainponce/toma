@@ -28,7 +28,7 @@ struct RecorderDev: AsyncParsableCommand {
         subcommands: [
             SynthRecord.self, Record.self, ListSources.self, Recover.self, Verify.self, ExportMP4.self, ExportGIF.self,
             BenchExport.self, BenchGIF.self, BenchPreview.self, EditStress.self, EditCheck.self, LibraryEmpty.self,
-            TranscriptFixture.self, MusicRender.self,
+            TranscriptFixture.self, MusicRender.self, SynthReplay.self, ReplayCleanup.self,
         ]
     )
 }
