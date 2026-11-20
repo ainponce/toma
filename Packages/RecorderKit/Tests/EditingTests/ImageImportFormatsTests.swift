@@ -169,6 +169,123 @@ private enum FormatFixture {
         return data
     }
 
+    /// How `handmadeTIFF` lays its pixels out.
+    enum TIFFPixels {
+        /// In strips of `rows` rows, one after another.
+        case strips(rows: Int)
+        /// In square tiles of `side` pixels, one after another, each whole even past the picture's edges.
+        case tiles(side: Int)
+        /// Every row a strip, compressed with Deflate: a small file of a large picture of one color, whole.
+        case deflatedRows
+    }
+
+    /// A little-endian TIFF written by hand with its directory first, right after its header (as many writers put it;
+    /// ImageIO puts it last): `width` × `height` pixels, each the bytes `pixel` (its samples, of `bits` bits each,
+    /// little-endian), RGB with three samples and gray with one, laid out as `layout` says, uncompressed but for
+    /// `deflatedRows`.
+    static func handmadeTIFF(width: Int, height: Int, pixel: [UInt8], bits: Int = 8, layout: TIFFPixels) -> Data {
+        let samples = pixel.count / (bits / 8)
+        func pixels(_ count: Int) -> Data { Data(Array(repeating: pixel, count: count).joined()) }
+        // The blocks of pixels, and the block each strip or tile is.
+        let blocks: [Data]
+        let named: [Int]
+        var entries: [(tag: Int, type: Int, values: [Int])] = [
+            (256, 4, [width]), (257, 4, [height]), (258, 3, Array(repeating: bits, count: samples)),
+            (259, 3, [{ if case .deflatedRows = layout { 8 } else { 1 } }()]),
+            (262, 3, [samples == 1 ? 1 : 2]),
+        ]
+        switch layout {
+        case let .strips(rows):
+            blocks = stride(from: 0, to: height, by: rows).map { pixels(min(rows, height - $0) * width) }
+            named = Array(blocks.indices)
+            entries += [(273, 4, []), (277, 3, [samples]), (278, 4, [rows]), (279, 4, []), (284, 3, [1])]
+        case let .tiles(side):
+            let count = ((width + side - 1) / side) * ((height + side - 1) / side)
+            blocks = Array(repeating: pixels(side * side), count: count)
+            named = Array(blocks.indices)
+            entries += [(277, 3, [samples]), (284, 3, [1]), (322, 4, [side]), (323, 4, [side]), (324, 4, []), (325, 4, [])]
+        case .deflatedRows:
+            let row = zlib(pixels(width))
+            blocks = Array(repeating: row, count: height)
+            named = Array(blocks.indices)
+            entries += [(273, 4, []), (277, 3, [samples]), (278, 4, [1]), (279, 4, []), (284, 3, [1])]
+        }
+        // The offsets and byte counts take as many values as there are strips or tiles; their values once laid out.
+        for index in entries.indices where [273, 279, 324, 325].contains(entries[index].tag) {
+            entries[index].values = Array(repeating: 0, count: named.count)
+        }
+        func size(_ entry: (tag: Int, type: Int, values: [Int])) -> Int { entry.values.count * (entry.type == 3 ? 2 : 4) }
+        var end = 8 + 2 + 12 * entries.count + 4
+        var places: [Int?] = []
+        for entry in entries {
+            guard size(entry) > 4 else {
+                places.append(nil)
+                continue
+            }
+            places.append(end)
+            end += size(entry) + size(entry) % 2
+        }
+        var starts: [Int] = []
+        for block in blocks {
+            starts.append(end)
+            end += block.count
+        }
+        for index in entries.indices {
+            switch entries[index].tag {
+            case 273, 324: entries[index].values = named.map { starts[$0] }
+            case 279, 325: entries[index].values = named.map { blocks[$0].count }
+            default: break
+            }
+        }
+        func bytes(_ value: Int, _ count: Int) -> [UInt8] { (0..<count).map { UInt8((value >> (8 * $0)) & 0xFF) } }
+        func values(_ entry: (tag: Int, type: Int, values: [Int])) -> [UInt8] {
+            entry.values.flatMap { bytes($0, entry.type == 3 ? 2 : 4) }
+        }
+        var data = Data([0x49, 0x49, 42, 0, 8, 0, 0, 0] + bytes(entries.count, 2))
+        for (entry, place) in zip(entries, places) {
+            data += bytes(entry.tag, 2) + bytes(entry.type, 2) + bytes(entry.values.count, 4)
+            if let place {
+                data += bytes(place, 4)
+            } else {
+                let inline = values(entry)
+                data += inline + Array(repeating: 0, count: 4 - inline.count)
+            }
+        }
+        data += bytes(0, 4)
+        for (entry, place) in zip(entries, places) where place != nil {
+            data += values(entry) + Array(repeating: 0, count: size(entry) % 2)
+        }
+        for block in blocks { data += block }
+        return data
+    }
+
+    /// `data` compressed in the zlib format (RFC 1950), as a TIFF's Deflate strips are: a header, the raw Deflate stream
+    /// and the Adler-32 of `data`.
+    static func zlib(_ data: Data) -> Data {
+        let deflated = (try? (data as NSData).compressed(using: .zlib) as Data) ?? Data()
+        var (a, b): (UInt32, UInt32) = (1, 0)
+        for byte in data {
+            a = (a + UInt32(byte)) % 65_521
+            b = (b + a) % 65_521
+        }
+        let adler = b << 16 | a
+        return Data([0x78, 0x01]) + deflated + Data((0..<4).map { UInt8((adler >> (8 * (3 - $0))) & 0xFF) })
+    }
+
+    /// A TIFF of `bits`-bit floating-point RGBA components (16 or 32), in extended linear sRGB.
+    static func floatTIFF(bits: Int) throws -> Data {
+        var info = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.floatComponents.rawValue
+        if bits == 16 { info |= CGBitmapInfo.byteOrder16Little.rawValue }
+        let context = try #require(CGContext(
+            data: nil, width: 16, height: 16, bitsPerComponent: bits, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!, bitmapInfo: info))
+        context.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 16, height: 16))
+        let image = try #require(context.makeImage())
+        #expect(image.bitsPerComponent == bits && image.bitmapInfo.contains(.floatComponents))
+        return try encoded([image], as: .tiff)
+    }
+
     /// The name of an asset of `data`: 32 hex digits of its SHA-256.
     static func hash(_ data: Data) -> String {
         SHA256.hash(data: data).prefix(16).map { String(format: "%02x", $0) }.joined()
@@ -331,6 +448,13 @@ private func near(_ pixel: [UInt8], _ expected: [UInt8], within tolerance: Int =
             #expect(near(pixels[x: pixels.width - 100, y: 2_000], [255, 255, 255, 255]), "\(pixels[x: pixels.width - 100, y: 2_000])")
             #expect(near(pixels[x: pixels.width - 1, y: pixels.height - 1], [255, 255, 255, 255]))
 
+            // Encrypted with only an owner's password (it restricts printing or copying), it opens: it is taken.
+            let restricted = try FormatFixture.file("Restricted.pdf", FormatFixture.pdf(pages: 2, ownerPassword: "owner"), in: dir)
+            let restrictedPath = try #require(FormatFixture.path(await session.importAsset(restricted)))
+            let page = try Pixels(#require(package.asset(restrictedPath)))
+            #expect(page.height == 4_096 && page.isOpaque)
+            #expect(near(page[x: 100, y: 2_000], [255, 0, 0, 255]) && near(page[x: page.width - 100, y: 2_000], [255, 255, 255, 255]))
+
             // A landscape page, away from the origin: its longer side across.
             let landscape = try FormatFixture.file(
                 "Landscape.pdf", FormatFixture.pdf(pages: 1, box: CGRect(x: 50, y: 30, width: 400, height: 100)), in: dir)
@@ -409,7 +533,6 @@ private func near(_ pixel: [UInt8], _ expected: [UInt8], within tolerance: Int =
             let whole = try FormatFixture.pdf(pages: 2)
             let pdfs = try [
                 ("Locked.pdf", FormatFixture.pdf(pages: 1, userPassword: "secret", ownerPassword: "owner")),
-                ("Restricted.pdf", FormatFixture.pdf(pages: 1, ownerPassword: "owner")),
                 ("Garbage.pdf", Data((0..<4_096).map { UInt8(truncatingIfNeeded: $0 &* 31) })),
                 ("Header Only.pdf", Data("%PDF-1.7\n%%EOF\n".utf8)),
                 ("Cut.pdf", whole.prefix(whole.count / 2)),
@@ -468,6 +591,73 @@ private func near(_ pixel: [UInt8], _ expected: [UInt8], within tolerance: Int =
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
             #expect(await session.importAsset(folder) == .notAnImage)
             #expect(!FileManager.default.fileExists(atPath: package.assetsURL.path))
+            await session.close()
+        }
+    }
+
+    @MainActor @Test func truncatedTIFFIsNotAnImage() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await FormatFixture.package(in: dir)
+            let package = project.package
+            let session = try await FormatFixture.session(of: project, in: dir)
+            let layouts: [(String, FormatFixture.TIFFPixels, [UInt8])] = [
+                ("Strips", .strips(rows: 8), [255, 0, 0]), ("Tiles", .tiles(side: 16), [0, 0, 255]),
+            ]
+            for (name, layout, color) in layouts {
+                // Whole, its directory before its pixels: it is taken, of its color.
+                let whole = FormatFixture.handmadeTIFF(width: 64, height: 32, pixel: color, layout: layout)
+                let path = try #require(FormatFixture.path(
+                    await session.importAsset(FormatFixture.file("\(name).tif", whole, in: dir))))
+                let pixels = try Pixels(#require(package.asset(path)))
+                #expect(pixels.width == 64 && pixels.height == 32, "\(name)")
+                #expect(near(pixels[x: 60, y: 30], color + [255]), "\(name): \(pixels[x: 60, y: 30])")
+
+                // Cut short: ImageIO says it is complete, and would decode what is missing as black. Not an image.
+                for fraction in [0.9, 0.5, 0.2] {
+                    let cut = whole.prefix(Int(Double(whole.count) * fraction))
+                    let source = try #require(CGImageSourceCreateWithData(cut as CFData, nil))
+                    #expect(CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete, "\(name) at \(fraction)")
+                    let url = try FormatFixture.file("\(name) \(fraction).tiff", cut, in: dir)
+                    #expect(await session.importAsset(url) == .notAnImage, "\(name) at \(fraction)")
+                    #expect(throws: POSIXError(.EFTYPE), "\(name) at \(fraction)") { try AssetImport.copy(url, into: package) }
+                }
+            }
+            #expect(try FormatFixture.names(in: package.assetsURL).count == layouts.count)
+            await session.close()
+        }
+    }
+
+    @MainActor @Test func floatOrHeavyTIFFIsNotAnImage() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await FormatFixture.package(in: dir)
+            let package = project.package
+            let session = try await FormatFixture.session(of: project, in: dir)
+            // Floating-point components, of 32 or 16 bits: never decoded, however small.
+            for bits in [32, 16] {
+                let url = try FormatFixture.file("HDR \(bits).tif", FormatFixture.floatTIFF(bits: bits), in: dir)
+                #expect(await session.importAsset(url) == .notAnImage, "\(bits)")
+                #expect(throws: POSIXError(.EFTYPE), "\(bits)") { try AssetImport.copy(url, into: package) }
+            }
+            // 16-bit RGB of 12 000 × 12 000 pixels, whole in about 1 MB: 1.15 GB decoded, more than an image may take, so
+            // refused before it is decoded; the same file of 2 000 × 2 000 is taken.
+            let heavy = FormatFixture.handmadeTIFF(
+                width: 12_000, height: 12_000, pixel: [0xFF, 0xFF, 0, 0, 0, 0], bits: 16, layout: .deflatedRows)
+            let source = try #require(CGImageSourceCreateWithData(heavy as CFData, nil))
+            let properties = try #require(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+            #expect((properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue == 12_000)
+            #expect((properties[kCGImagePropertyDepth] as? NSNumber)?.intValue == 16)
+            #expect(CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete)
+            let url = try FormatFixture.file("Heavy.tif", heavy, in: dir)
+            #expect(await session.importAsset(url) == .notAnImage)
+            #expect(throws: POSIXError(.EFTYPE)) { try AssetImport.copy(url, into: package) }
+            #expect(!FileManager.default.fileExists(atPath: package.assetsURL.path))
+
+            let light = FormatFixture.handmadeTIFF(
+                width: 2_000, height: 2_000, pixel: [0xFF, 0xFF, 0, 0, 0, 0], bits: 16, layout: .deflatedRows)
+            let path = try #require(FormatFixture.path(await session.importAsset(FormatFixture.file("Light.tif", light, in: dir))))
+            let pixels = try Pixels(#require(package.asset(path)))
+            #expect(pixels.width == 2_000 && pixels.height == 2_000)
+            #expect(near(pixels[x: 1_000, y: 1_999], [255, 0, 0, 255]), "\(pixels[x: 1_000, y: 1_999])")
             await session.close()
         }
     }

@@ -902,9 +902,9 @@ final class AnnotationEditorView: NSView {
 
     // MARK: - Dropping an image or a clip
 
-    /// The kinds of files a drop takes: the images Toma imports (and those it turns into one, phase 3 design §5.4) and the
-    /// clips.
-    private static let droppable = Set(AssetImport.allowedExtensions + ["jpeg", "tif", "tiff", "gif", "pdf"])
+    /// The kinds of files a drop takes: the images Toma imports (and those it turns into one, phase 3 design §5.4; a
+    /// `.jpeg` as the `.jpg` it is) and the clips.
+    private static let droppable = Set(AssetImport.importableImageExtensions + ["jpeg"])
         .union(ContentClipTrackRules.videoExtensions)
 
     /// The one file of a drag that can go over the video, when the project can be edited and no other is being imported.

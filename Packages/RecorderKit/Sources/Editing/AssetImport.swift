@@ -144,34 +144,44 @@ public enum AssetImport {
         return PackageFileKind.asset.decodedImage(data) != nil
     }
 
+    /// What `screened(_:as:)` says of a file before anything is written for it.
+    enum Screening: Sendable {
+        /// It is not imported: `importAsset` says this.
+        case refused(AssetImportOutcome)
+        /// It can be placed; for a TIFF, a GIF or a PDF, with the PNG it was converted to, which `place` writes as it is.
+        case accepted(converted: Data?)
+    }
+
     /// What `EditSession.importAsset` says at once for the file at `url` as `kind`, read as `place` reads it, before
-    /// anything is written (or a legacy package upgraded) for it: `nil` if it can be copied, `.notAnImage` for an image
-    /// that does not decode (`decodes`) or, a TIFF, a GIF or a PDF, does not convert (`convertedPNG(of:extension:)`, as
-    /// `place` converts it), or a `.cube` that cannot be read, `.notALUT` for one whose content is not a 3D LUT.
-    static func refusal(of url: URL, as kind: AssetKind) -> AssetImportOutcome? {
+    /// anything is written (or a legacy package upgraded) for it: `.refused(.notAnImage)` for an image that does not
+    /// decode (`decodes`) or, a TIFF, a GIF or a PDF, does not convert (`convertedPNG(of:)`), or a `.cube` that cannot be
+    /// read, `.refused(.notALUT)` for one whose content is not a 3D LUT; otherwise `.accepted`, a converted image with its
+    /// PNG, so it is converted once however many times `place` is tried. A clip or a sound is accepted here: it is judged
+    /// by `mediaRefusal`, which waits for AVFoundation.
+    static func screened(_ url: URL, as kind: AssetKind) -> Screening {
         switch kind {
         case .video, .audio:
-            // Judged by `mediaRefusal`, which waits for AVFoundation.
-            return nil
+            return .accepted(converted: nil)
         case .image:
-            guard convertedExtensions.contains(Self.extension(of: url)) else { return decodes(url) ? nil : .notAnImage }
+            guard convertedExtensions.contains(Self.extension(of: url)) else {
+                return decodes(url) ? .accepted(converted: nil) : .refused(.notAnImage)
+            }
             do {
                 let source = try openSource(url, as: kind)
                 defer { close(source.fd) }
-                _ = try convertedPNG(of: source)
-                return nil
+                return .accepted(converted: try convertedPNG(of: source))
             } catch {
-                return .notAnImage
+                return .refused(.notAnImage)
             }
         case .lut:
             do {
                 let source = try openSource(url, as: .lut)
                 defer { close(source.fd) }
                 _ = try readLUT(source)
-                return nil
+                return .accepted(converted: nil)
             } catch {
-                if case let .notALUT(reason) = error { return .notALUT(reason) }
-                return .notAnImage
+                if case let .notALUT(reason) = error { return .refused(.notALUT(reason)) }
+                return .refused(.notAnImage)
             }
         }
     }
@@ -198,36 +208,48 @@ public enum AssetImport {
     }
 
     /// `copy` (an image) or `copyLUT` (a `.cube`, by `kind`), its failures told apart: the user's file or the package.
-    /// `syncFolder` makes a folder's entries durable (`DurableFile.fullSync`; the tests count it, and change the file
-    /// while `assets/` is made: after it is named, before it is cloned).
+    /// For a TIFF, a GIF or a PDF, `converted` is the PNG `screened(_:as:)` made of it, placed as it is without reading
+    /// the file again (it is named by the PNG's own bytes, so what is placed is what was judged); without it, the file is
+    /// converted here. `syncFolder` makes a folder's entries durable (`DurableFile.fullSync`; the tests count it, and
+    /// change the file while `assets/` is made: after it is named, before it is cloned).
     static func place(
-        _ url: URL, into package: ProjectPackage, as kind: AssetKind = .image,
+        _ url: URL, into package: ProjectPackage, as kind: AssetKind = .image, converted: Data? = nil,
         syncFolder: (Int32) throws -> Void = DurableFile.fullSync
     ) throws(Failure) -> String {
-        let source = try openSource(url, as: kind)
-        defer { close(source.fd) }
-        let name: String
-        // A TIFF, a GIF or a PDF: the PNG placed in its stead, converted before anything is made in the package.
-        var converted: Data?
-        switch kind {
-        case .image where convertedExtensions.contains(source.ext):
-            let png = try convertedPNG(of: source)
-            converted = png
-            name = hash(png) + ".png"
-        case .image, .video, .audio:
-            do {
-                name = try hash(source.fd) + "." + source.ext
-            } catch {
-                throw .source(error)
+        // The user's file while it is read and cloned; never opened for a PNG converted already.
+        var opened: Int32?
+        defer { if let opened { close(opened) } }
+        let name: String, ext: String, size: off_t
+        let payload: Payload
+        if kind == .image, convertedExtensions.contains(Self.extension(of: url)) {
+            // A TIFF, a GIF or a PDF: the PNG placed in its stead, converted before anything is made in the package.
+            let png: Data
+            if let converted {
+                png = converted
+            } else {
+                let source = try openSource(url, as: kind)
+                opened = source.fd
+                png = try convertedPNG(of: source)
             }
-        case .lut:
-            // Named by the bytes parsed: the clone is hashed again below, so what is placed is what was parsed.
-            let data = try readLUT(source)
-            name = hash(data) + "." + source.ext
+            (name, ext, size, payload) = (hash(png) + ".png", "png", off_t(png.count), .bytes(png))
+        } else {
+            let source = try openSource(url, as: kind)
+            opened = source.fd
+            (ext, size, payload) = (source.ext, source.size, .file(source.fd))
+            switch kind {
+            case .image, .video, .audio:
+                do {
+                    name = try hash(source.fd) + "." + source.ext
+                } catch {
+                    throw .source(error)
+                }
+            case .lut:
+                // Named by the bytes parsed: the clone is hashed again below, so what is placed is what was parsed.
+                let data = try readLUT(source)
+                name = hash(data) + "." + source.ext
+            }
         }
         guard kind.fileKind.isValidName(name) else { throw .source(POSIXError(.EINVAL)) }
-        let ext = converted == nil ? source.ext : "png"
-        let size = converted.map { off_t($0.count) } ?? source.size
 
         let folder = open(package.url.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard folder >= 0 else { throw .destination(posixError()) }
@@ -264,11 +286,9 @@ public enum AssetImport {
         let temporary = name + ".tmp"
         guard unlinkat(assets, temporary, 0) == 0 || errno == ENOENT else { throw .destination(posixError()) }
         do {
-            let placed: Int32
-            if let converted {
-                placed = try write(converted, in: assets, as: temporary)
-            } else {
-                placed = try clone(source.fd, in: assets, as: temporary)
+            let placed = switch payload {
+            case let .file(fd): try clone(fd, in: assets, as: temporary)
+            case let .bytes(png): try write(png, in: assets, as: temporary)
             }
             defer { close(placed) }
             // The bytes there are the ones named, or the file changed between its hash and its copy.
@@ -287,6 +307,12 @@ public enum AssetImport {
     }
 
     // MARK: - Private
+
+    /// What `place` puts in `assets/`: the user's file, open, cloned; or the bytes of the PNG converted from it.
+    private enum Payload {
+        case file(Int32)
+        case bytes(Data)
+    }
 
     private static func `extension`(of url: URL) -> String {
         switch url.pathExtension.lowercased() {
