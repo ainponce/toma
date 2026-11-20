@@ -1,0 +1,902 @@
+{
+  "$defs" : {
+    "addMarker" : {
+      "description" : "A marker at `at`; one with a name is a chapter.",
+      "examples" : [
+        {
+          "at" : 42,
+          "command" : "addMarker",
+          "name" : "Setup"
+        }
+      ],
+      "properties" : {
+        "at" : {
+          "description" : "Seconds of the output, from 0 to its length.",
+          "minimum" : 0,
+          "type" : "number"
+        },
+        "command" : {
+          "const" : "addMarker"
+        },
+        "name" : {
+          "description" : "Its name; \"\" for none. Up to 100 characters (grapheme clusters); a longer one is cut.",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "command",
+        "at",
+        "name"
+      ],
+      "type" : "object"
+    },
+    "addMusic" : {
+      "description" : "A theme of Toma's music library over the video from its start.",
+      "examples" : [
+        {
+          "command" : "addMusic",
+          "theme" : "calm",
+          "volume" : -18
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "addMusic"
+        },
+        "theme" : {
+          "description" : "The theme.",
+          "enum" : [
+            "calm",
+            "focus",
+            "drive",
+            "piano",
+            "pulse",
+            "breeze"
+          ],
+          "type" : "string"
+        },
+        "volume" : {
+          "description" : "In dB, -120 to 6; without it, -14.",
+          "maximum" : 6,
+          "minimum" : -120,
+          "type" : "number"
+        }
+      },
+      "required" : [
+        "command",
+        "theme"
+      ],
+      "type" : "object"
+    },
+    "addText" : {
+      "description" : "A text over the video from `from` to `to`, centred at `x`, `y` (fractions of the frame).",
+      "examples" : [
+        {
+          "command" : "addText",
+          "from" : 2,
+          "text" : "Click Export",
+          "to" : 6,
+          "x" : 0.5,
+          "y" : 0.8
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "addText"
+        },
+        "from" : {
+          "description" : "Seconds of the output, from 0 to its length.",
+          "minimum" : 0,
+          "type" : "number"
+        },
+        "text" : {
+          "description" : "What it says.",
+          "type" : "string"
+        },
+        "to" : {
+          "description" : "Seconds of the output, from 0 to its length.",
+          "minimum" : 0,
+          "type" : "number"
+        },
+        "x" : {
+          "description" : "A fraction from 0 to 1.",
+          "maximum" : 1,
+          "minimum" : 0,
+          "type" : "number"
+        },
+        "y" : {
+          "description" : "A fraction from 0 to 1.",
+          "maximum" : 1,
+          "minimum" : 0,
+          "type" : "number"
+        }
+      },
+      "required" : [
+        "command",
+        "from",
+        "to",
+        "text",
+        "x",
+        "y"
+      ],
+      "type" : "object"
+    },
+    "addTitleCard" : {
+      "description" : "A title card at the start, at the end, or at a time of the output.",
+      "examples" : [
+        {
+          "at" : "start",
+          "command" : "addTitleCard",
+          "subtitle" : "November",
+          "title" : "Release notes"
+        },
+        {
+          "at" : 30,
+          "command" : "addTitleCard",
+          "title" : "Part two"
+        }
+      ],
+      "properties" : {
+        "at" : {
+          "description" : "\"start\", \"end\", or seconds of the output.",
+          "type" : [
+            "string",
+            "number"
+          ]
+        },
+        "command" : {
+          "const" : "addTitleCard"
+        },
+        "subtitle" : {
+          "description" : "Its subtitle.",
+          "type" : "string"
+        },
+        "title" : {
+          "description" : "Its title.",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "command",
+        "at",
+        "title"
+      ],
+      "type" : "object"
+    },
+    "addZoom" : {
+      "description" : "A zoom block of the user's over the output from `from` to `to`.",
+      "examples" : [
+        {
+          "command" : "addZoom",
+          "from" : 4,
+          "to" : 8
+        },
+        {
+          "command" : "addZoom",
+          "depth" : 2,
+          "focus" : {
+            "x" : 0.25,
+            "y" : 0.4
+          },
+          "from" : 10,
+          "to" : 13
+        },
+        {
+          "command" : "addZoom",
+          "focus" : "follow",
+          "from" : 20,
+          "to" : 23
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "addZoom"
+        },
+        "depth" : {
+          "description" : "How far it zooms, 1.25 to 4; without it, the project's depth.",
+          "maximum" : 4,
+          "minimum" : 1.25,
+          "type" : "number"
+        },
+        "focus" : {
+          "description" : "\"follow\" (the cursor) or a point of the screen {\"x\", \"y\"}, fractions from 0 to 1.",
+          "properties" : {
+            "x" : {
+              "description" : "A fraction from 0 to 1.",
+              "maximum" : 1,
+              "minimum" : 0,
+              "type" : "number"
+            },
+            "y" : {
+              "description" : "A fraction from 0 to 1.",
+              "maximum" : 1,
+              "minimum" : 0,
+              "type" : "number"
+            }
+          },
+          "type" : [
+            "string",
+            "object"
+          ]
+        },
+        "from" : {
+          "description" : "Seconds of the output, from 0 to its length.",
+          "minimum" : 0,
+          "type" : "number"
+        },
+        "to" : {
+          "description" : "Seconds of the output, from 0 to its length.",
+          "minimum" : 0,
+          "type" : "number"
+        }
+      },
+      "required" : [
+        "command",
+        "from",
+        "to"
+      ],
+      "type" : "object"
+    },
+    "applyStyle" : {
+      "description" : "Applies a named style: \"toma\" for Toma's, or a style of the app's library by its id.",
+      "examples" : [
+        {
+          "command" : "applyStyle",
+          "id" : "toma"
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "applyStyle"
+        },
+        "id" : {
+          "description" : "\"toma\", or the 8 hex digits of a saved style.",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "command",
+        "id"
+      ],
+      "type" : "object"
+    },
+    "cut" : {
+      "description" : "Deletes the output from `from` to `to`: the sequence closes the gap.",
+      "examples" : [
+        {
+          "command" : "cut",
+          "from" : 12.5,
+          "to" : 15
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "cut"
+        },
+        "from" : {
+          "description" : "Seconds of the output, from 0 to its length.",
+          "minimum" : 0,
+          "type" : "number"
+        },
+        "to" : {
+          "description" : "Seconds of the output, from 0 to its length.",
+          "minimum" : 0,
+          "type" : "number"
+        }
+      },
+      "required" : [
+        "command",
+        "from",
+        "to"
+      ],
+      "type" : "object"
+    },
+    "removeFillers" : {
+      "description" : "Cuts the filler words of the transcript (\"um\", \"eh\"…).",
+      "examples" : [
+        {
+          "command" : "removeFillers"
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "removeFillers"
+        }
+      },
+      "required" : [
+        "command"
+      ],
+      "type" : "object"
+    },
+    "removeMarker" : {
+      "description" : "Deletes a marker (a recorded one is hidden).",
+      "examples" : [
+        {
+          "command" : "removeMarker",
+          "id" : "m-1a2b3c4d"
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "removeMarker"
+        },
+        "id" : {
+          "description" : "The marker's id.",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "command",
+        "id"
+      ],
+      "type" : "object"
+    },
+    "removeMusic" : {
+      "description" : "Takes out all the music.",
+      "examples" : [
+        {
+          "command" : "removeMusic"
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "removeMusic"
+        }
+      },
+      "required" : [
+        "command"
+      ],
+      "type" : "object"
+    },
+    "removeZoom" : {
+      "description" : "Deletes a zoom block, by the id the project report gives.",
+      "examples" : [
+        {
+          "command" : "removeZoom",
+          "id" : "z-1a2b3c4d"
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "removeZoom"
+        },
+        "id" : {
+          "description" : "The block's id.",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "command",
+        "id"
+      ],
+      "type" : "object"
+    },
+    "renameMarker" : {
+      "description" : "Names a marker, by the id the project report gives.",
+      "examples" : [
+        {
+          "command" : "renameMarker",
+          "id" : "m-1a2b3c4d",
+          "name" : "Demo"
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "renameMarker"
+        },
+        "id" : {
+          "description" : "The marker's id.",
+          "type" : "string"
+        },
+        "name" : {
+          "description" : "Its name; \"\" for none. Up to 100 characters (grapheme clusters); a longer one is cut.",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "command",
+        "id",
+        "name"
+      ],
+      "type" : "object"
+    },
+    "setAspect" : {
+      "description" : "The shape of the output.",
+      "examples" : [
+        {
+          "aspect" : "9:16",
+          "command" : "setAspect"
+        }
+      ],
+      "properties" : {
+        "aspect" : {
+          "description" : "The aspect ratio.",
+          "enum" : [
+            "16:9",
+            "9:16",
+            "1:1",
+            "4:5",
+            "4:3",
+            "3:4",
+            "auto"
+          ],
+          "type" : "string"
+        },
+        "command" : {
+          "const" : "setAspect"
+        }
+      },
+      "required" : [
+        "command",
+        "aspect"
+      ],
+      "type" : "object"
+    },
+    "setAutoZoom" : {
+      "description" : "Turns the automatic zoom on or off, and whether it follows the keyboard's focus; it plans again.",
+      "examples" : [
+        {
+          "command" : "setAutoZoom",
+          "enabled" : true,
+          "followsFocus" : true
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "setAutoZoom"
+        },
+        "enabled" : {
+          "description" : "Whether the automatic zoom is on.",
+          "type" : "boolean"
+        },
+        "followsFocus" : {
+          "description" : "Whether it follows the focus.",
+          "type" : "boolean"
+        }
+      },
+      "required" : [
+        "command",
+        "enabled"
+      ],
+      "type" : "object"
+    },
+    "setBackground" : {
+      "description" : "What is behind the screen.",
+      "examples" : [
+        {
+          "background" : {
+            "type" : "wallpaper",
+            "wallpaper" : "aurora-1"
+          },
+          "command" : "setBackground"
+        },
+        {
+          "background" : {
+            "color" : [
+              0.1,
+              0.1,
+              0.12,
+              1
+            ],
+            "type" : "color"
+          },
+          "command" : "setBackground"
+        }
+      ],
+      "properties" : {
+        "background" : {
+          "description" : "The document's Background: a gradient {start, end, angle}, a color, a wallpaper of Toma's (\"aurora-1\"…), an image (its file assets/<name> of the project, or the absolute path of one to bring in) or the desktop picture.",
+          "properties" : {
+            "angle" : {
+              "description" : "Degrees, as in CSS: 0 goes up, 90 to the right.",
+              "type" : "number"
+            },
+            "color" : {
+              "description" : "A colour, sRGB values from 0 to 1: [r, g, b, a].",
+              "items" : {
+                "maximum" : 1,
+                "minimum" : 0,
+                "type" : "number"
+              },
+              "maxItems" : 4,
+              "minItems" : 4,
+              "type" : "array"
+            },
+            "end" : {
+              "description" : "A colour, sRGB values from 0 to 1: [r, g, b, a].",
+              "items" : {
+                "maximum" : 1,
+                "minimum" : 0,
+                "type" : "number"
+              },
+              "maxItems" : 4,
+              "minItems" : 4,
+              "type" : "array"
+            },
+            "file" : {
+              "description" : "assets/<name> of the project, or the absolute path of an image (PNG, JPEG, HEIC, TIFF, GIF, PDF).",
+              "type" : "string"
+            },
+            "start" : {
+              "description" : "A colour, sRGB values from 0 to 1: [r, g, b, a].",
+              "items" : {
+                "maximum" : 1,
+                "minimum" : 0,
+                "type" : "number"
+              },
+              "maxItems" : 4,
+              "minItems" : 4,
+              "type" : "array"
+            },
+            "type" : {
+              "description" : "What it is.",
+              "enum" : [
+                "gradient",
+                "color",
+                "wallpaper",
+                "image",
+                "desktop"
+              ],
+              "type" : "string"
+            },
+            "wallpaper" : {
+              "description" : "The versioned id of a wallpaper of Toma's, such as aurora-1.",
+              "type" : "string"
+            }
+          },
+          "required" : [
+            "type"
+          ],
+          "type" : "object"
+        },
+        "command" : {
+          "const" : "setBackground"
+        }
+      },
+      "required" : [
+        "command",
+        "background"
+      ],
+      "type" : "object"
+    },
+    "setCameraLayout" : {
+      "description" : "The project's camera layout, and a split's side.",
+      "examples" : [
+        {
+          "command" : "setCameraLayout",
+          "layout" : "split",
+          "side" : "start"
+        },
+        {
+          "command" : "setCameraLayout",
+          "layout" : "bubble"
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "setCameraLayout"
+        },
+        "layout" : {
+          "description" : "The layout.",
+          "enum" : [
+            "bubble",
+            "screenOnly",
+            "split",
+            "cameraOnly",
+            "cameraFull"
+          ],
+          "type" : "string"
+        },
+        "side" : {
+          "description" : "Where the camera goes in a split: start (left or above) or end.",
+          "enum" : [
+            "start",
+            "end"
+          ],
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "command",
+        "layout"
+      ],
+      "type" : "object"
+    },
+    "setSpeed" : {
+      "description" : "Plays the output from `from` to `to` at `speed` (split at both edges first).",
+      "examples" : [
+        {
+          "command" : "setSpeed",
+          "from" : 20,
+          "speed" : 2,
+          "to" : 30
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "setSpeed"
+        },
+        "from" : {
+          "description" : "Seconds of the output, from 0 to its length.",
+          "minimum" : 0,
+          "type" : "number"
+        },
+        "speed" : {
+          "description" : "How many times as fast: 0.25 to 16. Up to 4 the sound speeds up without changing pitch.",
+          "maximum" : 16,
+          "minimum" : 0.25,
+          "type" : "number"
+        },
+        "to" : {
+          "description" : "Seconds of the output, from 0 to its length.",
+          "minimum" : 0,
+          "type" : "number"
+        }
+      },
+      "required" : [
+        "command",
+        "from",
+        "to",
+        "speed"
+      ],
+      "type" : "object"
+    },
+    "setSummary" : {
+      "description" : "The project's summary.",
+      "examples" : [
+        {
+          "command" : "setSummary",
+          "summary" : "What changed in the export sheet."
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "setSummary"
+        },
+        "summary" : {
+          "description" : "\"\" takes it away. Up to 2000 characters (grapheme clusters); a longer one is cut.",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "command",
+        "summary"
+      ],
+      "type" : "object"
+    },
+    "setTitle" : {
+      "description" : "The project's title.",
+      "examples" : [
+        {
+          "command" : "setTitle",
+          "title" : "Release notes, November"
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "setTitle"
+        },
+        "title" : {
+          "description" : "\"\" takes it away. Up to 200 characters (grapheme clusters); a longer one is cut.",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "command",
+        "title"
+      ],
+      "type" : "object"
+    },
+    "shortenPauses" : {
+      "description" : "Shortens every pause between words of the transcript longer than `longerThan` seconds.",
+      "examples" : [
+        {
+          "command" : "shortenPauses",
+          "longerThan" : 1.5
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "shortenPauses"
+        },
+        "longerThan" : {
+          "description" : "Seconds, above 0; a pause keeps 0.4 s.",
+          "minimum" : 0,
+          "type" : "number"
+        }
+      },
+      "required" : [
+        "command",
+        "longerThan"
+      ],
+      "type" : "object"
+    },
+    "transcribe" : {
+      "description" : "Transcribes the takes on this Mac (never downloads a model).",
+      "examples" : [
+        {
+          "command" : "transcribe",
+          "language" : "en-US"
+        },
+        {
+          "command" : "transcribe",
+          "language" : "es-AR",
+          "replace" : true
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "transcribe"
+        },
+        "language" : {
+          "description" : "BCP 47 (es-AR, en-US); without it, the system's.",
+          "type" : "string"
+        },
+        "replace" : {
+          "description" : "Replace a transcript with corrections, losing them.",
+          "type" : "boolean"
+        }
+      },
+      "required" : [
+        "command"
+      ],
+      "type" : "object"
+    },
+    "trimEnd" : {
+      "description" : "Deletes the output from `from` to its end.",
+      "examples" : [
+        {
+          "command" : "trimEnd",
+          "from" : 58
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "trimEnd"
+        },
+        "from" : {
+          "description" : "Seconds of the output, from 0 to its length.",
+          "minimum" : 0,
+          "type" : "number"
+        }
+      },
+      "required" : [
+        "command",
+        "from"
+      ],
+      "type" : "object"
+    },
+    "trimStart" : {
+      "description" : "Deletes the output from its start to `to`.",
+      "examples" : [
+        {
+          "command" : "trimStart",
+          "to" : 1.5
+        }
+      ],
+      "properties" : {
+        "command" : {
+          "const" : "trimStart"
+        },
+        "to" : {
+          "description" : "Seconds of the output, from 0 to its length.",
+          "minimum" : 0,
+          "type" : "number"
+        }
+      },
+      "required" : [
+        "command",
+        "to"
+      ],
+      "type" : "object"
+    }
+  },
+  "$schema" : "https://json-schema.org/draft/2020-12/schema",
+  "description" : "One edit of a Toma project, as the toma command, its MCP server and the app's control socket take it. Times are seconds of the output as the project plays now. Each command is one undo step, the same step the app's gesture makes.",
+  "oneOf" : [
+    {
+      "$ref" : "#/$defs/cut"
+    },
+    {
+      "$ref" : "#/$defs/trimStart"
+    },
+    {
+      "$ref" : "#/$defs/trimEnd"
+    },
+    {
+      "$ref" : "#/$defs/setSpeed"
+    },
+    {
+      "$ref" : "#/$defs/removeFillers"
+    },
+    {
+      "$ref" : "#/$defs/shortenPauses"
+    },
+    {
+      "$ref" : "#/$defs/addZoom"
+    },
+    {
+      "$ref" : "#/$defs/removeZoom"
+    },
+    {
+      "$ref" : "#/$defs/setAutoZoom"
+    },
+    {
+      "$ref" : "#/$defs/addMarker"
+    },
+    {
+      "$ref" : "#/$defs/renameMarker"
+    },
+    {
+      "$ref" : "#/$defs/removeMarker"
+    },
+    {
+      "$ref" : "#/$defs/setAspect"
+    },
+    {
+      "$ref" : "#/$defs/setBackground"
+    },
+    {
+      "$ref" : "#/$defs/applyStyle"
+    },
+    {
+      "$ref" : "#/$defs/setCameraLayout"
+    },
+    {
+      "$ref" : "#/$defs/addTitleCard"
+    },
+    {
+      "$ref" : "#/$defs/addText"
+    },
+    {
+      "$ref" : "#/$defs/addMusic"
+    },
+    {
+      "$ref" : "#/$defs/removeMusic"
+    },
+    {
+      "$ref" : "#/$defs/setTitle"
+    },
+    {
+      "$ref" : "#/$defs/setSummary"
+    },
+    {
+      "$ref" : "#/$defs/transcribe"
+    }
+  ],
+  "properties" : {
+    "command" : {
+      "enum" : [
+        "cut",
+        "trimStart",
+        "trimEnd",
+        "setSpeed",
+        "removeFillers",
+        "shortenPauses",
+        "addZoom",
+        "removeZoom",
+        "setAutoZoom",
+        "addMarker",
+        "renameMarker",
+        "removeMarker",
+        "setAspect",
+        "setBackground",
+        "applyStyle",
+        "setCameraLayout",
+        "addTitleCard",
+        "addText",
+        "addMusic",
+        "removeMusic",
+        "setTitle",
+        "setSummary",
+        "transcribe"
+      ],
+      "type" : "string"
+    }
+  },
+  "required" : [
+    "command"
+  ],
+  "title" : "Toma edit command",
+  "type" : "object"
+}

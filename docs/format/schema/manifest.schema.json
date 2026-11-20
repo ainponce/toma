@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Toma manifest",
+  "description": "manifest.json at the root of a Toma package (format 1.0, formatVersion 1 to 5): what was recorded and where it lives. Written with its keys in alphabetical order, indented, without escaping \"/\", optional fields left out (never null). A reader ignores keys it does not know. See docs/format/README.md, \"manifest.json\".",
+  "type": "object",
+  "properties": {
+    "formatVersion": {
+      "description": "The package's version: 3 when created; 4 with a track of an iPhone or iPad or keyPress events; 5 with two takes or more; 1 and 2 in older packages, until their first edit upgrades them to 3. A reader refuses a version it does not read before the rest.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "app": {
+      "description": "The app that created the project.",
+      "type": "object",
+      "properties": {"name": {"type": "string"}, "version": {"type": "string"}},
+      "required": ["name", "version"]
+    },
+    "createdAt": {"$ref": "#/$defs/date"},
+    "takes": {"description": "In the order they were recorded.", "type": "array", "items": {"$ref": "#/$defs/take"}},
+    "upgradedFrom": {
+      "description": "Version 3: in a package created at version 1 or 2 and upgraded by its first edit, that version.",
+      "type": "integer"
+    },
+    "projectID": {
+      "description": "Version 3: the project's stable id, 32 lowercase hexadecimal digits. Without it (versions 1 and 2) the id is derived from the manifest.",
+      "type": "string"
+    }
+  },
+  "required": ["formatVersion", "app", "createdAt", "takes"],
+  "$defs": {
+    "date": {"description": "ISO 8601 in UTC, in whole seconds: 2026-11-13T16:00:12Z.", "type": "string"},
+    "rect": {
+      "description": "A rectangle in global points, the origin at the top left of the main display, y down.",
+      "type": "object",
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "width": {"type": "number"},
+        "height": {"type": "number"}
+      },
+      "required": ["x", "y", "width", "height"]
+    },
+    "cameraStyle": {
+      "description": "How the camera looks: its shape, its size and where it is anchored.",
+      "type": "object",
+      "properties": {
+        "shape": {
+          "description": "circle, roundedSquare, portrait (3:4) or landscape (16:9).",
+          "type": "string",
+          "enum": ["circle", "roundedSquare", "portrait", "landscape"]
+        },
+        "size": {
+          "description": "The camera's side as a fraction of the output's height: 0.17 small, 0.24 medium, 0.33 large.",
+          "type": "number"
+        },
+        "anchor": {
+          "description": "One of the 8 places at the corners and the middle of the edges; leading is always the left.",
+          "type": "string",
+          "enum": [
+            "topLeading", "top", "topTrailing", "leading", "trailing", "bottomLeading", "bottom", "bottomTrailing"
+          ]
+        }
+      },
+      "required": ["shape", "size", "anchor"]
+    },
+    "take": {
+      "description": "One recording, from Record to Stop.",
+      "type": "object",
+      "properties": {
+        "id": {"description": "take-001, take-002…: also the name of its folder in takes/.", "type": "string"},
+        "status": {
+          "description": "recording (being recorded, or the app died before closing it), complete or recovered.",
+          "type": "string",
+          "enum": ["recording", "complete", "recovered"]
+        },
+        "startedAt": {"$ref": "#/$defs/date"},
+        "tracks": {"type": "array", "items": {"$ref": "#/$defs/track"}},
+        "cameraStyle": {
+          "description": "Version 2, takes with a camera: how it looks from the start of the take.",
+          "$ref": "#/$defs/cameraStyle"
+        }
+      },
+      "required": ["id", "status", "startedAt", "tracks"]
+    },
+    "track": {
+      "description": "One source recorded into its own files, a new segment at every interruption.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Unique within the take and the name of its folder: display-<id>, window-<id>, camera, mic, system-audio, system-audio-<app>…; ASCII letters, digits and \"-\".",
+          "type": "string"
+        },
+        "kind": {
+          "description": "display, microphone; window, camera, systemAudio (version 2); device, deviceAudio (version 4).",
+          "type": "string",
+          "enum": ["display", "window", "camera", "microphone", "systemAudio", "device", "deviceAudio"]
+        },
+        "source": {"$ref": "#/$defs/source"},
+        "segments": {
+          "description": "In the order of their index.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/segment"}
+        },
+        "appBundleID": {
+          "description": "A track of system audio of one app (phase 3): the app's bundle identifier.",
+          "type": "string"
+        },
+        "appName": {
+          "description": "A track of system audio of one app (phase 3): the app's name.",
+          "type": "string"
+        }
+      },
+      "required": ["id", "kind", "source", "segments"]
+    },
+    "source": {
+      "description": "What a track recorded: name, and only the fields of its kind.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "The display's, window's (its app and title) or device's visible name.",
+          "type": "string"
+        },
+        "displayID": {
+          "description": "display: its CGDirectDisplayID.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "deviceUniqueID": {
+          "description": "microphone, camera, device, deviceAudio: the device's uniqueID.",
+          "type": "string"
+        },
+        "globalFrame": {
+          "description": "display, window: where it is, in global points (device: its size in pixels).",
+          "$ref": "#/$defs/rect"
+        },
+        "pixelScale": {
+          "description": "display, window, device: pixels per point of what was recorded.",
+          "type": "number"
+        },
+        "windowID": {
+          "description": "window (version 2): its CGWindowID.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "bundleIdentifier": {
+          "description": "window (version 2): the bundle identifier of its app.",
+          "type": "string"
+        },
+        "captureArea": {
+          "description": "display in Area mode (version 2): the area chosen, in global points.",
+          "$ref": "#/$defs/rect"
+        },
+        "includedBundleIDs": {
+          "description": "systemAudio (version 2): only these apps are recorded.",
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "excludedBundleIDs": {
+          "description": "systemAudio (version 2): every app but these is recorded.",
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "required": ["name"]
+    },
+    "segment": {
+      "description": "One media file of a track, a fragmented QuickTime movie whose time 0 is startHostTime.",
+      "type": "object",
+      "properties": {
+        "index": {"description": "The segment's number within its track, from 1.", "type": "integer"},
+        "file": {
+          "description": "Its path from the package's root, exactly takes/<take>/<track>/seg-NNNN.mov for its index.",
+          "type": "string"
+        },
+        "startHostTime": {
+          "description": "When its first frame or sample was captured.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "endHostTime": {
+          "description": "When it was closed; missing while it is open.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "endReason": {"description": "Why it was closed; missing while it is open.", "$ref": "#/$defs/endReason"},
+        "droppedFrames": {
+          "description": "Frames (or blocks of audio) the capture gave that were not written.",
+          "type": "integer"
+        },
+        "heartbeatFrames": {
+          "description": "Frames repeated to keep time moving while the screen did not change.",
+          "type": "integer"
+        }
+      },
+      "required": ["index", "file", "startHostTime", "droppedFrames", "heartbeatFrames"]
+    },
+    "endReason": {
+      "description": "Why a segment was closed: a flat object with its type and, for some types, their fields at the same level.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "stopped, paused, streamError, writerError, formatChanged, diskFull, recoveredAfterCrash, empty, unreadable, or rotated (only in the Replay's working package, never in a take of the library).",
+          "type": "string",
+          "enum": [
+            "stopped", "paused", "streamError", "writerError", "formatChanged", "diskFull", "recoveredAfterCrash",
+            "empty", "unreadable", "rotated"
+          ]
+        },
+        "domain": {"description": "streamError and writerError: the NSError's domain.", "type": "string"},
+        "code": {"description": "streamError and writerError: the NSError's code.", "type": "integer"},
+        "bytes": {
+          "description": "unreadable: the size of the file recovery could not read, which stays as it is.",
+          "type": "integer"
+        }
+      },
+      "required": ["type"],
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"enum": ["streamError", "writerError"]}}, "required": ["type"]},
+          "then": {"required": ["domain", "code"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "unreadable"}}, "required": ["type"]},
+          "then": {"required": ["bytes"]}
+        }
+      ]
+    }
+  }
+}
