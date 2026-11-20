@@ -239,9 +239,10 @@ final class EditorModel {
     @ObservationIgnored var autoZoomTask: Task<Void, Never>?
     /// "Follow the Cursor" of the screen track being planned off the main thread.
     @ObservationIgnored var followCursorTask: Task<Void, Never>?
-    /// The source instants of the take's markers, in order (`TimelineContent.markerTimes(in:)`), found once when the
-    /// project opens, off the main thread: the ruler, ↑ and ↓ and a drag's snapping read them, never the events.
-    @ObservationIgnored private(set) var markerTimes: [HostTime] = []
+    /// The source instants of the `marker` events of every take of the package, by take id
+    /// (`MarkerList.recordedInstants(in:)`), found once when the project opens, off the main thread: the ruler, the
+    /// Markers menu, ↑ and ↓ and a drag's snapping read them (`MarkerList.visible`), never the events.
+    @ObservationIgnored private(set) var recordedMarkers: MarkerList.Recorded = [:]
     /// Where the take's screens are (`TakeScreens`), read once when the project opens, off the main thread: each
     /// revision's `StagePoints` for the overlays then reads only what its document names.
     @ObservationIgnored private(set) var takeScreens: TakeScreens?
@@ -299,6 +300,8 @@ final class EditorModel {
     @ObservationIgnored private var isLookingAtTheTrash = false
     /// "Custom Speed…" of the Project menu: the timeline's sheet; set by the window.
     @ObservationIgnored var askCustomSpeed: () -> Void = {}
+    /// "Rename Marker…" of the Markers menu: the popover over the marker's flag on the ruler; set by the timeline.
+    @ObservationIgnored var askMarkerName: (VisibleMarker) -> Void = { _ in }
 
     @ObservationIgnored private let exportGate: ExportGate
     @ObservationIgnored private var session: EditSession?
@@ -528,7 +531,7 @@ final class EditorModel {
         let project = currentProject(of: session)
         let size = previewSize(of: document)
         let renderer: FrameRenderer
-        let screens: TakeScreens, markers: [HostTime], byTake: [String: TakeScreens], flags: TakeFlags
+        let screens: TakeScreens, markers: MarkerList.Recorded, byTake: [String: TakeScreens], flags: TakeFlags
         do {
             // Builds the motion paths, and reads the takes' events for what the overlays, the panel and the timeline read
             // of them: never on the main thread.
@@ -540,7 +543,7 @@ final class EditorModel {
                     byTake[take.id] = TakeScreens(take: take, events: project.events(ofTake: take.id))
                 }
                 let flags = Self.takeFlags(of: project.takesShown(by: document))
-                return (renderer, screens, TimelineContent.markerTimes(in: project.events), byTake, flags)
+                return (renderer, screens, Self.recordedMarkers(of: project), byTake, flags)
             }.value
         } catch {
             Self.logger.error("Cannot draw \(project.package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
@@ -553,7 +556,7 @@ final class EditorModel {
         self.renderer = renderer
         takeScreens = screens
         screensByTake = byTake
-        markerTimes = markers
+        recordedMarkers = markers
         let engine = PreviewEngine(renderer: renderer, layer: previewLayer)
         self.engine = engine
         let check = MissingVideoCheck(renderer: renderer) { [weak self] spans in

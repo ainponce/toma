@@ -100,12 +100,17 @@ public enum EditorCommand: Equatable, Sendable {
     /// ⇧↑ and ⇧↓ (phase 3 plan 3a, decision 16): moves the annotations chosen by that many points of the preview (−10 up,
     /// 10 down), the vertical of ← → with ⇧ (`stepSeconds`). Does nothing without annotations chosen.
     case nudgeVertically(points: Int)
+    /// M (phase 3 plan 3d, decision 18): a marker at the playhead.
+    case addMarker
+    /// ⌥← and ⌥→: the marker before and after the playhead.
+    case previousMarker, nextMarker
 
     /// Whether holding the key does it again with each repeat: only what moves the playhead, the selection or the scale
     /// by a step. The rest happens once a press (held L does not run up to 8×).
     public var repeats: Bool {
         switch self {
         case .step, .stepSeconds, .previousEditPoint, .nextEditPoint, .nudge, .nudgeVertically, .zoomIn, .zoomOut: true
+        case .previousMarker, .nextMarker: true
         default: false
         }
     }
@@ -115,6 +120,7 @@ public enum EditorCommand: Equatable, Sendable {
     public var edits: Bool {
         switch self {
         case .split, .delete, .trimStartToPlayhead, .trimEndToPlayhead, .nudge, .nudgeVertically, .addZoom, .layout: true
+        case .addMarker: true
         default: false
         }
     }
@@ -218,6 +224,9 @@ public struct KeyboardCommands {
         case ("n", []): .toggleSnapping
         case ("z", [.shift]): .fitTimeline
         case ("escape", []): .deselect
+        case ("m", []): .addMarker
+        case ("←", [.option]): .previousMarker
+        case ("→", [.option]): .nextMarker
         default: byPlace(key)
         }
     }

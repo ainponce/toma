@@ -57,6 +57,8 @@ final class TimelineViewController: NSViewController {
             model?.timelineOffset = offset
         }
         timeline.interaction.model = model
+        // "Rename Marker…" of the Markers menu: the popover over the marker's flag.
+        model.askMarkerName = { [weak timeline] marker in timeline?.interaction.askMarkerName(marker) }
         // The Camera header: the panel edits the project's layout, on the Camera tab.
         timeline.onCameraHeader = { [weak model] in
             guard let model else { return }
@@ -145,7 +147,7 @@ final class TimelineViewController: NSViewController {
                 if let shown = project.focused(on: take.id) { addCaches(of: shown, caches) }
             }
         }
-        timeline.show(take: project.take, takes: takes, markers: model.markerTimes,
+        timeline.show(take: project.take, takes: takes, recorded: model.recordedMarkers,
             document: document, missing: missing, contentRatio: model.contentRatio(of: document))
         // What the cut of the sound is held to in each take the sequence shows (3c), read before a drag needs it.
         model.warmAudioTakeBounds()

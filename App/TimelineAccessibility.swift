@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import AppKit
 import AppSupport
 import Editing
@@ -187,8 +188,51 @@ final class TimelineAccessibility {
                     })])
             }
         }
+        addMarkers(content, geometry, kept: &kept, children: &children)
         elements = kept
         return children
+    }
+
+    /// The markers' flags on the ruler (phase 3, 3d plan decision 3), after everything else: "Marker “Intro” at 0:12"
+    /// (or "Unnamed marker at 0:40"); pressing one takes the playhead to it, and while the document can be edited it has
+    /// Rename… and Delete, as its menu.
+    private func addMarkers(
+        _ content: TimelineContent, _ geometry: TimelineGeometry, kept: inout [String: TimelineItemElement], children: inout [Any]
+    ) {
+        let ruler = CGRect(x: TimelineLayout.headerWidth, y: 0, width: geometry.areaWidth, height: TimelineLayout.rulerHeight)
+        for marker in content.markers {
+            let x = TimelineLayout.headerWidth + geometry.snapped(geometry.x(marker.output))
+            let frame = CGRect(x: x - 3, y: 0, width: TimelineRuler.flagWidth + 6, height: TimelineLayout.rulerHeight).intersection(ruler)
+            guard !frame.isNull, !frame.isEmpty else { continue }
+            let key = "marker \(marker.id)"
+            let element = elements[key] ?? TimelineItemElement(parent: view)
+            element.setAccessibilityFrameInParentSpace(frame)
+            let time = Self.time(marker.output)
+            element.setAccessibilityLabel(marker.name.isEmpty
+                ? String(format: String(localized: "Unnamed marker at %@", comment: "VoiceOver: a marker without a name on the timeline's ruler, its time"), time)
+                : String(
+                    format: String(localized: "Marker “%1$@” at %2$@", comment: "VoiceOver: a marker on the timeline's ruler, its name and its time"),
+                    marker.name, time))
+            element.setAccessibilitySelected(false)
+            element.press = { [weak self] in
+                guard let model = self?.model else { return false }
+                model.goTo(marker)
+                return true
+            }
+            element.setAccessibilityCustomActions(model?.canEdit == true ? [
+                NSAccessibilityCustomAction(name: String(localized: "Rename…", comment: "The menu of a marker's flag on the timeline's ruler")) {
+                    [weak self] in
+                    MainActor.assumeIsolated { self?.view.interaction.askMarkerName(marker) }
+                    return true
+                },
+                NSAccessibilityCustomAction(name: String(localized: "Delete")) { [weak self] in
+                    MainActor.assumeIsolated { self?.model?.deleteMarker(marker) }
+                    return true
+                },
+            ] : [])
+            kept[key] = element
+            children.append(element)
+        }
     }
 
     /// What VoiceOver says of a cut of the sound moved `shift` ns of output off the picture's: "Audio cut moved 0,30 s

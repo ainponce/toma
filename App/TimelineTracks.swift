@@ -55,8 +55,10 @@ struct TrackItems<Info> {
 /// - Camera: each change at its own instant, if it is kept (`TimeMap.output(atSource:take:)`, as `EditPoints` reads it), and
 ///   each layout block where the preview shows it (`LayoutTimeline.blockOutputs`); a change inside a block is not seen while
 ///   it rules (`LayoutTimeline.hiddenChanges`).
-/// - The ruler's markers: each `marker` event of the take at its instant, if it is kept: from the take's marker times,
-///   found once per take (`markerTimes(in:)`), never by going over its events for each revision or drag move.
+/// - The ruler's markers: those the output shows (`MarkerList.visible`, phase 3 plan 3d decisions 1 and 2), the recorded
+///   ones of every take (from their instants, found once per take when the project opens: `MarkerList.Recorded`, never
+///   by going over the events for each revision or drag move) and the ones added in the editor, each where its instant
+///   is kept.
 struct TimelineContent {
     struct ClipInfo {
         /// Its source's start, in host nanoseconds.
@@ -130,8 +132,8 @@ struct TimelineContent {
     let splitOrientation: SplitOrientation
     /// The layout outside the blocks (the header's second line).
     let projectLayout: LayoutKind
-    /// In order.
-    let markers: [Int64]
+    /// By output time (`MarkerList.visible`).
+    let markers: [VisibleMarker]
     /// The spans of the screen or the camera that could not be read (`MissingVideo`), in order.
     let missing: [Range<Int64>]
     let audio: [String: AudioTrack]
@@ -151,18 +153,11 @@ struct TimelineContent {
     /// The same for each take of `takes` and `take`, by take id (3d): what the thumbnails of each clip are of.
     private let screensOfTakes: [String: (initial: String?, changes: [(t: UInt64, track: String)])]
 
-    /// The source instants of the take's `marker` events, in order: what the ruler's markers are made from. Goes over
-    /// every event of the take; the editor does it once, off the main thread.
-    static func markerTimes(in events: [InputEvent]) -> [HostTime] {
-        events.compactMap { event -> HostTime? in
-            if case .marker = event.kind { event.t } else { nil }
-        }.sorted()
-    }
-
-    /// `markers`: the take's marker times (`markerTimes(in:)`); `contentRatio`: what "Like the Recording" follows; `takes`:
-    /// those the sequence shows (`take` alone when empty), whose audio tracks have rows (`TimelineLayout(takes:document:)`).
+    /// `recorded`: the instants of the `marker` events of every take (`MarkerList.Recorded`); `contentRatio`: what "Like the
+    /// Recording" follows; `takes`: those the sequence shows (`take` alone when empty), whose audio tracks have rows
+    /// (`TimelineLayout(takes:document:)`).
     init(
-        take: TakeRecord, markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>],
+        take: TakeRecord, recorded: MarkerList.Recorded, document: EditDocument, missing: [ClosedRange<Double>],
         contentRatio: Double? = nil, takes: [TakeRecord] = []
     ) {
         let map = TimeMap(sequence: document.sequence)
@@ -247,7 +242,7 @@ struct TimelineContent {
                     id: change.id, output: $0..<$0, info: CameraChangeInfo(hiddenBy: block.flatMap { kinds[$0] }, hidingBlock: block))
             }
         })
-        self.markers = markers.compactMap { map.output(atSource: $0, take: takeID) }.sorted()
+        markers = MarkerList.visible(document: document, recorded: recorded, timeMap: map)
         self.missing = missing.map { TimeMap.outputNanoseconds(seconds: $0.lowerBound)..<TimeMap.outputNanoseconds(seconds: $0.upperBound) }
             .filter { !$0.isEmpty }
             .sorted { $0.lowerBound < $1.lowerBound }
