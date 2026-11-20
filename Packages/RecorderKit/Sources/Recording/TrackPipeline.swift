@@ -22,6 +22,10 @@ struct PipelineContext: Sendable {
     let onDiskFull: @Sendable () -> Void
     /// Space free right now on the recording volume, `nil` if it cannot be read.
     let freeBytes: @Sendable () -> Int64?
+    /// Only the Replay's (fases 4 y 5 design §10.2): every segment of the track closes `rotated` once it lasts this long,
+    /// and the next one opens at once (`TrackPipeline.rotate()`). `nil` in every take: `RecordingCoordinator` never
+    /// passes it, and a pipeline without it never rotates.
+    var segmentRotation: Duration? = nil
 
     /// Below this much free space, a writer failure of any shape is taken as the disk filling up: room
     /// for the take's reserve twice over.
@@ -149,6 +153,12 @@ actor TrackPipeline: CaptureSink {
         var loggedDropped = 0
         /// Made once the segment's start is known.
         var audioClock: AudioClockAnchors?
+        /// Only with `segmentRotation`: `rotate()` asked this segment to close; the next sample (or the wait) does it.
+        var rotationRequested = false
+        /// The `rotate()` calls waiting for this segment to close, answered by its finishing task.
+        var rotationWaiters: [CheckedContinuation<Int?, Never>] = []
+        /// Closes the segment after `rotationWait` if no sample came first; cancelled when it closes.
+        var rotationWait: Task<Void, Never>?
 
         init(writer: any TrackWriting, index: Int, url: URL, file: String, startSignal: StartSignal) {
             self.writer = writer
@@ -307,6 +317,31 @@ actor TrackPipeline: CaptureSink {
         }
     }
 
+    // MARK: - Rotation (only with `segmentRotation`: the Replay's)
+
+    /// How long a forced rotation (`rotate()`) waits for the next sample of an audio track before it closes the segment
+    /// at its last sample anyway (fases 4 y 5 plan 5c, decision 2).
+    static let rotationWait: Duration = .seconds(1)
+
+    /// Only with `segmentRotation` (the Replay's freeze): closes the open segment `rotated`, waits until it is finished
+    /// (durable, its end in the manifest) and returns its index; `nil` if no segment had started, and always without
+    /// `segmentRotation`.
+    ///
+    /// The next sample closes it and opens the next segment at its time, as a rotation by duration does. A video track
+    /// that took no frame since `clock() − heartbeatSafetyMargin` (a still screen) closes there at once and seeds the next
+    /// segment with its last frame at that instant. A segment the next sample does not close within `rotationWait` closes
+    /// anyway: a video one seeded the same way, an audio one at the end of its last sample, the next segment opening
+    /// with the next sample. A segment that closes for another reason first (a stream error, the close) answers too.
+    func rotate() async -> Int? {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard context.segmentRotation != nil else { return nil }
+        return await withCheckedContinuation { (answer: CheckedContinuation<Int?, Never>) in
+            queue.async {
+                self.assumeIsolated { $0.requestRotation(answer) }
+            }
+        }
+    }
+
     // MARK: - Jobs
 
     /// Brings the source back after a stream error, following a `RestartPolicy` of `restartBackoff`.
@@ -394,6 +429,9 @@ actor TrackPipeline: CaptureSink {
         if segment.fd >= 0 {
             do { try DurableFile.fullSync(segment.fd) } catch { errors.append(error) }
             Darwin.close(segment.fd)
+        } else if context.segmentRotation != nil, segment.startHostTime != nil {
+            // The Replay's: a save clones the file as it is, so it is synced even without the descriptor kept open.
+            do { try Self.fullSync(segment.url) } catch { errors.append(error) }
         }
         if let end, segment.startHostTime != nil {
             let index = segment.index
@@ -410,6 +448,9 @@ actor TrackPipeline: CaptureSink {
             pipeline.state.finishing[number] = nil
             pipeline.state.errors.append(contentsOf: failures)
         }
+        // `rotate()` answers once the segment is durable and the manifest says how it ended.
+        let rotated = segment.startHostTime != nil ? segment.index : nil
+        for waiter in segment.rotationWaiters { waiter.resume(returning: rotated) }
     }
 
     private func waitForFinishing() async {
@@ -469,6 +510,10 @@ actor TrackPipeline: CaptureSink {
         if let segment = state.segment, let current = segment.writer.formatDescription,
            !Self.continuesSegment(format, after: current, media: media) {
             closeSegment(reason: .formatChanged, at: pts)
+        }
+        // Only with `segmentRotation`: the sample due closes the segment at its time and opens the next one, no gap.
+        if let segment = state.segment, rotationIsDue(segment, at: pts) {
+            closeSegment(reason: .rotated, at: pts)
         }
         guard let segment = state.segment ?? openSegment() else {
             countDropped(in: nil)
@@ -587,6 +632,8 @@ actor TrackPipeline: CaptureSink {
     private func closeSegment(reason: SegmentEndReason, at time: HostTime, failureReported: Bool = false) {
         guard let segment = state.segment else { return }
         state.segment = nil
+        segment.rotationWait?.cancel()
+        segment.rotationWait = nil
         if segment.startHostTime == nil {
             state.accounting.addPending(segment.dropped)
             segment.dropped = 0
@@ -640,6 +687,11 @@ actor TrackPipeline: CaptureSink {
         guard segment.framesSinceHeartbeatTick == 0, let last = segment.lastTakenPTS else { return }
         let time = context.clock().adding(seconds: -Self.heartbeatSafetyMargin)
         guard time > last else { return }
+        // Only with `segmentRotation`: a still screen rotates on its heartbeat.
+        if rotationIsDue(segment, at: time) {
+            rotateSeeding(segment, at: time)
+            return
+        }
         do {
             try segment.writer.appendHeartbeat(at: time)
             segment.lastTakenPTS = time
@@ -743,6 +795,93 @@ actor TrackPipeline: CaptureSink {
         case .paused, .closing, .idle, .lost:
             return .superseded
         }
+    }
+
+    // MARK: - Rotation state (only with `segmentRotation`; dispatch blocks on `queue`)
+
+    /// Whether `segment` closes `rotated` at `time`: only with `segmentRotation`, once it has started and `rotate()` asked
+    /// or it lasts `segmentRotation` by `time`, and only at a time after everything it took, where the next one starts.
+    private func rotationIsDue(_ segment: OpenSegment, at time: HostTime) -> Bool {
+        guard let rotation = context.segmentRotation, let start = segment.startHostTime else { return false }
+        guard segment.rotationRequested || time.nanoseconds >= start.nanoseconds &+ Self.nanoseconds(of: rotation) else {
+            return false
+        }
+        return time > (segment.lastTakenPTS ?? start)
+    }
+
+    /// Closes `segment` `rotated` at `time` and opens the next segment there with the segment's last frame
+    /// (`TrackWriting.lastVideoFrame`), so a still screen goes on without a gap. A writer without a last frame only closes.
+    private func rotateSeeding(_ segment: OpenSegment, at time: HostTime) {
+        let seed = segment.writer.lastVideoFrame.flatMap { try? SampleRetiming.sample($0, at: time) }
+        closeSegment(reason: .rotated, at: time)
+        guard let seed, let next = openSegment() else { return }
+        do {
+            try next.writer.append(seed)
+            next.lastTakenPTS = time
+            next.lastSampleEnd = time
+        } catch {
+            // Skipped (the encoder is busy): the next frame or heartbeat goes on; a failure is handled below.
+        }
+        if next.startHostTime == nil, let start = next.startSignal.hostTime {
+            segmentDidStart(next, at: start)
+        }
+        if let failure = next.writer.failure {
+            writerDidFail(next, failure)
+        }
+    }
+
+    /// A video `segment` that took nothing after `clock() − heartbeatSafetyMargin` (a still screen) rotates there now,
+    /// seeded with its last frame. Returns whether it did.
+    private func rotateIfStill(_ segment: OpenSegment) -> Bool {
+        guard let start = segment.startHostTime else { return false }
+        let time = context.clock().adding(seconds: -Self.heartbeatSafetyMargin)
+        guard time > (segment.lastTakenPTS ?? start) else { return false }
+        rotateSeeding(segment, at: time)
+        return true
+    }
+
+    /// `rotate()`'s request: `answer` gets the index of the segment it closes once that one is finished, or `nil` at once
+    /// without a started segment.
+    private func requestRotation(_ answer: CheckedContinuation<Int?, Never>) {
+        guard case .running = state.phase, let segment = state.segment, segment.startHostTime != nil else {
+            answer.resume(returning: nil)
+            return
+        }
+        segment.rotationWaiters.append(answer)
+        guard !segment.rotationRequested else { return }
+        segment.rotationRequested = true
+        if case .video = media, rotateIfStill(segment) { return }
+        let index = segment.index
+        segment.rotationWait = Task { [ticks = context.ticks] in
+            do {
+                try await ticks.sleep(Self.rotationWait)
+            } catch {
+                return  // the segment closed first
+            }
+            await self.onQueue { $0.rotationWaitEnded(segment: index) }
+        }
+    }
+
+    /// No sample closed segment `index` within `rotationWait` of `rotate()`: a still video rotates seeded, anything else
+    /// closes at its last sample and the next sample opens the next segment.
+    private func rotationWaitEnded(segment index: Int) {
+        guard let segment = state.segment, segment.index == index, segment.rotationRequested else { return }
+        segment.rotationWait = nil
+        if case .video = media, rotateIfStill(segment) { return }
+        closeSegment(reason: .rotated, at: segment.latestTime ?? context.clock())
+    }
+
+    /// Opens the file at `url` (never through a link), full-syncs it and closes it.
+    private static func fullSync(_ url: URL) throws {
+        let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { Darwin.close(fd) }
+        try DurableFile.fullSync(fd)
+    }
+
+    private static func nanoseconds(of duration: Duration) -> UInt64 {
+        let (seconds, attoseconds) = duration.components
+        return UInt64(max(0, seconds)) * 1_000_000_000 + UInt64(max(0, attoseconds) / 1_000_000_000)
     }
 
     // MARK: - Helpers

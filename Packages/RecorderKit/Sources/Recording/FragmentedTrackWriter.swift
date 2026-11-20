@@ -65,6 +65,7 @@ public final class FragmentedTrackWriter: TrackWriting {
     private var lastWrittenPTS: HostTime?
     /// Newest video frame taken, already retimed; heartbeats and `finish` repeat it.
     private var lastFrame: CMSampleBuffer?
+    public var lastVideoFrame: CMSampleBuffer? { lastFrame }
     /// The source audio format relabeled with the file's channel layout (`fileLayoutTag`). Every
     /// audio buffer goes to the encoder with it, so the encoder never remaps channels.
     private var writingAudioFormat: CMAudioFormatDescription?
