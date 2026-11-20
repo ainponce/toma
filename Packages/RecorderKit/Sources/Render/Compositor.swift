@@ -14,11 +14,11 @@ import ProjectFormat
 ///   camera (`RenderFrame.stage`), exactly as without a zoom when it has none or is at rest.
 /// - With one (`RenderFrame.subframes` or `cursorSamples`, design §7.2), in one render pass too, whose subsample and sum
 ///   stay in tile memory (`memoryless`), so nothing goes to memory between the subsamples: each subframe draws the stage
-///   through its own transform into attachment 0 over the one before (its background is opaque and covers the target,
-///   so nothing needs clearing), and a drawing over the whole target adds it, times 1/N, to the sum in `rgba16Float`
-///   (attachment 1) by programmable blending, in their order. With cursor samples instead, the stage is drawn once and
-///   each sample is added to the sum. A last drawing writes the average (or the cursor's average over the stage) to the
-///   target, attachment 2. The click effects, once through the stage at the frame's time and never blurred (plan
+///   through its own transform into attachment 0 over the one before (its background covers the target, opaque or
+///   written as nothing without blending, so nothing needs clearing), and a drawing over the whole target adds it,
+///   times 1/N, to the sum in `rgba16Float` (attachment 1) by programmable blending, in their order. With cursor
+///   samples instead, the stage is drawn once and each sample is added to the sum. A last drawing writes the average
+///   (or the cursor's average over the stage) to the target, attachment 2. The click effects, once through the stage at the frame's time and never blurred (plan
 ///   decision 26), and the camera are drawn over it in the same pass.
 ///
 /// In a card (`RenderFrame.card` and `backgroundTransform`, 1c design §5.4 and §14.2), the background, the shadow and the
@@ -38,6 +38,12 @@ import ProjectFormat
 /// recording (`drawContentAnnotations`), before the camera (`drawOverTheStage`); and first of `drawOverlays`, the title
 /// card and the output's annotations, under the keys. With the legacy values each is `nil` or empty and changes no call,
 /// so the frame is drawn as in phase 2.
+///
+/// A frame with nothing behind its stage (`BackgroundLayer.transparent`, milestone 4c, design §7.1) is drawn the same
+/// way over a target cleared to (0,0,0,0) (`renderPass(into:commandBuffer:transparent:)`), its background's step writing
+/// (0,0,0,0) without blending (`AlphaPipelines.clear(for:)`), and its calm zoom darkening the stage drawn and not the
+/// void (`Compositor+Alpha.swift`); everything else, premultiplied "over", keeps its alpha. Any other frame makes the
+/// same calls as ever.
 ///
 /// The shaders are compiled and the pipelines built once, in `init`. The same frame and source textures
 /// always give the same bytes on the same GPU.
@@ -254,8 +260,9 @@ public final class Compositor: @unchecked Sendable {
         // What the camera's colour and background are drawn with, made before any render pass, on every path.
         let look = try prepareCameraLook(frame, camera: camera, textures: cameraLook, commandBuffer: commandBuffer)
         // The camera over every pixel: nothing under it is drawn, nor sampled.
+        let transparent = frame.background == .transparent
         if frame.coveredByCamera, let layer = frame.camera, let camera {
-            let encoder = renderPass(into: target, commandBuffer: commandBuffer)
+            let encoder = renderPass(into: target, commandBuffer: commandBuffer, transparent: transparent)
             counts.renderPasses += 1
             drawCamera(
                 layer, texture: camera, cameraLook: look, outputSize: frame.outputSize, pipelines: directCamera, encoder: encoder,
@@ -317,7 +324,7 @@ public final class Compositor: @unchecked Sendable {
             encoder.endEncoding()
             return
         }
-        var encoder = renderPass(into: target, commandBuffer: commandBuffer)
+        var encoder = renderPass(into: target, commandBuffer: commandBuffer, transparent: transparent)
         counts.renderPasses += 1
         drawStage(
             frame, through: stage, cursor: frame.cursor, textures: textures, pipelines: direct, targetSize: targetSize, encoder: encoder,
@@ -396,14 +403,17 @@ public final class Compositor: @unchecked Sendable {
         stage == .identity(outputSize: outputSize) ? nil : stage
     }
 
-    /// A render pass into `target` (`.bgra8Unorm`) that starts by clearing it to opaque black.
-    func renderPass(into target: any MTLTexture, commandBuffer: any MTLCommandBuffer) -> any MTLRenderCommandEncoder {
+    /// A render pass into `target` (`.bgra8Unorm`) that starts by clearing it to opaque black, or to (0,0,0,0) for a
+    /// frame with nothing behind its stage (`transparent`, `BackgroundLayer.transparent`).
+    func renderPass(
+        into target: any MTLTexture, commandBuffer: any MTLCommandBuffer, transparent: Bool = false
+    ) -> any MTLRenderCommandEncoder {
         precondition(target.pixelFormat == Self.pixelFormat, "Compositor draws into \(Self.pixelFormat) only, not \(target.pixelFormat)")
         let pass = MTLRenderPassDescriptor()
         let attachment = pass.colorAttachments[0]!
         attachment.texture = target
         attachment.loadAction = .clear
-        attachment.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        attachment.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: transparent ? 0 : 1)
         attachment.storeAction = .store
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
             preconditionFailure("Compositor: the command buffer takes no render pass (already committed, or another encoder is open)")
@@ -565,6 +575,7 @@ public final class Compositor: @unchecked Sendable {
         // 1. Background, and 2. the shadow over it, under the window or the screen, with the screen drawn: with
         // `culling`, both in each band in turn.
         counts.backgrounds += 1
+        if frame.background == .transparent { counts.transparentFills += 1 }
         for band in bands.map({ $0.map(Optional.some) }) ?? [nil] {
             if let band { encoder.setScissorRect(band) }
             drawBackground(
@@ -712,7 +723,8 @@ public final class Compositor: @unchecked Sendable {
     }
 
     /// Draws the background of `frame` over the whole target, through `stage`: the gradient as today when it is drawn as
-    /// it is (`gradientFragment`), and everything else at the stage point under each pixel (`StageMapping`).
+    /// it is (`gradientFragment`), and everything else at the stage point under each pixel (`StageMapping`); for
+    /// `.transparent`, (0,0,0,0) without blending (`AlphaPipelines.clear(for:)`), whatever the pass held there.
     private func drawBackground(
         _ frame: RenderFrame, through stage: StageTransform?, textures: StageTextures, targetSize: SIMD2<Int>,
         viewport: SIMD2<Float>, pipelines: StagePipelines, encoder: any MTLRenderCommandEncoder
@@ -746,6 +758,9 @@ public final class Compositor: @unchecked Sendable {
                     preset, in: Rect(x: 0, y: 0, width: Double(viewport.x), height: Double(viewport.y)), mapping: mapping,
                     viewport: viewport, pipelines: pipelines, encoder: encoder)
             }
+        case .transparent:
+            encoder.setRenderPipelineState(layers.alpha.clear(for: pipelines.pass))
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
     }
 
@@ -1159,6 +1174,9 @@ struct DrawCounts: Equatable, Sendable {
     /// Milestone 3b's: the calm zoom's drawings that read the frame as drawn (Dim and the loupe, `drawCalmZoom`), each in
     /// a pass of its own into the target, counted in `renderPasses` too.
     var calmZoomSamples = 0
+    /// Milestone 4c's: the stage's frames drawn with nothing behind them (`BackgroundLayer.transparent`), each counted in
+    /// `backgrounds` too, once however many bands it is drawn in.
+    var transparentFills = 0
 }
 
 /// Where a pipeline draws: alone into the target, or into one attachment of the motion blur's pass (0 the subsample, 1

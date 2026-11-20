@@ -10,7 +10,8 @@ import ProjectFormat
 /// - With the zoom's (`subframes`), in the motion blur's pass: each subsample is the card's content alone, over nothing,
 ///   through its transform, added to the sum; then the rest of the stage is drawn once into the subsample and the
 ///   average goes over it into the target (`resolveCursorFragment`). So the background is the same bytes as without the
-///   blur, and only the card is blurred.
+///   blur, and only the card is blurred. A transparent background (`BackgroundLayer.transparent`) writes nothing over
+///   the last content there, without blending, so none of it is left outside the card.
 /// - With the cursor's (`cursorSamples`), as 1b's: the stage drawn once, the cursor's samples cut to the card added to
 ///   the sum, and their average over the stage.
 extension Compositor {
@@ -77,7 +78,7 @@ extension Compositor {
         let targetSize = SIMD2(target.width, target.height)
 
         guard let tileMemory else {
-            var encoder = renderPass(into: target, commandBuffer: commandBuffer)
+            var encoder = renderPass(into: target, commandBuffer: commandBuffer, transparent: frame.background == .transparent)
             counts.renderPasses += 1
             drawStage(
                 frame, through: background, card: card, cursor: frame.cursor, textures: textures, pipelines: direct,

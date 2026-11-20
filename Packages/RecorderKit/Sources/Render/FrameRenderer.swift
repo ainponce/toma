@@ -234,12 +234,15 @@ public final class FrameRenderer: @unchecked Sendable {
     ///   - frameRate: the frames per second the output is drawn at, whose frame the motion blur's shutters are
     ///     fractions of (`FrameEvaluator`), in every scene of the renderer; the document's when `nil`.
     ///   - analysis: what the scenes read of the project's analysis caches (phase 2 design §10).
+    ///   - transparentBackground: the renderer's scene draws nothing behind its stage
+    ///     (`FrameEvaluator.transparentBackground`, milestone 4c): the export's codecs with alpha. The scenes
+    ///     `makeScene` makes are as ever; whoever sets one sets it there too.
     /// - Throws: `RenderError.noMetalDevice` without a Metal device, `invalidOutputSize`, and the
     ///   errors of `Compositor.init` and `CursorSprite.makeTexture`. Builds the document's motion paths
     ///   (`MotionPaths`), which takes tens of milliseconds for an hour of take: never on the main thread.
     public init(
         project: LoadedProject, document: EditDocument, outputSize: SIMD2<Int>, device: (any MTLDevice)? = nil,
-        frameRate: Int? = nil, analysis: AnalysisInputs = .none
+        frameRate: Int? = nil, analysis: AnalysisInputs = .none, transparentBackground: Bool = false
     ) throws {
         guard outputSize.x > 0, outputSize.y > 0 else { throw RenderError.invalidOutputSize(outputSize) }
         guard let device = device ?? MTLCreateSystemDefaultDevice() else { throw RenderError.noMetalDevice }
@@ -269,9 +272,11 @@ public final class FrameRenderer: @unchecked Sendable {
             LayoutTimeline.cameraReadable(take: take) { SegmentAvailability.classify($0, in: project.package) }
         }
         let cameraReadable = readable[project.take.id] ?? true
-        current = Mutex(FrameEvaluator(
+        var scene = FrameEvaluator(
             project: project, document: document, outputSize: outputSize, frameRate: frameRate, cameraReadable: readable,
-            analysis: analysis))
+            analysis: analysis)
+        scene.transparentBackground = transparentBackground
+        current = Mutex(scene)
         frameRateOverride = frameRate
         self.cameraReadable = cameraReadable
         cameraReadableByTake = readable
@@ -462,7 +467,7 @@ public final class FrameRenderer: @unchecked Sendable {
     /// The texture `frame`'s background is drawn with (`Compositor.encode`'s `backgroundImage`), from `images`, for
     /// frames `outputSize` big: an image's; a blurred wallpaper's mesh gradient, blurred; a sharp wallpaper's mesh
     /// gradient under the zoom camera's motion blur (`RenderFrame.subframes`), which the subsamples read, but in a card's
-    /// mode, whose background is drawn once (`RenderFrame.backgroundTransform`); none otherwise.
+    /// mode, whose background is drawn once (`RenderFrame.backgroundTransform`); none otherwise, nor for `.transparent`.
     static func backgroundTexture(
         of frame: RenderFrame, images: BackgroundImages, outputSize: SIMD2<Int>
     ) throws -> (any MTLTexture)? {
