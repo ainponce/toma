@@ -62,7 +62,28 @@ import Testing
         // Other modifiers are not the table's.
         #expect(command("←", [.option]) == nil)
         #expect(command("→", [.command]) == nil)
-        #expect(command("↑", [.shift]) == nil)
+        #expect(command("↑", [.option]) == nil)
+        #expect(command("↓", [.command, .shift]) == nil)
+    }
+
+    @Test func shiftUpAndDownAreVerticalNudges() {
+        for focus in [EditorFocus.preview, .timeline] {
+            #expect(command("↑", [.shift], focus: focus) == .nudgeVertically(points: -10))
+            #expect(command("↓", [.shift], focus: focus) == .nudgeVertically(points: 10))
+        }
+        for focus in [EditorFocus.textField, .panel, .toolbar] {
+            #expect(command("↑", [.shift], focus: focus) == nil)
+            #expect(command("↓", [.shift], focus: focus) == nil)
+        }
+    }
+
+    @Test func otherArrowsAreUnchanged() {
+        #expect(command("←", focus: .preview) == .step(frames: -1))
+        #expect(command("→", focus: .preview) == .step(frames: 1))
+        #expect(command("↑", focus: .preview) == .previousEditPoint)
+        #expect(command("↓", focus: .preview) == .nextEditPoint)
+        #expect(command("←", [.shift], focus: .preview) == .stepSeconds(-1))
+        #expect(command("→", [.shift], focus: .preview) == .stepSeconds(1))
     }
 
     @Test func nudgeWithShiftIsTenFrames() {
