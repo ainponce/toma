@@ -20,12 +20,18 @@ public struct SavedTake: Equatable, Sendable {
     public var trackKinds: [TrackKind]
     /// The editor was opened on it.
     public var openedEditor: Bool
+    /// A save of the Replay (fases 4 y 5 design §10.3): the seconds it kept, rounded, which the island says («Saved: last
+    /// 30 s»); fewer than N when less was recorded. `nil` for a take.
+    public var replaySeconds: Int? = nil
 
-    public init(projectURL: URL, duration: Duration, markers: Int, trackKinds: [TrackKind], openedEditor: Bool) {
+    public init(
+        projectURL: URL, duration: Duration, markers: Int, trackKinds: [TrackKind], openedEditor: Bool, replaySeconds: Int? = nil
+    ) {
         self.projectURL = projectURL
         self.duration = duration
         self.markers = markers
         self.trackKinds = trackKinds
         self.openedEditor = openedEditor
+        self.replaySeconds = replaySeconds
     }
 }
