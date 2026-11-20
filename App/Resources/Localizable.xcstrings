@@ -1031,6 +1031,17 @@
         }
       }
     },
+    "Automatic zoom of %1$@, %2$@, from %3$@ to %4$@" : {
+      "comment" : "VoiceOver: an automatic zoom block, its depth, its mode (Highlight, Dim, Loupe), start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom automático de %1$@, %2$@, de %3$@ a %4$@"
+          }
+        }
+      }
+    },
     "Automatic zoom of %1$@, from %2$@ to %3$@" : {
       "comment" : "VoiceOver: an automatic zoom block, its depth, start and end",
       "localizations" : {
@@ -4919,6 +4930,17 @@
         }
       }
     },
+    "Loupe Size" : {
+      "comment" : "The Zoom tab: the loupe lens radius, in % of the video short side",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamaño de la lupa"
+          }
+        }
+      }
+    },
     "Low disk space: %@ left." : {
       "localizations" : {
         "es" : {
@@ -5233,6 +5255,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Niebla"
+          }
+        }
+      }
+    },
+    "Mode" : {
+      "comment" : "The Zoom tab: how a zoom shows its focus (Classic, Highlight, Dim, Loupe)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modo"
           }
         }
       }
@@ -7201,6 +7234,17 @@
         }
       }
     },
+    "Rounded Rectangle" : {
+      "comment" : "The Zoom tab: a shape of the loupe lens",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rectángulo redondeado"
+          }
+        }
+      }
+    },
     "Rounded Square" : {
       "comment" : "The camera bubble's shape",
       "localizations" : {
@@ -8865,6 +8909,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "El micrófono dejó de grabar. La grabación sigue sin él."
+          }
+        }
+      }
+    },
+    "The mode of the automatic zooms nobody changed." : {
+      "comment" : "The Zoom tab: help of the automatic zooms mode",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El modo de los zooms automáticos que no se tocaron."
           }
         }
       }
@@ -10952,6 +11007,17 @@
         }
       }
     },
+    "Zoom of %1$@, %2$@, from %3$@ to %4$@" : {
+      "comment" : "VoiceOver: a zoom block of the user's, its depth, its mode (Highlight, Dim, Loupe), start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom de %1$@, %2$@, de %3$@ a %4$@"
+          }
+        }
+      }
+    },
     "Zoom of %1$@, from %2$@ to %3$@" : {
       "comment" : "VoiceOver: a zoom block of the user's, its depth, start and end",
       "localizations" : {
@@ -11820,6 +11886,74 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "esta Mac no tiene un dispositivo gráfico para dibujarlo"
+          }
+        }
+      }
+    },
+    "zoom.mode.classic" : {
+      "comment" : "A zoom mode: the camera moves in, as before",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Classic"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clásico"
+          }
+        }
+      }
+    },
+    "zoom.mode.dim" : {
+      "comment" : "A zoom mode: outside the focus darker and blurred",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dim"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atenuar"
+          }
+        }
+      }
+    },
+    "zoom.mode.highlight" : {
+      "comment" : "A zoom mode: a ring around the focus and the rest a little darker",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Highlight"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resaltar"
+          }
+        }
+      }
+    },
+    "zoom.mode.loupe" : {
+      "comment" : "A zoom mode: a lens over the focus that shows it bigger",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loupe"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lupa"
           }
         }
       }

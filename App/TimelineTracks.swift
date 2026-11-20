@@ -71,6 +71,8 @@ struct TimelineContent {
     struct Zoom {
         var depth: Double
         var automatic: Bool
+        /// The mode it is drawn in (`ZoomRegion.resolvedMode(auto:)`, phase 3 design §6).
+        var mode: ZoomMode = .classic
     }
 
     struct Screen {
@@ -197,7 +199,9 @@ struct TimelineContent {
             else { return nil }
             return .init(
                 id: region.id, output: output,
-                info: Zoom(depth: region.depth ?? document.zoom.auto.depth, automatic: region.origin == .auto))
+                info: Zoom(
+                    depth: region.depth ?? document.zoom.auto.depth, automatic: region.origin == .auto,
+                    mode: region.resolvedMode(auto: document.zoom.auto)))
         })
         privacy = TimelinePrivacyItems(document: document)
         annotations = TimelineAnnotationItems(document: document, map: map)
@@ -354,7 +358,8 @@ final class ClipLayer: CALayer {
 }
 
 /// A zoom block: tinted with its hue, a border of it and a lighter top edge, its depth written on it; an automatic one
-/// lighter, with the symbol of the automatic zoom (✦) before its depth.
+/// lighter, with the symbol of the automatic zoom (✦) before its depth. A calm one (phase 3 design §6) has its mode's
+/// symbol there instead (`ZoomPanelRules.trackSymbol`), automatic or not.
 final class BlockLayer: CAShapeLayer {
     let label = CATextLayer()
     let icon = CALayer()
@@ -362,6 +367,8 @@ final class BlockLayer: CAShapeLayer {
     var labelText: String?
     var drawnSize = CGSize.zero
     var automatic: Bool?
+    /// The mode whose symbol is drawn.
+    var mode: ZoomMode?
 
     override init() {
         super.init()
@@ -846,12 +853,14 @@ final class TimelineTracks {
                 block.icon.contentsScale = geometry.backingScale
                 block.highlight.backgroundColor = palette.highlight
             }
-            let automatic = item.info.automatic
+            let automatic = item.info.automatic, mode = item.info.mode
             let tint = automatic ? palette.zoomAuto : palette.zoom
-            if block.automatic != automatic || isNew {
+            let symbol = ZoomPanelRules.trackSymbol(mode: mode, automatic: automatic)
+            if block.automatic != automatic || block.mode != mode || isNew {
                 block.automatic = automatic
+                block.mode = mode
                 block.label.foregroundColor = tint.text
-                block.icon.contents = automatic ? Self.symbolImage("sparkles", scale: geometry.backingScale, color: tint.text) : nil
+                block.icon.contents = symbol.flatMap { Self.symbolImage($0, scale: geometry.backingScale, color: tint.text) }
             }
             let isSelected = selected.contains(item.id)
             block.fillColor = isSelected ? tint.selectedFill : tint.fill
@@ -877,9 +886,9 @@ final class TimelineTracks {
                 block.labelText = text
                 block.label.string = text
             }
-            // The depth (and an automatic block's symbol) stays at the left of what is in sight.
+            // The depth (and an automatic or calm block's symbol) stays at the left of what is in sight.
             let left = max(6, -rect.minX + 6)
-            let icon = automatic && rect.width >= 36
+            let icon = symbol != nil && rect.width >= 36
             block.icon.isHidden = !icon
             block.icon.frame = CGRect(x: left, y: (height - 10) / 2, width: 10, height: 10)
             let textLeft = icon ? left + 13 : left
