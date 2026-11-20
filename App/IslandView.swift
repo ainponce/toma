@@ -170,23 +170,41 @@ private struct BelowTheNotch<Content: View>: View {
     }
 }
 
-/// The record icon, "New Recording" and the island's shortcut, if it has one.
+/// The record dot, "New Recording" and the island's shortcut, if it has one: one row centered in the band under the
+/// notch, with the shortcut's keys in a cap light enough to read on black.
 private struct PeekRow: View {
     let shortcut: KeyCombo?
 
     var body: some View {
-        HStack(spacing: 7) {
-            Image(systemName: "record.circle")
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(.red)
-                .font(.system(size: 12))
+        HStack(spacing: 8) {
+            RecordDot()
             Text("New Recording")
-                .font(.system(size: 12, weight: .medium))
-            if let shortcut { KeyCap(text: shortcut.shownString) }
+                .font(.system(size: 13, weight: .semibold))
+                .tracking(-0.1)
+            if let shortcut {
+                Text(verbatim: shortcut.shownString)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2.5)
+                    .background(Capsule().fill(.white.opacity(0.14)))
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.08), lineWidth: 0.5))
+            }
         }
         .foregroundStyle(.white)
         .lineLimit(1)
         .fixedSize()
+    }
+}
+
+/// A record button in miniature: a red dot inside a faint red ring.
+private struct RecordDot: View {
+    var body: some View {
+        ZStack {
+            Circle().strokeBorder(Color.red.opacity(0.45), lineWidth: 1.5)
+            Circle().fill(Color.red).padding(3.5)
+        }
+        .frame(width: 14, height: 14)
     }
 }
 

@@ -223,6 +223,11 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     /// (`settings`), with the camera on if it is allowed (`camera`) or with system audio By App (`byApp`), for
     /// screenshots; nothing is saved.
     func showcase(_ variant: String) {
+        // `peek`: the island as the pointer over the notch shows it; with no pointer there, it stays.
+        if variant == "peek" {
+            send(.pointerEntered)
+            return
+        }
         guard let panel = model.panel else { return }
         switch variant {
         case "display", "settings", "camera": panel.selection.mode = .display

@@ -57,6 +57,10 @@ public enum IslandGeometry {
     public static let pillTopInset = 38.0
     /// The width of each recording wing beside the notch: the time on the left, the microphone on the right.
     public static let wingWidth = 84.0
+    /// Under a notch, the peek's band below the menu bar: room for its row with 9 pt above and below.
+    public static let peekBand = 36.0
+    /// Under a notch, the peek is never narrower than this, so its row has 24 pt on each side.
+    public static let peekMinWidth = 248.0
     /// The hover zone at the top center of a screen without a notch.
     public static let hoverZoneSize = CGSize(width: 60, height: 8)
 
@@ -66,7 +70,8 @@ public enum IslandGeometry {
         let (width, height, radius): (Double, Double, Double) =
             switch state {
             case .rest: (notchWidth, top.menuBarHeight, 13)
-            case .peek: (notchWidth + 90, top.menuBarHeight + 14, 21)
+            // A band of `peekBand` under the notch, wide enough for its row whatever the notch's width.
+            case .peek: (max(notchWidth + 64, peekMinWidth), top.menuBarHeight + peekBand, 18)
             case .open: (700, 400, 34)
             case .choosing: (560, 48, 24)
             case .countdown: (236, 214, 62)

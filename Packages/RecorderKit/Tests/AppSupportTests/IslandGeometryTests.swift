@@ -21,7 +21,10 @@ import Testing
         #expect(top.notch == CGRect(x: 662, y: 950, width: 188, height: 32))
         #expect(top.menuBarHeight == 32)
         #expect(IslandGeometry.shape(.rest, on: top) == IslandShape(width: 188, height: 32, bottomRadius: 13, roundsTopCorners: false))
-        #expect(IslandGeometry.shape(.peek, on: top) == IslandShape(width: 278, height: 46, bottomRadius: 21, roundsTopCorners: false))
+        #expect(IslandGeometry.shape(.peek, on: top) == IslandShape(width: 252, height: 68, bottomRadius: 18, roundsTopCorners: false))
+        // A narrow notch still gives the peek's row its room.
+        let narrow = ScreenTop(frame: top.frame, notch: CGRect(x: 700, y: 950, width: 120, height: 32), menuBarHeight: 32)
+        #expect(IslandGeometry.shape(.peek, on: narrow).width == IslandGeometry.peekMinWidth)
         #expect(IslandGeometry.shape(.open, on: top) == IslandShape(width: 700, height: 400, bottomRadius: 34, roundsTopCorners: false))
         #expect(IslandGeometry.shape(.choosing, on: top) == IslandShape(width: 560, height: 48, bottomRadius: 24, roundsTopCorners: false))
         #expect(IslandGeometry.frame(IslandGeometry.shape(.open, on: top), on: top) == CGRect(x: 406, y: 582, width: 700, height: 400))

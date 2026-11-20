@@ -487,7 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showcaseWindow = window
         case ("island", let variant):
             makeIsland()
-            island?.invoke()
+            if variant != "peek" { island?.invoke() }
             if let variant { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.island?.showcase(variant) } }
         case ("editor", let path?), ("export", let path?):
             let url = URL(fileURLWithPath: path).standardizedFileURL
