@@ -256,4 +256,86 @@ struct CalmZoomRenderTests {
         }
         #expect(inHole > 500 && darkened > 500, "\(inHole) \(darkened)")
     }
+
+    /// In a split's card the focus is the crop the card's zoom shows (`CardZoomPath`): its centre held where a crop of the
+    /// block's depth stays in the content, so near the card's edges it is the classic card's crop, and it never shows
+    /// past the content once settled. With a fixed point near the top and the bottom of the screen, at 2×.
+    @Test func aSplitsFocusIsTheCardsCropNearItsEdges() throws {
+        let project = try #require(CalmZoomProjects.projects["portraitSplit"])
+        let readable = LayoutTimeline.cameraReadable(take: project.take) { SegmentAvailability.classify($0, in: project.package) }
+        let t = 1.5
+        for (x, y) in [(0.3, 0.9), (0.7, 0.1), (0.05, 0.95), (0.95, 0.05)] {
+            func frame(_ mode: ZoomMode) throws -> RenderFrame {
+                let (_, document) = try golden("portraitSplit") { document, take, source in
+                    document.zoom.regions = [calmBlock(mode, take: take, source, from: 0.3, to: 1.9, x: x, y: y)]
+                }
+                return FrameEvaluator(
+                    take: project.take, events: project.events, document: document,
+                    outputSize: GoldenDocuments.outputSize(of: document), cameraReadable: readable
+                ).frame(at: t)
+            }
+            let calm = try frame(.highlight), classic = try frame(.classic)
+            let content = try #require(calm.screen?.rect)
+            let focus = try #require(calm.calmZoom?.focus)
+            let label = "(\(x), \(y)): \(focus) in \(content)"
+            // Inside the content, as settled as the spring is at 1.2 s in (2× to a few ten-thousandths).
+            #expect(
+                focus.x >= content.x - 0.5 && focus.y >= content.y - 0.5
+                    && focus.x + focus.width <= content.x + content.width + 0.5
+                    && focus.y + focus.height <= content.y + content.height + 0.5, "\(label)")
+            // What the classic card shows of its content: the card's rect through its content's transform, backwards.
+            let card = try #require(classic.card)
+            #expect(classic.screen?.rect == content && card.mix == 1)
+            let half = SIMD2<Double>(classic.outputSize) / 2
+            let origin = card.content.center + (SIMD2(card.rect.x, card.rect.y) - half) / card.content.depth
+            let shown = Rect(
+                x: origin.x, y: origin.y, width: card.rect.width / card.content.depth,
+                height: card.rect.height / card.content.depth)
+            // Vertically, where the stage's crop does not fit the 16:9 screen of a 9:16 output, the classic card's crop;
+            // horizontally too away from the screen's sides.
+            #expect(abs(focus.y - shown.y) < 0.5 && abs(focus.height - shown.height) < 0.5, "\(label) \(shown)")
+            if x > 0.1, x < 0.9 {
+                #expect(abs(focus.x - shown.x) < 0.5 && abs(focus.width - shown.width) < 0.5, "\(label) \(shown)")
+            }
+        }
+    }
+
+    /// A block following the cursor in a split's card, at 1.25× (where the stage's crop of a 9:16 output leaves the
+    /// centre far off the card's own range): in every frame the focus's centre is where a crop of the depth it is placed
+    /// at (the block's, or the instant's past it) stays in the screen's content, so once settled the focus never shows
+    /// past the content.
+    @Test func aSplitFollowingTheCursorKeepsTheFocusInTheCard() throws {
+        let (project, document) = try golden("portraitSplit") { document, take, source in
+            var block = calmBlock(.dim, take: take, source, from: 0.2, to: 1.95, depth: 1.25)
+            block.focus = .follow
+            document.zoom.regions = [block]
+        }
+        let readable = LayoutTimeline.cameraReadable(take: project.take) { SegmentAvailability.classify($0, in: project.package) }
+        let evaluator = FrameEvaluator(
+            take: project.take, events: project.events, document: document, outputSize: GoldenDocuments.outputSize(of: document),
+            cameraReadable: readable)
+        let calm = try #require(evaluator.paths.calmZoom)
+        var settled = 0
+        for t in stride(from: 0.2, to: 2.0, by: 1.0 / 60) {
+            let frame = evaluator.frame(at: t)
+            // In the card: not while the Bubble of [2, 3) s takes the screen out of it.
+            guard let focus = frame.calmZoom?.focus, frame.card?.mix == 1,
+                  let state = calm.state(atOutput: TimeMap.outputNanoseconds(seconds: t))
+            else { continue }
+            let content = try #require(frame.screen?.rect)
+            let middle = (SIMD2(focus.x, focus.y) + SIMD2(focus.width, focus.height) / 2 - SIMD2(content.x, content.y))
+                / SIMD2(content.width, content.height)
+            let edge = 1 / (2 * max(state.depth, state.blockDepth))
+            #expect(
+                middle.x >= edge - 1e-9 && middle.x <= 1 - edge + 1e-9 && middle.y >= edge - 1e-9 && middle.y <= 1 - edge + 1e-9,
+                "at \(t) s: \(middle), \(edge)")
+            guard abs(state.depth - 1.25) < 1e-3 else { continue }
+            #expect(
+                focus.x >= content.x - 0.5 && focus.y >= content.y - 0.5
+                    && focus.x + focus.width <= content.x + content.width + 0.5
+                    && focus.y + focus.height <= content.y + content.height + 0.5, "at \(t) s: \(focus) in \(content)")
+            settled += 1
+        }
+        #expect(settled > 30, "\(settled)")
+    }
 }
