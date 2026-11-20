@@ -407,3 +407,137 @@ private func onTheLayer(_ rect: Rect, _ layer: ScreenLayer) -> Rect {
         #expect(close(box.y, Double(export.count) * AnnotationTypography.lineHeight(of: font4K)), "at \(width) of the line")
     }
 }
+
+@Test func outputTextsBreakTheSameAtEverySize() throws {
+    // A recording of 1539.4 × 1000, like the recording: 1108 × 720 in the preview and 3326 × 2160 at 4K, 0.06 % apart in
+    // their proportion. Labels from 0.15 to 0.45 of the frame wide, a step of 0.0001: the lines that draw them (as the
+    // drawing asks for them, from the layer's box) and their boxes, in the frame's height, are the same at both sizes.
+    let take = fourSecondTake(globalFrame: Rect(x: 0, y: 0, width: 1539.4, height: 1000))
+    let words = TextAnnotation(string: "Uno dos tres cuatro cinco seis", preset: .label, size: 0.05)
+    var doc = document(take, [], (0..<3000).map { i in
+        annotation(i + 1, .whole, .text(words), rect: NormalizedRect(x: 0.05, y: 0.1, width: 0.15 + Double(i) * 0.0001, height: 0.1))
+    })
+    doc.aspect = .auto
+    let ratio = StageLayout.contentRatio(take: take, document: doc, events: [])
+    let preview = StageLayout.outputSize(aspect: .auto, shortSide: 720, contentRatio: ratio)
+    let export = StageLayout.outputSize(aspect: .auto, shortSide: 2160, contentRatio: ratio)
+    try #require(preview == [1108, 720] && export == [3326, 2160])
+    func layers(_ size: SIMD2<Int>) -> [AnnotationLayer] {
+        AnnotationScene(document: doc, take: take, events: [], timeMap: TimeMap(sequence: doc.sequence), outputSize: size)
+            .output(atOutput: ns(1))
+    }
+    let small = layers(preview), large = layers(export)
+    try #require(small.count == 3000 && large.count == 3000)
+    var lines: [Int: Int] = [:]
+    var differences: [String] = []
+    for (a, b) in zip(small, large) {
+        let inPreview = AnnotationTypography.lines(of: words, width: a.rect.width, unit: a.unit)
+        let inExport = AnnotationTypography.lines(of: words, width: b.rect.width, unit: b.unit)
+        if inPreview != inExport || !close(a.rect.height / a.unit, b.rect.height / b.unit, 1e-9) { differences.append(a.id) }
+        lines[inPreview?.count ?? 0, default: 0] += 1
+    }
+    #expect(differences.isEmpty, "\(differences.count) differ: \(differences.prefix(5))")
+    // The sweep crosses several breaks.
+    #expect(lines.count >= 3, "\(lines)")
+}
+
+@Test func measuredTextIsHeldWhereItsAnchorLetsIt() throws {
+    // Four lines, about a quarter of the frame tall, at 0.95 of it (its stored height 0.01): held with the height it has,
+    // its centre in the frame; stuck to the recording at 1.45 of the content, inside 1.5 of it.
+    let take = fourSecondTake()
+    let four = AnnotationKind.text(TextAnnotation(string: "Uno\ndos\ntres\ncuatro", preset: .plain, size: 0.05))
+    let doc = document(take, [], [
+        annotation(1, over(0, 4), four, rect: NormalizedRect(x: 0.1, y: 0.95, width: 0.4, height: 0.01)),
+        annotation(2, stuck(0, 4), four, rect: NormalizedRect(x: 0.1, y: 1.45, width: 0.4, height: 0.01)),
+    ])
+    let frame = FrameEvaluator(take: take, events: [], document: doc, outputSize: [1280, 720]).frame(at: 1)
+    let output = try #require(frame.outputAnnotations.first), content = try #require(frame.contentAnnotations.first)
+    #expect(output.rect.height > 0.2 * 720 && close(output.rect.y + output.rect.height / 2, 720), "\(output.rect)")
+    #expect(close(output.rect.x, 128) && close(output.rect.width, 512))
+    let space = content.space
+    #expect(content.rect.height > 0.2 * space.height, "\(content.rect) in \(space)")
+    #expect(close(content.rect.y + content.rect.height, space.y + 1.5 * space.height), "\(content.rect) in \(space)")
+}
+
+@Test func eachFontIsItsDesign() throws {
+    // The system font, its rounded design, New York and SF Mono: four families, none falling back to another.
+    func font(_ design: TextFont, _ weight: TextWeight = .semibold, scale: Double = 1) throws -> CTFont {
+        let text = TextAnnotation(string: "x", preset: .plain, font: design, weight: weight, size: 0.05)
+        return try #require(AnnotationTypography.font(text, unit: 720, scale: scale), "\(design) \(weight)")
+    }
+    let fonts = try TextFont.allCases.map { try font($0) }
+    let families = fonts.map { CTFontCopyFamilyName($0) as String }
+    let names = fonts.map { CTFontCopyPostScriptName($0) as String }
+    #expect(TextFont.allCases == [.system, .rounded, .serif, .mono])
+    #expect(Set(families).count == 4, "\(families)")
+    let system = try #require(CTFontCreateUIFontForLanguage(.system, 36, "en" as CFString))
+    #expect(families[0] == CTFontCopyFamilyName(system) as String, "\(families)")
+    #expect(families[1].contains("Rounded"), "\(families)")
+    #expect(names[2].contains("NewYork"), "\(names)")
+    #expect(CTFontGetSymbolicTraits(fonts[3]).contains(.traitMonoSpace) && !CTFontGetSymbolicTraits(fonts[0]).contains(.traitMonoSpace))
+    // Each in its four weights, heavier one after the other, at the text's size and at its scale.
+    for design in TextFont.allCases {
+        let weights = try TextWeight.allCases.map { weight -> Double in
+            let traits = CTFontCopyTraits(try font(design, weight)) as NSDictionary
+            return try #require(traits[kCTFontWeightTrait] as? Double)
+        }
+        #expect(zip(weights, weights.dropFirst()).allSatisfy { $0 < $1 }, "\(design): \(weights)")
+        let (size, scaled) = (CTFontGetSize(try font(design)), CTFontGetSize(try font(design, scale: 2)))
+        #expect(size == 36 && scaled == 72, "\(design)")
+    }
+}
+
+@Test func aStillStageMeasuresOnce() throws {
+    // A text and a speech bubble stuck to the recording and a text of the output: the output's are measured with the scene,
+    // the stuck ones on the first frame (lines and line height, each); a second frame of the same stage measures nothing,
+    // and a screen twice as large, the same proportion, only its line heights.
+    let take = fourSecondTake()
+    let words = TextAnnotation(string: "Uno dos tres cuatro", preset: .label, size: 0.05)
+    let bubble = AnnotationKind.callout(CalloutAnnotation(text: words, target: NormalizedPoint(x: 0.9, y: 0.9)))
+    let doc = document(take, [], [
+        annotation(1, stuck(0, 4), .text(words)), annotation(2, stuck(0, 4), bubble), annotation(3, over(0, 4), .text(words)),
+    ])
+    let timeMap = TimeMap(sequence: doc.sequence)
+    let scene = AnnotationScene(document: doc, take: take, events: [], timeMap: timeMap, outputSize: [1280, 720])
+    #expect(scene.measureCount == 2)
+    let frames = FrameEvaluator(take: take, events: [], document: doc, outputSize: [1280, 720])
+    func content(_ t: Double, _ edit: (inout RenderFrame) -> Void = { _ in }) throws -> [AnnotationLayer] {
+        var frame = frames.frame(at: t)
+        edit(&frame)
+        let τ = ns(t)
+        return scene.content(atSource: try #require(timeMap.source(atOutput: τ)).source, output: τ, frame: frame)
+    }
+    let first = try content(1)
+    #expect(first.count == 2 && scene.measureCount == 2 + 4)
+    let second = try content(2.5)
+    #expect(second == first && scene.measureCount == 6)
+    #expect(scene.output(atOutput: ns(1)).count == 1 && scene.output(atOutput: ns(3)).count == 1 && scene.measureCount == 6)
+    // The same numbers as measuring from nothing.
+    #expect(close(first[0].rect.height, AnnotationTypography.box(of: words, width: first[0].rect.width, unit: first[0].unit).y))
+    let grown = try content(3) { frame in
+        guard var screen = frame.screen else { return }
+        screen.rect = Rect(x: screen.rect.x, y: screen.rect.y, width: 2 * screen.rect.width, height: 2 * screen.rect.height)
+        frame.screen = screen
+    }
+    #expect(scene.measureCount == 8)
+    #expect(close(grown[0].rect.height, AnnotationTypography.box(of: words, width: grown[0].rect.width, unit: grown[0].unit).y))
+}
+
+@Test func measuresAreSharedAcrossThreads() async throws {
+    // Frames asked for at once from many threads (the preview's and the export's queues), sharing the scene's measures:
+    // every one gets the same layers, and the texts are measured once for all of them.
+    let take = fourSecondTake()
+    let words = TextAnnotation(string: "Uno dos tres cuatro", preset: .label, size: 0.05)
+    let doc = document(take, [], (1...6).map { annotation($0, stuck(0, 4), .text(words)) })
+    let frames = FrameEvaluator(take: take, events: [], document: doc, outputSize: [1280, 720])
+    let timeMap = TimeMap(sequence: doc.sequence)
+    let scene = AnnotationScene(document: doc, take: take, events: [], timeMap: timeMap, outputSize: [1280, 720])
+    let frame = frames.frame(at: 1)
+    let source = try #require(timeMap.source(atOutput: ns(1))).source
+    let all = await withTaskGroup(of: [AnnotationLayer].self) { group in
+        for _ in 0..<16 { group.addTask { scene.content(atSource: source, output: ns(1), frame: frame) } }
+        return await group.reduce(into: [[AnnotationLayer]]()) { $0.append($1) }
+    }
+    #expect(all.count == 16 && all.allSatisfy { $0 == all[0] } && all[0].count == 6)
+    #expect(scene.measureCount == 6 * 2)
+}

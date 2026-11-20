@@ -549,13 +549,17 @@ public final class FrameRenderer: @unchecked Sendable {
     /// (`CameraLookResources.videos(of:)`: its person's mask, by a reader id that is no track of a take), then phase 3's
     /// imported clip and annotation clips (`mediaVideos(of:)`, `annotationVideos(of:)`, by reader ids that are no track
     /// either), all without a take. A part a layout hides is not in the frame (1c design §14.4), so it is not decoded.
+    /// Each once: a video two layers show at the same instant (a title card's blurred frame over the same one sharp,
+    /// `TitleCardScene`) is decoded, scheduled and taken once, where it first comes.
     func videos(of frame: RenderFrame) -> [DecodedKey] {
         let take = takeKey(of: frame)
-        return [
+        let keys = [
             frame.screen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime, take: take) },
             frame.previousScreen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime, take: take) },
             frame.camera.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime, take: take) },
         ].compactMap { $0 } + cameraLook.videos(of: frame) + mediaVideos(of: frame) + annotationVideos(of: frame)
+        var seen = Set<DecodedKey>()
+        return keys.filter { seen.insert($0).inserted }
     }
 
     /// The take of `frame`'s tracks as `TrackKey` names it: `nil` for the project's own (`RenderFrame.take`'s `nil`, or its
