@@ -1,6 +1,6 @@
 # Formato de proyecto de Toma
 
-**Versión 3 (`formatVersion: 3`), inestable hasta la fase 4.** Los nombres y campos todavía pueden cambiar. A partir del primer release público, cada cambio de formato viene con su migración y sus pruebas de compatibilidad. Los lectores de esta versión leen también los paquetes de las versiones 1 y 2, que se quedan en su versión hasta que el usuario los edita (ver [Cambios de la versión 3](#cambios-de-la-versión-3)).
+**Versión 5 (`formatVersion` hasta 5, los paquetes nuevos en 3; documento de edición 5), inestable hasta la fase 4.** Los nombres y campos todavía pueden cambiar. A partir del primer release público, cada cambio de formato viene con su migración y sus pruebas de compatibilidad. Los lectores de esta versión leen también los paquetes de las versiones 1 a 4 y los documentos 1 a 4, que se quedan en su versión hasta que el usuario los edita (ver [Cambios de la versión 3](#cambios-de-la-versión-3) y [Cambios del documento 5](#cambios-del-documento-5)).
 
 El formato es público para que cualquier herramienta pueda leer, verificar o recuperar una grabación sin la app. Las reglas de este documento son las que sigue el código de `Packages/RecorderKit/Sources/ProjectFormat`.
 
@@ -287,6 +287,7 @@ Una toma puede tener varias pistas `systemAudio`, con ids distintos. En la fase 
 | `recoveredAfterCrash` | | Lo cerró la recuperación; `endHostTime` es el final de lo legible. |
 | `empty` | | La recuperación encontró el archivo vacío o sin ninguna muestra; `endHostTime` es igual a `startHostTime`. |
 | `unreadable` | `bytes` | La recuperación no pudo leer un archivo no vacío de `bytes` bytes. El archivo queda intacto. |
+| `rotated` | | Desde las fases 4 y 5. La pista siguió en un segmento nuevo después de un tiempo fijo (10 s), sin cortar la grabación. Solo en el paquete de trabajo de la Repetición, nunca en una toma de la biblioteca (ver [Cambios del documento 5](#cambios-del-documento-5)). |
 
 ## `events.jsonl`
 
@@ -341,6 +342,7 @@ Reglas de escritura:
 | `cursorImage` | `hash`, `hotspot`, `size`, `kind` | Desde la versión 3. macOS muestra este cursor desde `t`. Su imagen es `takes/<toma>/cursors/<hash>.png` (ver [`cursors/`](#cursors)), y la línea se escribe recién cuando la imagen está en el disco. `hotspot`: dónde está el puntero dentro de la imagen, como fracción de su ancho (`x`) y de su alto (`y`) desde arriba a la izquierda. `size`: el tamaño del cursor en puntos (`width`, `height`). `kind`, opcional: el cursor del sistema cuyos píxeles tiene en esa Mac, si es uno de `arrow`, `iBeam`, `pointingHand`, `openHand`, `closedHand`, `crosshair`, `resizeLeftRight`, `resizeUpDown` o `notAllowed`; si falta, o es uno que el lector no conoce (una versión más nueva puede sumar formas), se usa la imagen grabada y la línea vale igual. La grabación mira el cursor cada 1/30 s y escribe una línea solo cuando cambia. |
 | `scroll` | `dx`, `dy`, `x`, `y` | Desde la versión 3. El usuario hizo scroll `dx`, `dy` puntos (los de `scrollingDeltaX` y `scrollingDeltaY` de macOS; con un mouse que cuenta líneas, 10 puntos por línea), la suma de cada 1/30 s en una línea, con el puntero en (`x`, `y`) al final. |
 | `keyActivity` | | Desde la versión 3. Se apretó al menos una tecla en los 250 ms que empiezan en `t` (un múltiplo de 250 ms de `HostTime`): una línea por ventana con al menos una tecla. Es actividad, nunca contenido: ni qué teclas, ni sus códigos, ni los modificadores, ni cuántas, y la ventana fija borra el ritmo entre teclas. Nunca se escribe con la entrada segura de macOS activa (los campos de contraseña, la entrada segura de Terminal) ni si el usuario lo apagó en los ajustes. |
+| `focus` | `x`, `y`, `width`, `height`, `kind` | Desde las fases 4 y 5, sin subir la versión del paquete. El foco del teclado está en este rectángulo desde `t`, en puntos globales como el cursor: (`x`, `y`) su esquina de arriba a la izquierda y `width`, `height` su tamaño. `kind` es `element` (el elemento con el foco) o `caret` (el cursor de texto dentro de él). Solo en las tomas en que el usuario eligió seguir el foco; nunca el contenido, el rol ni el nombre del elemento, solo el rectángulo. Un lector que no lo conoce salta la línea (ver [Cambios del documento 5](#cambios-del-documento-5)). |
 
 Una línea de cada tipo, exactamente como se escribe:
 
@@ -362,6 +364,8 @@ Una línea de cada tipo, exactamente como se escribe:
 {"hash":"3f2a9c0e3f2a9c0e3f2a9c0e3f2a9c0e","hotspot":{"x":0.16,"y":0.12},"kind":"arrow","size":{"height":32,"width":24},"t":5,"type":"cursorImage"}
 {"dx":0,"dy":-42.5,"t":5,"type":"scroll","x":640.5,"y":402}
 {"t":5,"type":"keyActivity"}
+{"height":24,"kind":"element","t":5,"type":"focus","width":320.25,"x":100,"y":80}
+{"height":18,"kind":"caret","t":6,"type":"focus","width":2,"x":640.5,"y":-40}
 ```
 
 ### Lectura después de un crash
@@ -2429,3 +2433,63 @@ Compatibilidad:
 
 - **El lector acepta 1…5** (`Manifest.supportedFormatVersions`, `1...5`) y rechaza cualquier otra antes de decodificar el manifiesto: un manifiesto de la versión 6 o más es de una Toma más nueva (*versión más nueva* en la biblioteca, *para reparar* en la recuperación, que no lo toca).
 - La app de la fase 2 (lector de `1...4`) dice que un paquete v5 es de una versión más nueva y no lo toca; la de la fase 1 (`1...3`), lo mismo. Un paquete de una toma sigue en 3 o 4 aunque tenga pistas por app, clips, audio o guion: su manifiesto lo leen igual (lo que pueden abrir lo decide además la versión del documento de edición).
+
+## Cambios del documento 5
+
+Desde las fases 4 y 5, el documento de edición es la versión 5 (`EditDocument.currentVersion`): una sola versión nueva, aditiva, con lo que las fases 4 y 5 guardan en el documento (diseño de las fases 4 y 5, §4.1 y §11). Suma el título y el resumen del proyecto y el zoom automático que sigue el foco del teclado. La versión del documento no cambia la del paquete; un lector del documento 5 lee los documentos 1, 2, 3 y 4 migrándolos y rechaza el 6 o uno más nuevo (`newerVersion`), esté en `edit.json` o en el `create` del registro.
+
+| Lugar | Qué es | Legado (lo que escribe la migración) |
+|---|---|---|
+| `info` | Opcional: el título y el resumen del proyecto (`ProjectInfo`), que leen la página de compartir, la descripción para YouTube y la IA de la fase 5; el render no los dibuja | Ausente |
+| `info.title` | Texto, hasta 200 caracteres (`ProjectInfo.titleLimit`); `""` es sin título | — |
+| `info.summary` | Texto, hasta 2000 caracteres (`ProjectInfo.summaryLimit`), saltos de línea incluidos; `""` es sin resumen | — |
+| `zoom.auto.followsFocus` | Si los bloques automáticos siguen el foco del teclado (un campo, el cursor de texto) donde la toma lo grabó con eventos `focus` | `false` |
+
+Un documento 5 con todo lo nuevo, en las partes que cambian:
+
+```json
+{
+  "frameRate" : 60,
+  "info" : {
+    "summary" : "Cómo grabar, editar y compartir.\nEn dos minutos.",
+    "title" : "Demo de Toma"
+  },
+  "keys" : { … },
+  "zoom" : {
+    "auto" : {
+      "depth" : 2,
+      "enabled" : true,
+      "follow" : true,
+      "followsFocus" : true,
+      "groupGap" : 2.5,
+      …
+    },
+    …
+  }
+}
+```
+
+- **Lo que se omite.** `info` en un proyecto sin título ni resumen: nunca se escribe como `null`, y un documento sin `info` es el legado. `followsFocus` se escribe siempre en un documento 5, y un cambio que lo saca se rechaza. Un `zoom.auto` sin `followsFocus` se lee como `false`, porque así lo guardan la fase 3 y las anteriores en sus estilos (`default-style.json` y el `style.json` de un `.tomastyle`).
+- **Un documento nuevo** sigue el foco solo si su toma tiene eventos `focus` (diseño de las fases 4 y 5, §4.1); lo decide quien arma el documento nuevo en el hito 4a. Sin eso, `followsFocus` es `false` y el documento nuevo se escribe en la versión más vieja que lo contiene, como antes.
+
+### La migración del documento 4 al 5
+
+- **La migración 4 → 5 es aditiva**: una fila más de la tabla de `DocumentMigration` (`isAdditive(from: 4)`). Agrega `/zoom/auto/followsFocus` `false` (`addedPlaces[4]`), sobre lo que ya hubiera ahí, y nada más: `info` queda ausente. Sin ninguna otra edición, el documento migrado dibuja y suena exactamente lo que dibujaba y sonaba en la fase 3 (`make golden-3`).
+- Lo que el documento 5 deja ausente en su valor legado, `/info`, no existe en un documento 4: uno hecho a mano con un `info` está dañado, la migración lo rechaza (`invalidDocument` en `/info`) y se lee como `DecodingError`, nunca como más nuevo.
+- `DocumentMigration.reverted` baja de 5 a 4 (y de ahí a 3, 2 y 1) solo si `followsFocus` es `false` y no hay `info`: un documento que usa algo de las fases 4 y 5 no tiene versión 4.
+- **Qué no conmuta con 4 → 5.** `touchesAddedFields(_:from: 4)` es verdadero para la raíz, `/documentVersion` y `/zoom/auto/followsFocus`, y para un valor que tiene ese lugar con otro valor. Un cambio de la fase 3 que escribe `/zoom/auto` entero (aplicar un estilo) se lleva a través del `migrate` (`carried`) y gana `followsFocus: false`. Ninguna acción de la fase 3 escribe un lugar agregado, así que deshacer cruza la migración.
+- **Antes de la primera edición, en el disco sigue en su versión.** Un proyecto de la fase 3 (documento 4) que en las fases 4 y 5 solo se abre, se reproduce o se exporta no cambia, y la app de la fase 3 lo sigue abriendo (`openingAVersion4DocumentWritesNothing`). La primera edición agrega en **una sola escritura** el `migrate` de cada versión que falta y el paso: `{"from":4,"seq":N,"to":5,"type":"migrate"}` y el `do` en un proyecto de la fase 3 (`firstEditOfAVersion4WritesMigrateAndTheStep`); `2 → 3`, `3 → 4`, `4 → 5` y el `do` en uno de 1c o en una toma nueva; desde `1 → 2` en uno de 1b. Un registro que termina en uno o más `migrate` sin nada después es esa escritura cortada: al leer se truncan y el proyecto abre como antes de la edición.
+
+### El registro con el documento 5
+
+- **Las etiquetas** (`label`) nuevas van después de las de la fase 3: `project.title` y `project.summary`. Los hitos de las fases 4 y 5 suman las suyas al final.
+- **El título y el resumen** (`InfoCommands`) se cambian con un `set` de `/info` entero, con `/info` como destino: tipear en un campo es un solo grupo de deshacer. Cada texto se guarda sin espacios ni saltos de línea en sus extremos y recortado a su límite, y un título y un resumen vacíos a la vez sacan `info` (un `set` a `null`), como en el documento legado.
+
+### La validación
+
+- **El largo de `info`** (`DocumentRules.problems(in:)`): un título de más de 200 caracteres o un resumen de más de 2000 (contados como `String.count`, así un emoji de varios escalares es uno) es un problema (`infoTooLong`, con `title` o `summary`). El editor rechaza un paso que deja uno, y un documento hecho a mano con uno abre de solo lectura, como con los problemas de la fase 3.
+
+### Lo que suma la captura sin subir la versión
+
+- **El evento `focus`** (ver [Tipos](#tipos)) es aditivo: no sube el manifiesto ni el documento. Un lector que no lo conoce, como el de la fase 3, salta esas líneas y las cuenta en `skippedLines`, como cualquier línea de un tipo que no entiende; los demás eventos siguen escribiéndose byte por byte igual (`focusEventRoundTripsAndOldKindsStay`). Una línea con un `kind` que no es `element` ni `caret`, o sin uno de sus campos, también se salta.
+- **El motivo de cierre `rotated`** (ver [`manifest.json`](#manifestjson)) es un valor más de `endReason`. Solo lo escribe la Repetición en su paquete de trabajo, fuera de la biblioteca (diseño de las fases 4 y 5, §10.2): un manifiesto con un `rotated` no lo decodifica un lector de la fase 3, así que nunca está en una toma del usuario.

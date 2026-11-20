@@ -798,8 +798,9 @@ enum DocumentV4Example {
     let v3 = try parsed(DocumentV3Example.canonical)
     #expect(v3["documentVersion"] == .integer(3))
     let document = try EditDocument.decode(Data(DocumentV3Example.canonical.utf8))
-    #expect(EditDocument.currentVersion == 4)
-    #expect(document.documentVersion == 4)
+    // Of version 5 since phases 4 and 5 (`Document5Tests`): migrated through 4.
+    #expect(document.documentVersion == EditDocument.currentVersion)
+    #expect(DocumentMigration.reverted(try JSONValue(encoding: document), to: 4) == (try DocumentMigration.migrate(v3, from: 3)))
     #expect(document.annotations == .legacy)
     #expect(document.music == .legacy)
     #expect(document.markers == .legacy)
@@ -833,9 +834,9 @@ enum DocumentV4Example {
     #expect(try EditDocument.decode(json: v2) == (try migrated2.decoded(as: EditDocument.self)))
     #expect(try EditDocument.decode(Data(DocumentV1Example.canonical.utf8)) == DesignExample.document)
     #expect(try EditDocument.decode(Data(DesignExample.canonical.utf8)) == DesignExample.document)
-    #expect(DesignExample.document.documentVersion == 4)
-    // Every step is what decoding does, and its JSON is the document's.
-    #expect(migrated1 == (try JSONValue(encoding: DesignExample.document)))
+    #expect(DesignExample.document.documentVersion == EditDocument.currentVersion)
+    // Every step is what decoding does, and its JSON is the document's in version 4.
+    #expect(migrated1 == DocumentMigration.reverted(try JSONValue(encoding: DesignExample.document), to: 4))
     #expect(migrated2 == migrated1)
 }
 
@@ -858,7 +859,7 @@ private let addedFrom3: [String: JSONValue] = [
     #expect(DocumentMigration.addedPlaces[3] == [
         "/annotations", "/markers", "/music", "/sequence/*/audioShift", "/zoom/auto/mode", "/audio/tracks/*/ranges",
     ])
-    #expect(DocumentMigration.addedPlaces.keys.sorted() == [1, 2, 3])
+    #expect(DocumentMigration.addedPlaces.keys.sorted() == [1, 2, 3, 4])
     var rest = migrated
     rest["documentVersion"] = .integer(3)
     for (place, value) in addedFrom3 {
@@ -917,8 +918,10 @@ private let addedFrom3: [String: JSONValue] = [
     #expect(throws: EditChangeError.invalidDocument("/sequence/1")) { try DocumentMigration.migrate(clipNotAnObject, from: 3) }
 
     #expect(DocumentMigration.isAdditive(from: 3))
-    #expect(!DocumentMigration.isAdditive(from: 4))
-    for (document, version) in [(v3, 2), (v3, 4), (migrated, 3), (migrated, 4)] {
+    // From 4 too, since phases 4 and 5 (`Document5Tests`).
+    #expect(DocumentMigration.isAdditive(from: 4))
+    #expect(!DocumentMigration.isAdditive(from: 5))
+    for (document, version) in [(v3, 2), (v3, 4), (migrated, 3), (migrated, 5)] {
         #expect(throws: EditChangeError.invalidDocument("/documentVersion"), "\(version)") {
             try DocumentMigration.migrate(document, from: version)
         }
@@ -947,9 +950,10 @@ private let addedFrom3: [String: JSONValue] = [
 }
 
 @Test func version4ExampleRoundTripsByteForByte() throws {
+    // Since phases 4 and 5 the document is of version 5 (`Document5Tests`): the example is what it is in version 4.
     let document = DocumentV4Example.document
-    #expect(document.documentVersion == 4)
-    #expect(try pretty(document) == DocumentV4Example.canonical)
+    #expect(document.documentVersion == EditDocument.currentVersion)
+    #expect(try pretty(DocumentMigration.reverted(JSONValue(encoding: document), to: 4)) == DocumentV4Example.canonical)
     #expect(try EditDocument.decode(Data(DocumentV4Example.canonical.utf8)) == document)
     #expect(try EditDocument.decode(json: parsed(DocumentV4Example.canonical)) == document)
     #expect(try EditDocument.decode(ProjectJSON.compactEncoder().encode(document)) == document)
@@ -1217,25 +1221,26 @@ private let addedFrom3: [String: JSONValue] = [
     }
 }
 
-@Test func version5IsRefused() throws {
-    #expect(throws: EditDocumentError.newerVersion(5)) {
-        try EditDocument.decode(Data(#"{"documentVersion":5,"aspect":"4:3"}"#.utf8))
+@Test func version6IsRefused() throws {
+    // Of version 6 since phases 4 and 5, whose document is of version 5.
+    #expect(throws: EditDocumentError.newerVersion(6)) {
+        try EditDocument.decode(Data(#"{"documentVersion":6,"aspect":"4:3"}"#.utf8))
     }
-    let newer = DocumentV4Example.canonical.replacingOccurrences(of: "\"documentVersion\" : 4", with: "\"documentVersion\" : 5")
+    let newer = DocumentV4Example.canonical.replacingOccurrences(of: "\"documentVersion\" : 4", with: "\"documentVersion\" : 6")
     #expect(newer != DocumentV4Example.canonical)
-    #expect(throws: EditDocumentError.newerVersion(5)) { try EditDocument.decode(Data(newer.utf8)) }
-    #expect(throws: EditDocumentError.newerVersion(5)) { try EditDocument.decode(json: parsed(newer)) }
-    // Inside the `create` of a log too, and a `migrate` to 5.
-    let line = #"{"app":{"name":"Toma","version":"0.6.0"},"document":"# + (try compact(parsed(newer))) + #","seq":1,"type":"create"}"#
-    #expect(throws: EditDocumentError.newerVersion(5)) { try EditLogEntry(jsonLine: line) }
+    #expect(throws: EditDocumentError.newerVersion(6)) { try EditDocument.decode(Data(newer.utf8)) }
+    #expect(throws: EditDocumentError.newerVersion(6)) { try EditDocument.decode(json: parsed(newer)) }
+    // Inside the `create` of a log too, and a `migrate` to 6.
+    let line = #"{"app":{"name":"Toma","version":"0.7.0"},"document":"# + (try compact(parsed(newer))) + #","seq":1,"type":"create"}"#
+    #expect(throws: EditDocumentError.newerVersion(6)) { try EditLogEntry(jsonLine: line) }
     try withTemporaryDirectory { dir in
         let url = dir.appending(path: "edit-log.jsonl")
         try Data((line + "\n").utf8).write(to: url)
-        #expect(throws: EditDocumentError.newerVersion(5)) { try EditLogReader.read(url) }
+        #expect(throws: EditDocumentError.newerVersion(6)) { try EditLogReader.read(url) }
         let create = EditLogEntry.create(seq: 1, document: DocumentV4Example.document, app: AppInfo(name: "Toma", version: "0.5.0"))
-        let migrate = try EditLogEntry.migrate(seq: 2, from: 4, to: 5).jsonLine()
+        let migrate = try EditLogEntry.migrate(seq: 2, from: 5, to: 6).jsonLine()
         try Data((try create.jsonLine() + "\n" + migrate + "\n").utf8).write(to: url)
-        #expect(throws: EditDocumentError.newerVersion(5)) { try EditLogReader.read(url) }
+        #expect(throws: EditDocumentError.newerVersion(6)) { try EditLogReader.read(url) }
         // A `migrate` to 4 is one this app follows.
         let v3 = EditLogEntry.create(seq: 1, document: DocumentV3Example.document, app: AppInfo(name: "Toma", version: "0.4.0"))
         try Data((try v3.jsonLine(writingDocumentAt: 3) + "\n" + EditLogEntry.migrate(seq: 2, from: 3, to: 4).jsonLine() + "\n").utf8)

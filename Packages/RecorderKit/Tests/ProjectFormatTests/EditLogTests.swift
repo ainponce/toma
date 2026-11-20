@@ -56,7 +56,7 @@ private enum SmallDocument {
         camera: CameraPlan(show: true, initial: [:], changes: []),
         audio: AudioPlan(limiter: false, tracks: [:]))
 
-    /// In `documentVersion` 4, with the fields of phases 2 and 3 at their legacy values (no `transcript`).
+    /// In `documentVersion` 5, with the fields of phases 2 to 5 at their legacy values (no `transcript` nor `info`).
     static let json = #"{"annotations":{"items":[]},"aspect":"16:9","audio":{"limiter":false,"normalize":false,"tracks":{}},"#
         + #""camera":{"background":"original","border":{"color":[1,1,1,1],"width":0},"changes":[],"#
         + #""framing":{"center":{"x":0.5,"y":0.5},"mode":"center","zoom":1},"initial":{},"layout":{"kind":"bubble"},"#
@@ -65,7 +65,7 @@ private enum SmallDocument {
         + #""captions":{"show":false,"style":{"highlight":true,"highlightColor":[1,0.8392156862745098,0.0392156862745098,1],"#
         + #""position":"bottom","preset":"bold","size":"medium","uppercase":false}},"#
         + #""cursor":{"clickEffect":"none","clickSound":"none","clickSoundGain":0.5,"hideWhenIdle":false,"idleDelay":2,"#
-        + #""motionBlur":0,"scale":1,"show":true,"smoothing":"off","style":"toma"},"documentVersion":4,"frameRate":60,"#
+        + #""motionBlur":0,"scale":1,"show":true,"smoothing":"off","style":"toma"},"documentVersion":5,"frameRate":60,"#
         + #""keys":{"mode":"off","position":"bottomCenter","size":"medium"},"#
         + #""logSequence":0,"markers":{"items":[]},"#
         + #""music":{"ducking":{"amount":-12,"attack":0.3,"enabled":true,"release":0.8},"items":[]},"#
@@ -74,7 +74,8 @@ private enum SmallDocument {
         + #""style":{"background":{"type":"wallpaper","wallpaper":"aurora-1"},"backgroundBlur":0,"cornerRadius":0.012,"#
         + #""frame":{"type":"none"},"geometryTransition":"none","padding":0.08,"reframe":"fit","screenSampling":"bilinear","#
         + #""shadow":0},"#
-        + #""zoom":{"auto":{"depth":2,"enabled":false,"follow":true,"groupGap":2.5,"holdWhileTyping":true,"leadIn":0.5,"#
+        + #""zoom":{"auto":{"depth":2,"enabled":false,"follow":true,"followsFocus":false,"groupGap":2.5,"holdWhileTyping":true,"#
+        + #""leadIn":0.5,"#
         + #""leadOut":1,"mode":"classic","planner":"autoZoom-1","triggers":"clicks"},"motionBlur":0,"regions":[],"show":true,"#
         + #""spring":{"damping":1,"response":0.7},"suppressed":[]}}"#
 }
@@ -256,22 +257,22 @@ private enum SmallDocument {
     try withTemporaryDirectory { dir in
         let url = dir.appending(path: "edit-log.jsonl")
         let line = try EditLogEntry.create(seq: 1, document: DesignExample.document, app: app).jsonLine()
-        let newer = line.replacingOccurrences(of: #""documentVersion":4"#, with: #""documentVersion":5"#)
+        let newer = line.replacingOccurrences(of: #""documentVersion":5"#, with: #""documentVersion":6"#)
         #expect(newer != line)
-        #expect(throws: EditDocumentError.newerVersion(5)) { try EditLogEntry(jsonLine: newer) }
+        #expect(throws: EditDocumentError.newerVersion(6)) { try EditLogEntry(jsonLine: newer) }
         // Thrown, never read as damage, which would be repaired: a newer app wrote it.
         try Data((newer + "\n").utf8).write(to: url)
-        #expect(throws: EditDocumentError.newerVersion(5)) { try EditLogReader.read(url) }
+        #expect(throws: EditDocumentError.newerVersion(6)) { try EditLogReader.read(url) }
 
         // The same for a `migrate` to a newer documentVersion; one to this app's is a line like any other (followed by
         // one: a `migrate` the entries end with is a first edit cut short, left out).
         let padding = try doLine(2, group: 2, try set("/style/padding", 0.08, 0.1)).jsonLine()
         let undo = try EditLogEntry.undo(seq: 4, group: 2).jsonLine()
-        for (to, refused) in [(5, true), (4, false)] {
+        for (to, refused) in [(6, true), (5, false)] {
             let migrate = try EditLogEntry.migrate(seq: 3, from: to - 1, to: to).jsonLine()
             try Data([line, padding, migrate, undo].map { $0 + "\n" }.joined().utf8).write(to: url)
             if refused {
-                #expect(throws: EditDocumentError.newerVersion(5)) { try EditLogReader.read(url) }
+                #expect(throws: EditDocumentError.newerVersion(6)) { try EditLogReader.read(url) }
             } else {
                 #expect(try EditLogReader.read(url).entries.count == 4)
             }

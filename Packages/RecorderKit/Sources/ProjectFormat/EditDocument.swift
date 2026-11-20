@@ -12,13 +12,14 @@ import Foundation
 public struct EditDocument: Codable, Equatable, Sendable {
     /// The version of the document this app writes; it reads an older one migrated (`DocumentMigration`) and refuses a
     /// newer one (`decode(_:)`).
-    public static let currentVersion = 4
+    public static let currentVersion = 5
 
     /// The version of the document within format version 3: 1 in milestone 1b; 2 from 1c, with the camera's layouts
     /// and look (1c design §13.1); 3 from phase 2, with the transcription, the captions, the privacy blocks, the keys on
     /// screen and the new fields of the stage, the camera and the sound (phase 2 design §8); 4 from phase 3, with the
     /// annotations, the music, the markers, the clips with content, the cuts of the sound, the calm zooms and the volume
-    /// of a stretch (phase 3 design §10). A decoded document is always of `currentVersion`.
+    /// of a stretch (phase 3 design §10); 5 from phases 4 and 5, with the project's title and summary and the automatic
+    /// zoom that follows the keyboard's focus (fases 4 y 5 design §4.1). A decoded document is always of `currentVersion`.
     public var documentVersion: Int
     /// The `seq` of the last line of the edit log this document already includes.
     public var logSequence: Int
@@ -45,6 +46,10 @@ public struct EditDocument: Codable, Equatable, Sendable {
     public var annotations: AnnotationPlan
     public var music: MusicPlan
     public var markers: MarkerPlan
+    // Version 5 (fases 4 y 5 design §4.1). Its default is the legacy: no `info`, left out of the JSON, as the migration
+    // from version 4 leaves it.
+    /// The project's title and summary, `nil` until one is given.
+    public var info: ProjectInfo?
 
     public init(
         documentVersion: Int,
@@ -64,7 +69,8 @@ public struct EditDocument: Codable, Equatable, Sendable {
         keys: KeyOverlayPlan = .legacy,
         annotations: AnnotationPlan = .legacy,
         music: MusicPlan = .legacy,
-        markers: MarkerPlan = .legacy
+        markers: MarkerPlan = .legacy,
+        info: ProjectInfo? = nil
     ) {
         self.documentVersion = documentVersion
         self.logSequence = logSequence
@@ -84,6 +90,7 @@ public struct EditDocument: Codable, Equatable, Sendable {
         self.annotations = annotations
         self.music = music
         self.markers = markers
+        self.info = info
     }
 
     /// Decodes an encoded document with `ProjectJSON.decoder()`, as `init(from:)` does: an older one migrated to
@@ -118,6 +125,7 @@ public struct EditDocument: Codable, Equatable, Sendable {
         case documentVersion, logSequence, aspect, frameRate, sequence, screens, style, cursor, zoom, camera, audio
         case transcript, captions, privacy, keys
         case annotations, music, markers
+        case info
     }
 
     /// Reads `documentVersion` first, on its own: a document newer than `currentVersion`, which this version may not
@@ -161,7 +169,8 @@ public struct EditDocument: Codable, Equatable, Sendable {
             keys: try container.decode(KeyOverlayPlan.self, forKey: .keys),
             annotations: try container.decode(AnnotationPlan.self, forKey: .annotations),
             music: try container.decode(MusicPlan.self, forKey: .music),
-            markers: try container.decode(MarkerPlan.self, forKey: .markers))
+            markers: try container.decode(MarkerPlan.self, forKey: .markers),
+            info: try container.decodeIfPresent(ProjectInfo.self, forKey: .info))
     }
 
     /// `json`, a document of `version`, migrated up to `currentVersion`.
@@ -708,6 +717,11 @@ public struct AutoZoomSettings: Codable, Equatable, Sendable {
     /// a document; settings saved by phases 1 and 2 (`default-style.json`, a `.tomastyle`) have none, and read as
     /// `classic`.
     public var mode: ZoomMode
+    /// Whether the automatic blocks follow the keyboard's focus (a field, the text cursor) where the take recorded it
+    /// (`focus` events; fases 4 y 5 design §5.2), from version 5. `false` in what is migrated, and the default. Always
+    /// written in a document; settings saved by phase 3 and before (`default-style.json`, a `.tomastyle`) have none, and
+    /// read as `false`.
+    public var followsFocus: Bool
 
     public init(
         enabled: Bool,
@@ -719,7 +733,8 @@ public struct AutoZoomSettings: Codable, Equatable, Sendable {
         leadOut: Double,
         follow: Bool,
         planner: String,
-        mode: ZoomMode = .classic
+        mode: ZoomMode = .classic,
+        followsFocus: Bool = false
     ) {
         self.enabled = enabled
         self.triggers = triggers
@@ -731,10 +746,11 @@ public struct AutoZoomSettings: Codable, Equatable, Sendable {
         self.follow = follow
         self.planner = planner
         self.mode = mode
+        self.followsFocus = followsFocus
     }
 
     private enum CodingKeys: String, CodingKey {
-        case enabled, triggers, holdWhileTyping, depth, groupGap, leadIn, leadOut, follow, planner, mode
+        case enabled, triggers, holdWhileTyping, depth, groupGap, leadIn, leadOut, follow, planner, mode, followsFocus
     }
 
     public init(from decoder: any Decoder) throws {
@@ -749,7 +765,8 @@ public struct AutoZoomSettings: Codable, Equatable, Sendable {
             leadOut: try container.decode(Double.self, forKey: .leadOut),
             follow: try container.decode(Bool.self, forKey: .follow),
             planner: try container.decode(String.self, forKey: .planner),
-            mode: try container.decodeIfPresent(ZoomMode.self, forKey: .mode) ?? .classic)
+            mode: try container.decodeIfPresent(ZoomMode.self, forKey: .mode) ?? .classic,
+            followsFocus: try container.decodeIfPresent(Bool.self, forKey: .followsFocus) ?? false)
     }
 }
 

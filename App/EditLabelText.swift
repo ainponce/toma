@@ -204,6 +204,10 @@ func localizedTitle(_ label: EditLabel) -> String {
     case .markerMove:
         String(localized: "Move Marker", comment: "Undo label (Edit ▸ Undo «…»): a marker was moved on the timeline")
     case .markerDelete: String(localized: "Delete Marker", comment: "Undo label (Edit ▸ Undo «…»): a marker was deleted")
+    case .projectTitle:
+        String(localized: "Change Title", comment: "Undo label (Edit ▸ Undo «…»): the project's title was written or changed")
+    case .projectSummary:
+        String(localized: "Change Summary", comment: "Undo label (Edit ▸ Undo «…»): the project's summary was written or changed")
     }
 }
 

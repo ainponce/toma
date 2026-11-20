@@ -360,8 +360,9 @@ extension EditDocument {
     }
 
     /// Decodes member `key` of a document, `value` (`nil` when it is not there), into `document`, as `init(from:)`
-    /// decodes it, and gives the JSON it holds (`held`; `nil` for a `transcript` that is not there). `nil` if `key` is
-    /// the `documentVersion` or no member, or the member is not there, does not decode or drops something of `value`.
+    /// decodes it, and gives the JSON it holds (`held`; `nil` for a `transcript` or an `info` that is not there). `nil`
+    /// if `key` is the `documentVersion` or no member, or the member is not there, does not decode or drops something of
+    /// `value`.
     private static func decode(_ key: String, _ value: JSONValue?, into document: inout EditDocument) -> JSONValue?? {
         func member<T: Codable>(_ type: T.Type, _ set: (inout EditDocument, T) -> Void) -> JSONValue?? {
             guard let (decoded, json) = held(T.self, value) else { return nil }
@@ -391,6 +392,12 @@ extension EditDocument {
         case "annotations": return member(AnnotationPlan.self) { $0.annotations = $1 }
         case "music": return member(MusicPlan.self) { $0.music = $1 }
         case "markers": return member(MarkerPlan.self) { $0.markers = $1 }
+        case "info":
+            guard value != nil else {
+                document.info = nil
+                return .some(nil)
+            }
+            return member(ProjectInfo.self) { $0.info = $1 }
         default: return nil
         }
     }

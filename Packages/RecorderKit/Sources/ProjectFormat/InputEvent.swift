@@ -11,6 +11,13 @@ public enum CursorKind: String, Codable, Sendable, CaseIterable {
     case arrow, iBeam, pointingHand, openHand, closedHand, crosshair, resizeLeftRight, resizeUpDown, notAllowed
 }
 
+/// What a `focus` event's rectangle is (fases 4 y 5 design §5.1): the element with the keyboard's focus, or the text
+/// cursor (a range of length 0 or 1) inside it. A value that is not one of these makes the line one this version cannot
+/// read, skipped like any other.
+public enum FocusKind: String, Codable, Sendable, CaseIterable {
+    case element, caret
+}
+
 /// One line of `events.jsonl`: something that happened at host time `t` during a take.
 ///
 /// Encoded flat, with `t`, `type` and the fields of its kind at the same level:
@@ -82,6 +89,12 @@ public struct InputEvent: Codable, Equatable, Sendable {
         /// `chars` is `"$"`; `nil` where `chars` is, and in the lines recorded before it was written). Written as
         /// `{"chars":"a","code":0,"key":"a","mods":0,"repeat":false,…}`.
         case keyPress(code: UInt16, chars: String?, mods: UInt32, isRepeat: Bool, key: String? = nil)
+        /// The keyboard's focus is on this rectangle from `t` on (fases 4 y 5 design §5.1, only in takes the user chose to
+        /// follow the focus for): (`x`, `y`) its top left and `width`, `height` its size, in global points like the cursor;
+        /// `kind`, whether it is the focused element or the text cursor in it. Never what the element holds, its role nor
+        /// its name. Written as `{"height":18,"kind":"caret","t":5,"type":"focus","width":2,"x":640.5,"y":-40}`. Additive:
+        /// it raises no version, and a reader that does not know it skips its lines.
+        case focus(x: Double, y: Double, width: Double, height: Double, kind: FocusKind)
 
         /// Whether an event of this kind is only in a package of version 4 or later: `keyPress`. Whoever writes the
         /// first one raises the package to 4 before (`ManifestStore.raiseFormatVersion(to:)`).
@@ -114,6 +127,7 @@ public struct InputEvent: Codable, Equatable, Sendable {
         case onScreen, style, hash, hotspot, size, kind, dx, dy
         case chars, mods, key
         case isRepeat = "repeat"
+        case width, height
     }
 
     /// The keys of `hotspot`.
@@ -129,6 +143,7 @@ public struct InputEvent: Codable, Equatable, Sendable {
     private enum EventType: String, Codable {
         case cursor, mouseDown, mouseUp, displayGeometry, segmentStarted, streamInterrupted, paused, resumed, deviceChanged, marker
         case droppedSamples, audioClock, windowGeometry, cameraStyle, cursorImage, scroll, keyActivity, keyPress
+        case focus
     }
 
     public init(from decoder: any Decoder) throws {
@@ -226,6 +241,14 @@ public struct InputEvent: Codable, Equatable, Sendable {
                 isRepeat: try container.decode(Bool.self, forKey: .isRepeat),
                 key: try container.decodeIfPresent(String.self, forKey: .key)
             )
+        case .focus:
+            kind = .focus(
+                x: try container.decode(Double.self, forKey: .x),
+                y: try container.decode(Double.self, forKey: .y),
+                width: try container.decode(Double.self, forKey: .width),
+                height: try container.decode(Double.self, forKey: .height),
+                kind: try container.decode(FocusKind.self, forKey: .kind)
+            )
         }
         self.init(t: t, kind: kind)
     }
@@ -314,6 +337,13 @@ public struct InputEvent: Codable, Equatable, Sendable {
             try container.encode(mods, forKey: .mods)
             try container.encode(isRepeat, forKey: .isRepeat)
             try container.encodeIfPresent(key, forKey: .key)
+        case let .focus(x, y, width, height, focusKind):
+            try container.encode(EventType.focus, forKey: .type)
+            try container.encode(x, forKey: .x)
+            try container.encode(y, forKey: .y)
+            try container.encode(width, forKey: .width)
+            try container.encode(height, forKey: .height)
+            try container.encode(focusKind, forKey: .kind)
         }
     }
 }
