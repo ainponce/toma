@@ -45,7 +45,7 @@ extension EditorModel {
 
     /// Duplicates the annotations selected, in one step: the copies are the ones selected then.
     func duplicateSelectedAnnotations() {
-        guard canEdit, let document, case let .annotations(ids)? = selection,
+        guard canEdit, !isGesturing, let document, case let .annotations(ids)? = selection,
             let step = AnnotationCommands.duplicate(document, ids: ids, makeID: Self.newID), perform(step) != .refused
         else { return }
         selection = .annotations(Set(step.target.split(separator: ",").map(String.init)))
@@ -54,7 +54,7 @@ extension EditorModel {
     /// Moves the one annotation selected in the order of its group (Bring Forward, Send Backward, Bring to Front, Send to
     /// Back); nothing with none or several.
     func reorderSelectedAnnotation(_ move: AnnotationCommands.LayerMove) {
-        guard canEdit, let document, case let .annotations(ids)? = selection, ids.count == 1, let id = ids.first,
+        guard canEdit, !isGesturing, let document, case let .annotations(ids)? = selection, ids.count == 1, let id = ids.first,
             let step = AnnotationCommands.reorder(document, id: id, move)
         else { return }
         perform(step)

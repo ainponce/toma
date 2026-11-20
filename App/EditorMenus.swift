@@ -257,6 +257,11 @@ final class KeyEditor: ObservableObject {
         /// selected (phase 3 design §5.5).
         var selectedAnnotations = 0
         var layerMoves: Set<AnnotationCommands.LayerMove> = []
+        /// Whether a drag of the document is going on (`EditorModel.isGesturing`): a step made meanwhile would clash with
+        /// it, so what edits the document by a step is off until it ends (the rule `EditorKeyboard` applies).
+        var isGesturing = false
+        /// Whether a command that makes a step of its own can run now.
+        var canStep: Bool { canEdit && !isGesturing }
     }
 
     /// What the File menu offers for the key editor's project as a whole (design §6.7).
@@ -384,7 +389,7 @@ final class KeyEditor: ObservableObject {
                         Project(
                             aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit, speed: model.speedOfTargets,
                             canExportCaptions: model.canExportCaptions, selectedAnnotations: model.selectedAnnotationIDs.count,
-                            layerMoves: model.possibleLayerMoves)
+                            layerMoves: model.possibleLayerMoves, isGesturing: model.isGesturing)
                     }
                 },
                 model?.projectActions.map { actions in
@@ -534,15 +539,15 @@ struct ProjectCommands: Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
             Button("Freeze Frame") { editor.freezeFrame() }
-                .disabled(editor.project?.canEdit != true)
+                .disabled(editor.project?.canStep != true)
             Button("Add Title Card") { editor.addTitleCard() }
-                .disabled(editor.project?.canEdit != true)
+                .disabled(editor.project?.canStep != true)
             Divider()
             Button("Duplicate") { editor.duplicateAnnotations() }
                 .keyboardShortcut("d", modifiers: .command)
-                .disabled(editor.project?.canEdit != true || (editor.project?.selectedAnnotations ?? 0) == 0)
+                .disabled(editor.project?.canStep != true || (editor.project?.selectedAnnotations ?? 0) == 0)
             Menu("Arrange") {
-                let moves = editor.project?.layerMoves ?? []
+                let moves = editor.project?.canStep == true ? (editor.project?.layerMoves ?? []) : []
                 Button("Bring Forward") { editor.reorderAnnotation(.forward) }
                     .keyboardShortcut("]", modifiers: .command)
                     .disabled(!moves.contains(.forward))

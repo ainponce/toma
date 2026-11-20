@@ -29,7 +29,7 @@ extension EditorModel {
     /// Edit ▸ Freeze Frame and the tab's: a frozen frame of the instant at the playhead (`ContentClipCommands.freeze`),
     /// selected. Inside a clip with content, or between two, nothing is frozen and the system beeps.
     func freezeFrame() {
-        guard canEdit, let document,
+        guard canEdit, !isGesturing, let document,
             let step = ContentClipCommands.freeze(document, atOutput: playheadNanoseconds, makeID: Self.newID)
         else {
             NSSound.beep()
@@ -47,7 +47,7 @@ extension EditorModel {
     /// "Add Title Card" at `place` (the playhead's `.output`, `.start` or `.end`), titled "Title": the card is the one
     /// selected.
     func addTitleCard(at place: ContentClipCommands.Place) {
-        guard canEdit, let document,
+        guard canEdit, !isGesturing, let document,
             let step = ContentClipCommands.addCard(document, at: place, title: String(localized: "Title"), makeID: Self.newID),
             perform(step) != .refused
         else { return }
