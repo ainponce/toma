@@ -29,20 +29,31 @@ public enum ExportQuality: CaseIterable, Sendable {
 /// the export sheet remembers (`ExportPreferences.codec`).
 public enum ExportCodec: String, CaseIterable, Sendable {
     case h264, hevc, proRes422, proRes422HQ
+    /// The transparent codecs (phases 4 and 5, milestone 4c): HEVC with alpha and ProRes 4444, both in a QuickTime movie.
+    /// Until 4c the export sheet does not offer them and the exporter refuses them (`ExportError.unsupportedCodec`).
+    case hevcAlpha, proRes4444
 
-    /// The extension of the file it writes: `mp4` for H.264 and HEVC, `mov` for ProRes.
+    /// The extension of the file it writes: `mp4` for H.264 and HEVC, `mov` for ProRes and the transparent codecs.
     public var fileExtension: String {
         switch self {
         case .h264, .hevc: "mp4"
-        case .proRes422, .proRes422HQ: "mov"
+        case .proRes422, .proRes422HQ, .hevcAlpha, .proRes4444: "mov"
         }
     }
 
-    /// The container the writer makes: MPEG-4 for H.264 and HEVC, QuickTime for ProRes.
+    /// The container the writer makes: MPEG-4 for H.264 and HEVC, QuickTime for ProRes and the transparent codecs.
     public var fileType: AVFileType {
         switch self {
         case .h264, .hevc: .mp4
-        case .proRes422, .proRes422HQ: .mov
+        case .proRes422, .proRes422HQ, .hevcAlpha, .proRes4444: .mov
+        }
+    }
+
+    /// Whether the video keeps the transparency of the stage's background: `true` for HEVC with alpha and ProRes 4444.
+    public var hasAlpha: Bool {
+        switch self {
+        case .h264, .hevc, .proRes422, .proRes422HQ: false
+        case .hevcAlpha, .proRes4444: true
         }
     }
 
@@ -53,14 +64,16 @@ public enum ExportCodec: String, CaseIterable, Sendable {
         case .hevc: "HEVC"
         case .proRes422: "ProRes 422"
         case .proRes422HQ: "ProRes 422 HQ"
+        case .hevcAlpha: "HEVC with Alpha"
+        case .proRes4444: "ProRes 4444"
         }
     }
 
     /// Whether it is ProRes, which has no bitrate and carries LPCM audio.
     var isProRes: Bool {
         switch self {
-        case .h264, .hevc: false
-        case .proRes422, .proRes422HQ: true
+        case .h264, .hevc, .hevcAlpha: false
+        case .proRes422, .proRes422HQ, .proRes4444: true
         }
     }
 }
@@ -94,10 +107,15 @@ public struct ExportSettings: Sendable, Equatable {
     /// undetermined (`und`).
     public var chapterLanguage: String? = nil
 
+    /// Whether the export keeps the stage's transparency: the codec has alpha (`ExportCodec.hasAlpha`).
+    public var transparent: Bool { codec.hasAlpha }
+
     /// What HEVC spends of H.264's bitrate for the same quality (phase 2 design §6.8).
     static let hevcShareOfH264 = 0.6
     /// ProRes 422's and 422 HQ's bits per pixel per frame, for their size estimate (phase 2 design §6.8).
     static let proRes422BitsPerPixel = 2.37, proRes422HQBitsPerPixel = 3.54
+    /// ProRes 4444's, for its size estimate until 4c measures it.
+    static let proRes4444BitsPerPixel = 5.0
     /// The bitrate of the 24-bit stereo LPCM at 48 kHz that ProRes carries, for its size estimate: 2 304 000 bits per
     /// second (plan 2b decision 13).
     static let proResAudioBitRate = 48_000 * 24 * 2
@@ -112,8 +130,8 @@ public struct ExportSettings: Sendable, Equatable {
     public var videoBitRate: Int? {
         switch codec {
         case .h264: averageBitRate
-        case .hevc: hevcBitRate
-        case .proRes422, .proRes422HQ: nil
+        case .hevc, .hevcAlpha: hevcBitRate
+        case .proRes422, .proRes422HQ, .proRes4444: nil
         }
     }
 
@@ -150,9 +168,10 @@ public struct ExportSettings: Sendable, Equatable {
         let pixelsPerSecond = Double(outputSize.x) * Double(outputSize.y) * Double(framesPerSecond)
         let bitsPerSecond = switch codec {
         case .h264: Double(averageBitRate + MP4Exporter.audioBitRate)
-        case .hevc: Double(hevcBitRate + MP4Exporter.audioBitRate)
+        case .hevc, .hevcAlpha: Double(hevcBitRate + MP4Exporter.audioBitRate)
         case .proRes422: pixelsPerSecond * Self.proRes422BitsPerPixel + Double(Self.proResAudioBitRate)
         case .proRes422HQ: pixelsPerSecond * Self.proRes422HQBitsPerPixel + Double(Self.proResAudioBitRate)
+        case .proRes4444: pixelsPerSecond * Self.proRes4444BitsPerPixel + Double(Self.proResAudioBitRate)
         }
         return Int64((bitsPerSecond * durationSeconds / 8).rounded())
     }
@@ -183,6 +202,8 @@ public enum ExportError: Error, Equatable {
     /// track or the camera) do, or the range asked for (`MP4Exporter.range`) lasts less than a frame of the video:
     /// there is nothing to export, and nothing is written.
     case nothingToExport
+    /// The codec is one the exporter does not write yet (the transparent ones, until milestone 4c): nothing is written.
+    case unsupportedCodec
 }
 
 /// What a finished export left out, for the app to tell the user.

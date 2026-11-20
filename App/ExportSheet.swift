@@ -125,7 +125,8 @@ final class ExportChoices {
         resolution = ExportResolution(rawValue: remembered.shortSide) ?? .p1080
         framesPerSecond = StyleCommands.frameRates.contains(document.frameRate) ? document.frameRate : 60
         quality = remembered.highQuality ? .high : .standard
-        codec = ExportCodec(rawValue: remembered.codec) ?? .h264
+        // The codecs with alpha are not offered until milestone 4c.
+        codec = ExportCodec(rawValue: remembered.codec).flatMap { $0.hasAlpha ? nil : $0 } ?? .h264
         let gif = remembered.gif
         gifLongSide = GIFSettings.longSides.contains(gif.longSide) ? gif.longSide : 800
         gifFramesPerSecond = GIFSettings.framesPerSecond.contains(gif.fps) ? gif.fps : 15
@@ -434,7 +435,7 @@ struct ExportSheet: View {
             }
             .pickerStyle(.segmented)
             Picker("Codec", selection: $choices.codec) {
-                ForEach(ExportCodec.allCases, id: \.self) { codec in
+                ForEach(ExportCodec.allCases.filter { !$0.hasAlpha }, id: \.self) { codec in
                     Text(verbatim: Self.name(codec)).tag(codec)
                 }
             }
@@ -471,6 +472,8 @@ struct ExportSheet: View {
         case .hevc: "HEVC"
         case .proRes422: "ProRes 422"
         case .proRes422HQ: "ProRes 422 HQ"
+        case .hevcAlpha: "HEVC with Alpha"
+        case .proRes4444: "ProRes 4444"
         }
     }
 
@@ -481,6 +484,7 @@ struct ExportSheet: View {
         case .hevc: "Smaller files at the same quality. Some older players can't open it."
         case .proRes422: "To edit in Final Cut or another editor. Very large files."
         case .proRes422HQ: "To edit in Final Cut with more quality. The largest files."
+        case .hevcAlpha, .proRes4444: ""
         }
     }
 

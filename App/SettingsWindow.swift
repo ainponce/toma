@@ -81,7 +81,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
 /// The settings window's panes, in the toolbar's order.
 private enum SettingsPane: String, CaseIterable {
-    case general, recording, shortcuts
+    case general, recording, shortcuts, share, replay
 
     var index: Int { Self.allCases.firstIndex(of: self) ?? 0 }
 
@@ -90,6 +90,8 @@ private enum SettingsPane: String, CaseIterable {
         case .general: String(localized: "General", comment: "The settings pane of the app's look and what a stop does")
         case .recording: String(localized: "Recording")
         case .shortcuts: String(localized: "Shortcuts")
+        case .share: String(localized: "Share", comment: "The settings pane of where Share Link uploads to")
+        case .replay: String(localized: "Replay", comment: "The settings pane of the instant replay")
         }
     }
 
@@ -98,6 +100,8 @@ private enum SettingsPane: String, CaseIterable {
         case .general: "gearshape"
         case .recording: "record.circle"
         case .shortcuts: "command"
+        case .share: "square.and.arrow.up"
+        case .replay: "arrow.counterclockwise.circle"
         }
     }
 }
@@ -502,6 +506,8 @@ private struct SettingsPaneView: View {
             case .general: general
             case .recording: recording
             case .shortcuts: shortcuts
+            case .share: SettingsSharePane()
+            case .replay: SettingsReplayPane()
             }
         }
         .formStyle(.grouped)

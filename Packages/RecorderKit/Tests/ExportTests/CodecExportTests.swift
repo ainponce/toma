@@ -99,7 +99,7 @@ import VideoToolbox
 /// Every codec's file, read back: its container, its codec's four-character code, its size, every frame at 30 fps, its
 /// colors, its audio (AAC, or LPCM for ProRes) carrying the microphone's sine, and frames that decode to what the preview
 /// draws.
-@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), arguments: ExportCodec.allCases)
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), arguments: ExportCodec.allCases.filter { !$0.hasAlpha })
 func everyCodecWritesWhatItSays(codec: ExportCodec) async throws {
     try await withTemporaryDirectory { dir in
         let project = try await codecTake(in: dir, seconds: 1)
@@ -117,6 +117,8 @@ func everyCodecWritesWhatItSays(codec: ExportCodec) async throws {
         case .hevc: kCMVideoCodecType_HEVC
         case .proRes422: kCMVideoCodecType_AppleProRes422
         case .proRes422HQ: kCMVideoCodecType_AppleProRes422HQ
+        case .hevcAlpha: kCMVideoCodecType_HEVCWithAlpha
+        case .proRes4444: kCMVideoCodecType_AppleProRes4444
         }
         #expect(fourCC(CMFormatDescriptionGetMediaSubType(format)) == fourCC(expectedCode))
         let size = CMVideoFormatDescriptionGetDimensions(format)
@@ -216,7 +218,7 @@ func everyCodecGetsTheSameFrames() async throws {
     try await withTemporaryDirectory { dir in
         let project = try await codecTake(in: dir, seconds: 1)
         var seenByCodec: [ExportCodec: [Int: String]] = [:]
-        for codec in ExportCodec.allCases {
+        for codec in ExportCodec.allCases.filter { !$0.hasAlpha } {
             let seen = Mutex<[Int: String]>([:])
             try await export(project, codec, to: dir, name: "\(codec)") { index, pixelBuffer in
                 let digest = SHA256.hash(data: packedBytes(of: pixelBuffer)).map { String(format: "%02x", $0) }.joined()
@@ -227,7 +229,7 @@ func everyCodecGetsTheSameFrames() async throws {
         let h264 = try #require(seenByCodec[.h264])
         #expect(h264.keys.sorted() == Array(0..<30))
         #expect(Set(h264.values).count > 1, "the frames are not all alike")
-        for codec in ExportCodec.allCases {
+        for codec in ExportCodec.allCases.filter { !$0.hasAlpha } {
             #expect(seenByCodec[codec] == h264, "\(codec)")
         }
     }
@@ -318,4 +320,18 @@ private func majorBrand(of url: URL) throws -> String {
     let head = [UInt8](try handle.read(upToCount: 12) ?? Data())
     try #require(head.count == 12 && String(decoding: head[4..<8], as: UTF8.self) == "ftyp")
     return String(decoding: head[8..<12], as: UTF8.self)
+}
+
+/// Until milestone 4c the exporter refuses the codecs with alpha before it writes anything.
+@Test func alphaExportIsUnsupportedUntil4c() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await codecTake(in: dir, seconds: 1)
+        for codec in [ExportCodec.hevcAlpha, .proRes4444] {
+            let destination = dir.appending(path: "alpha-\(codec.rawValue).mov")
+            let exporter = MP4Exporter(
+                project: project, settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30, codec: codec))
+            await #expect(throws: ExportError.unsupportedCodec) { try await exporter.export(to: destination) { _ in } }
+            #expect(!FileManager.default.fileExists(atPath: destination.path))
+        }
+    }
 }

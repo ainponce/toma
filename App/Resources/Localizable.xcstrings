@@ -2616,6 +2616,17 @@
         }
       }
     },
+    "Coming soon" : {
+      "comment" : "A settings pane that has nothing yet",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pronto"
+          }
+        }
+      }
+    },
     "Connect the iPhone or iPad with a cable, unlock it and tap Trust." : {
       "comment" : "iPhone mode with no iPhone or iPad connected: how to connect one (Trust is the button the device shows)",
       "localizations" : {
@@ -8140,6 +8151,17 @@
         }
       }
     },
+    "Replay" : {
+      "comment" : "The settings pane of the instant replay",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repetición"
+          }
+        }
+      }
+    },
     "Requested" : {
       "comment" : "The state of the system audio permission once it was asked for",
       "localizations" : {
@@ -8763,6 +8785,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Forma"
+          }
+        }
+      }
+    },
+    "Share" : {
+      "comment" : "The settings pane of where Share Link uploads to",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compartir"
           }
         }
       }
@@ -11124,6 +11157,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta versión de Toma no conoce el formato del proyecto."
+          }
+        }
+      }
+    },
+    "This video format isn't available yet." : {
+      "comment" : "An export with a codec that is not written yet",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este formato de video todavía no está disponible."
           }
         }
       }

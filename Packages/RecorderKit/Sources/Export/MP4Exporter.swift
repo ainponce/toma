@@ -122,7 +122,7 @@ public final class MP4Exporter: Sendable {
     /// go down and stay below 1, then once more with exactly 1 from the task running the export, once the
     /// file is in place. Cancel that task to stop: the export ends between two frames and throws
     /// `ExportError.cancelled`. One export at a time per destination: they would share the partial file.
-    /// - Throws: `ExportError` (before anything is written: `destinationNotAllowed`, `nothingToExport` for a document
+    /// - Throws: `ExportError` (before anything is written: `destinationNotAllowed`, `unsupportedCodec` for a codec with alpha until 4c, `nothingToExport` for a document
     ///   that lasts no time or a range that lasts less than a frame of the video, `noDisplayTrack` for the legacy
     ///   document of a take without screen segments; then `writerFailed`, `cancelled`), or the `RenderError` of a frame
     ///   that could not be drawn.
@@ -133,6 +133,8 @@ public final class MP4Exporter: Sendable {
         guard let destination = Self.canonicalDestination(destination, project: project.package) else {
             throw ExportError.destinationNotAllowed
         }
+        // The transparent codecs wait for milestone 4c: nothing is written.
+        guard !settings.codec.hasAlpha else { throw ExportError.unsupportedCodec }
         if let refusal = Self.refusal(of: document, of: project) { throw refusal }
         let fps = settings.framesPerSecond
         guard fps > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(fps)") }
@@ -340,6 +342,15 @@ public final class MP4Exporter: Sendable {
             compression = nil
         case .proRes422HQ:
             codecType = .proRes422HQ
+            compression = nil
+        case .hevcAlpha:
+            codecType = .hevcWithAlpha
+            compression = [
+                AVVideoAverageBitRateKey: settings.hevcBitRate,
+                AVVideoExpectedSourceFrameRateKey: settings.framesPerSecond,
+            ]
+        case .proRes4444:
+            codecType = .proRes4444
             compression = nil
         }
         var video: [String: Any] = [
