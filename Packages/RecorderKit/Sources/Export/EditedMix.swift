@@ -135,6 +135,16 @@ public final class EditedMix: Sendable {
     /// editor makes the mix again (`make`) when the sequence comes to show one of those.
     public var takeIDs: [String] { sources.map(\.takeID) }
 
+    /// What a document can show of each take the mix has a source for (`TakeTimeline.editableBounds`), by take ID: what the
+    /// mix holds each cut of the sound to (`AudioCuts`), and the commands that write the sequence with it (phase 3 design
+    /// §7.3), so a document they write sounds as `TimeMap` maps it.
+    public var takeBounds: [String: ClosedRange<HostTime>] { Self.takeBounds(of: sources) }
+
+    /// `editable` of each of `sources` by take ID, the first for a take there twice.
+    private static func takeBounds(of sources: [Source]) -> [String: ClosedRange<HostTime>] {
+        Dictionary(sources.map { ($0.takeID, $0.editable) }) { first, _ in first }
+    }
+
     /// What the mixes of every revision of a project's document share: one take's audio tracks, read and placed once.
     final class Source: Sendable {
         let takeID: String
@@ -384,8 +394,7 @@ public final class EditedMix: Sendable {
         totalFrames = Self.totalFrames(frameCount: timeMap.frameCount(frameRate: framesPerSecond), framesPerSecond: framesPerSecond)
         contentFrames = Self.frames(ofNanoseconds: timeMap.duration)
         // The cuts of the sound held to what each take has (phase 3 design §7.3).
-        let takeBounds = Dictionary(sources.map { ($0.takeID, $0.editable) }) { first, _ in first }
-        let cuts = AudioCuts(document: document, timeMap: timeMap, takeBounds: takeBounds)
+        let cuts = AudioCuts(document: document, timeMap: timeMap, takeBounds: Self.takeBounds(of: sources))
         self.cuts = cuts
         (pieces, runs) = Self.pieces(of: document.sequence, cuts: cuts, contentFrames: contentFrames, sources: sources)
         gainRanges = GainRangePlan(document: document, timeMap: timeMap, keys: sources.map(\.keys), cuts: cuts)

@@ -90,6 +90,21 @@ import Testing
                 let level = rms(sooner[window..<(window + 480)])
                 #expect(level > 0.1, "\(Double(window) / 48_000) s: \(level)")
             }
+
+            // [1, 1.5) s at 0.5× and [1.5, 3.5) s at 2×, one going on from the other, the second heard 0.5 s sooner:
+            // from 0.5 s of its source, before where the first starts, which its stretch is fed too.
+            var sped = edited(project, [(1, 1.5), (1.5, 3.5)], shifts: [1: -500_000_000])
+            (sped.sequence[0].speed, sped.sequence[1].speed) = (0.5, 2)
+            let jAfterSlow = try await EditedMix.make(project: project, document: sped, framesPerSecond: 60)
+            #expect(jAfterSlow.cuts.starts == [0, 24_000] && jAfterSlow.cuts.sourceShift == [0, -48_000])
+            #expect(
+                jAfterSlow.playDescription.contains("run 24000..<96000 from 24000 heard 24000..<168000 at 2.0"),
+                "\(jAfterSlow.playDescription)")
+            let afterSlow = try await rendered(jAfterSlow)
+            for window in stride(from: 24_000 + 1_440, to: 96_000 - 960, by: 480) {
+                let level = rms(afterSlow[window..<(window + 480)])
+                #expect(level > 0.1, "\(Double(window) / 48_000) s: \(level)")
+            }
         }
     }
 
@@ -171,6 +186,27 @@ import Testing
             let lCut = plain.with(document: late, framesPerSecond: 60)
             #expect(lCut.cuts.starts == [0, 48_000] && lCut.cuts.sourceShift == [0, 0])
             #expect(bits(try await rendered(lCut)) == bits(try await rendered(ending)))
+        }
+    }
+
+    /// The mix holds a cut of the sound as the commands that write the sequence do (`SequenceCommands`, with the mix's
+    /// `takeBounds`): A = [0, 1) s and B = [1, 5) s at 4× heard 0.5 s sooner, as a speed held to the clips alone left it,
+    /// is heard 0.25 s sooner, all B's take has before it; B held there by the commands sounds the same, where
+    /// `TimeMap.audioStarts` puts it.
+    @Test func theMixHoldsTheCutAsTheCommandsDo() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await take(in: dir, name: "held", mic: AudioSegmentSpec(start: base, seconds: 5, transform: marking))
+            let editable = TakeTimeline.editableBounds(take: project.take, events: project.events)
+            var unheld = edited(project, [(0, 1), (1, 5)], shifts: [1: -500_000_000])
+            unheld.sequence[1].speed = 4
+            let mix = try await EditedMix.make(project: project, document: unheld, framesPerSecond: 60)
+            #expect(mix.takeBounds == [takeID: editable.start...editable.end])
+            #expect(mix.cuts.shifts == [0, -250_000_000] && mix.cuts.starts == [0, 36_000])
+            var held = unheld
+            held.sequence[1].audioShift = -250_000_000
+            #expect(SequenceRules.audioShift(of: unheld.sequence, at: 1, takeBounds: mix.takeBounds) == held.sequence[1].audioShift)
+            #expect(EditedMix.frames(ofNanoseconds: TimeMap(sequence: held.sequence).audioStarts[1]) == mix.cuts.starts[1])
+            #expect(bits(try await rendered(mix.with(document: held, framesPerSecond: 60))) == bits(try await rendered(mix)))
         }
     }
 

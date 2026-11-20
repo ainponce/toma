@@ -122,7 +122,8 @@ public enum TakeCommands {
         guard !pieces.isEmpty else { return nil }
 
         var ids = Set(doc.sequence.map(\.id))
-        var sequence = SequenceChanges(doc.sequence)
+        // The clip cut at `τ` keeps its start and its speed, and the take added starts its sound with its picture.
+        var sequence = SequenceChanges(doc.sequence, takeBounds: nil)
         // What goes, at the index of the first clip after what stays.
         let firstGone = kept + (head == nil ? 0 : 1)
         if let head { sequence.replace(doc.sequence[kept], with: head) }

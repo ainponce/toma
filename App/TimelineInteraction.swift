@@ -42,6 +42,8 @@ final class TimelineInteraction {
         /// The edit points that edges snap to, in output time.
         var points: [Int64]
         var project: LoadedProject?
+        /// What each take has, which a trim holds the cuts of the sound to (`EditorModel.takeBounds`).
+        var takeBounds: [String: ClosedRange<HostTime>]
     }
 
     enum Drag {
@@ -449,7 +451,7 @@ final class TimelineInteraction {
         let project = model.overlayProject
         let points = EditPoints(document: document, timeMap: map, markers: model.markerTimes).all
         lastStep = nil
-        return Base(document: document, map: map, points: points, project: project)
+        return Base(document: document, map: map, points: points, project: project, takeBounds: model.takeBounds)
     }
 
     /// The drag of the pressed item `hit`, if it has one.
@@ -571,7 +573,8 @@ final class TimelineInteraction {
             base = trimBase
             let τ = snapped(output(at: point), event: event, base: base)
             let source = TimelineDragRules.sourceInstant(atOutput: τ, clipOutputStart: outputStart, clipStart: clip.start, speed: clip.speed)
-            step = SequenceCommands.trim(base.document, clipID: clip.id, edge: edge, toSource: source, limits: limits)
+            step = SequenceCommands.trim(
+                base.document, clipID: clip.id, edge: edge, toSource: source, limits: limits, takeBounds: base.takeBounds)
             let speed = ClipSpeed.clamped(clip.speed)
             let origin = edge == .start ? clip.start : clip.end
             let to = min(max(source, limits.lowerBound), limits.upperBound)
@@ -1134,7 +1137,7 @@ extension EditorModel {
         let step: EditStep?
         switch selection {
         case let .clips(ids)?:
-            switch SequenceCommands.delete(document, clipIDs: ids) {
+            switch SequenceCommands.delete(document, clipIDs: ids, takeBounds: takeBounds) {
             case .failure(.lastClip): return .lastClip
             case let .success(deleted): step = deleted.changes.isEmpty ? nil : deleted
             }
@@ -1159,7 +1162,9 @@ extension EditorModel {
 
     /// Plays the clips of `speedTargets` at `speed` (0.25× to 16×).
     func setSpeed(_ speed: Double) {
-        guard canEdit, let document, let step = SequenceCommands.setSpeed(document, clipIDs: speedTargets, speed: speed) else { return }
+        guard canEdit, let document,
+            let step = SequenceCommands.setSpeed(document, clipIDs: speedTargets, speed: speed, takeBounds: takeBounds)
+        else { return }
         perform(step)
     }
 

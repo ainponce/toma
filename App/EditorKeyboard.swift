@@ -271,7 +271,7 @@ extension EditorModel {
     func deleteMarkedRangeOrSelection() -> TimelineEditResult {
         guard let range = timelineMarks.range else { return deleteSelection() }
         guard canEdit, let document else { return .nothing }
-        switch SequenceCommands.deleteRange(document, output: range, makeID: Self.newID) {
+        switch SequenceCommands.deleteRange(document, output: range, takeBounds: takeBounds, makeID: Self.newID) {
         case .failure(.lastClip):
             return .lastClip
         case let .success(step):
