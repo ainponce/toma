@@ -467,7 +467,8 @@ func configureSetsUpAViewForThePreview() async throws {
     #expect(view.colorPixelFormat == .bgra8Unorm)
     #expect(view.autoResizeDrawable == false)
     #expect(view.drawableSize == CGSize(width: 1280, height: 720))
-    #expect(view.framebufferOnly)
+    // Readable, so the calm zoom's Dim and loupe can copy the frame drawn so far.
+    #expect(!view.framebufferOnly)
     #expect(view.delegate === preview)
     let layer = try #require(view.layer as? CAMetalLayer)
     #expect(layer.colorspace?.name == CGColorSpace.itur_709)

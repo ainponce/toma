@@ -619,7 +619,7 @@ public final class Compositor: @unchecked Sendable {
     /// steps 5 and 6). Every frame with a stage reaches step 4 once (`DrawCounts.stageOverlaySteps`). When the calm zoom
     /// ends `encoder`'s pass (`drawCalmZoom`), it leaves in `encoder` the pass into `target` it opened, and what follows
     /// is drawn into it with `directCamera`'s pipelines: the caller ends that one. Throws what `drawCalmZoom` throws,
-    /// having ended `encoder`'s pass, so the frame is not drawn.
+    /// having ended `encoder`'s pass (or with none left open: `CalmZoomPassEnded`), so the frame is not drawn.
     func drawOverTheStage(
         _ frame: RenderFrame, through stage: StageTransform?, card: CardContent? = nil, device: StageTransform?,
         camera: (any MTLTexture)?, cameraLook: CameraLookTextures?, layerTextures: LayerTextures,
@@ -645,6 +645,9 @@ public final class Compositor: @unchecked Sendable {
             movedToTheTarget = try drawCalmZoom(
                 frame.calmZoom, frame: frame, through: stage, card: card, pass: cameraPipelines.pass, encoder: &encoder,
                 target: target, commandBuffer: commandBuffer, counts: &counts)
+        } catch let ended as CalmZoomPassEnded {
+            // The calm zoom ended the pass and the command buffer took no other: none is left to end.
+            throw ended.error
         } catch {
             encoder.endEncoding()
             throw error

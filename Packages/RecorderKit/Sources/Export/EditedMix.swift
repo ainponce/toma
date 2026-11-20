@@ -135,6 +135,16 @@ public final class EditedMix: Sendable {
     /// editor makes the mix again (`make`) when the sequence comes to show one of those.
     public var takeIDs: [String] { sources.map(\.takeID) }
 
+    /// What a document can show of each take the mix has a source for (`TakeTimeline.editableBounds`), by take ID: what the
+    /// mix holds each cut of the sound to (`AudioCuts`), and the commands that write the sequence with it (phase 3 design
+    /// §7.3), so a document they write sounds as `TimeMap` maps it.
+    public var takeBounds: [String: ClosedRange<HostTime>] { Self.takeBounds(of: sources) }
+
+    /// `editable` of each of `sources` by take ID, the first for a take there twice.
+    private static func takeBounds(of sources: [Source]) -> [String: ClosedRange<HostTime>] {
+        Dictionary(sources.map { ($0.takeID, $0.editable) }) { first, _ in first }
+    }
+
     /// What the mixes of every revision of a project's document share: one take's audio tracks, read and placed once.
     final class Source: Sendable {
         let takeID: String
@@ -260,7 +270,9 @@ public final class EditedMix: Sendable {
         let prereadSegments = sources.reduce(0) { sum, source in source.tracks.reduce(sum) { $0 + $1.decodedSegments } }
         let timeMap = TimeMap(sequence: document.sequence)
         let media = await MediaAudio.make(project: project, document: document, timeMap: timeMap, channels: channels)
-        let music = await MusicMix.make(project: project, document: document, timeMap: timeMap, analysis: analysis, channels: channels)
+        let music = await MusicMix.make(
+            project: project, document: document, timeMap: timeMap, analysis: analysis, channels: channels,
+            cuts: cuts(of: document, timeMap: timeMap, sources: sources), tracks: Set(sources.flatMap(\.keys)))
         return EditedMix(
             project: project, sources: sources, cleanLines: await cleanLines(of: sources, analysis: analysis), media: media, music: music,
             document: document, framesPerSecond: framesPerSecond, prereadSegments: prereadSegments, analysis: analysis)
@@ -309,12 +321,15 @@ public final class EditedMix: Sendable {
 
     /// The mix of another revision of the document, `document` at `framesPerSecond`, of the same project: it reads the
     /// same sources and the same clean voice, without decoding the one again to place it nor opening the other. A clip of
-    /// a take it has no source for (`takeIDs`) is silent in it. It keeps the sound of the imported clips and the music
-    /// this mix opened (empty in the base of phase 3: plans 3a and 3c plan them again here for `document`, without
-    /// waiting).
+    /// a take it has no source for (`takeIDs`) is silent in it. It keeps the sound of the imported clips this mix opened
+    /// (empty in the base of phase 3: plan 3a plans it again here for `document`, without waiting), and plans the music
+    /// again for `document` with the files this mix opened (`MusicMix.with(document:timeMap:cuts:)`), without waiting: a
+    /// source this mix has no file for is silent in it until `with(analysis:)`.
     /// - Precondition: `framesPerSecond` is positive.
     public func with(document: EditDocument, framesPerSecond: Int) -> EditedMix {
-        EditedMix(
+        let timeMap = TimeMap(sequence: document.sequence)
+        let music = music.with(document: document, timeMap: timeMap, cuts: Self.cuts(of: document, timeMap: timeMap, sources: sources))
+        return EditedMix(
             project: project, sources: sources, cleanLines: cleanLines, media: media, music: music, document: document,
             framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
     }
@@ -323,17 +338,27 @@ public final class EditedMix: Sendable {
     /// decoding them again; only the clean files `analysis` names are opened (never decoded), and the music is made again
     /// (`MusicMix.make`), its files and its voice being `analysis`'s.
     public func with(analysis: AnalysisInputs) async -> EditedMix {
+        let timeMap = TimeMap(sequence: document.sequence)
         let music = await MusicMix.make(
-            project: project, document: document, timeMap: TimeMap(sequence: document.sequence), analysis: analysis, channels: channels)
+            project: project, document: document, timeMap: timeMap, analysis: analysis, channels: channels,
+            cuts: Self.cuts(of: document, timeMap: timeMap, sources: sources), tracks: Set(keys))
         return EditedMix(
             project: project, sources: sources, cleanLines: await Self.cleanLines(of: sources, analysis: analysis), media: media,
             music: music, document: document, framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
     }
 
-    /// Whether a mix reads the same of the caches in `a` as in `b`: the same clean voice and the same loudness. The
-    /// person's masks and the faces are the picture's, so a mix made with one sounds as one made with the other.
+    /// Whether a mix reads the same of the caches in `a` as in `b`: the same clean voice, the same loudness, the same files
+    /// of the music and the same voice for its ducking. The person's masks and the faces are the picture's, so a mix made
+    /// with one sounds as one made with the other.
     public static func hearsTheSame(_ a: AnalysisInputs, _ b: AnalysisInputs) -> Bool {
-        a.cleanVoice == b.cleanVoice && a.loudness == b.loudness
+        a.cleanVoice == b.cleanVoice && a.loudness == b.loudness && a.musicFiles == b.musicFiles && a.voiceActivity == b.voiceActivity
+    }
+
+    /// The cuts of the sound of `document`, whose map is `timeMap`, held to what each of `sources` has (phase 3 design
+    /// §7.3): the one rule of the tracks and of the music's voice.
+    private static func cuts(of document: EditDocument, timeMap: TimeMap, sources: [Source]) -> AudioCuts {
+        let takeBounds = Dictionary(sources.map { ($0.takeID, $0.editable) }) { first, _ in first }
+        return AudioCuts(document: document, timeMap: timeMap, takeBounds: takeBounds)
     }
 
     /// The clean voice of each track of `sources` (one take after the other) that `analysis` has, by the track's own key,
@@ -384,8 +409,7 @@ public final class EditedMix: Sendable {
         totalFrames = Self.totalFrames(frameCount: timeMap.frameCount(frameRate: framesPerSecond), framesPerSecond: framesPerSecond)
         contentFrames = Self.frames(ofNanoseconds: timeMap.duration)
         // The cuts of the sound held to what each take has (phase 3 design §7.3).
-        let takeBounds = Dictionary(sources.map { ($0.takeID, $0.editable) }) { first, _ in first }
-        let cuts = AudioCuts(document: document, timeMap: timeMap, takeBounds: takeBounds)
+        let cuts = AudioCuts(document: document, timeMap: timeMap, takeBounds: Self.takeBounds(of: sources))
         self.cuts = cuts
         (pieces, runs) = Self.pieces(of: document.sequence, cuts: cuts, contentFrames: contentFrames, sources: sources)
         gainRanges = GainRangePlan(document: document, timeMap: timeMap, keys: sources.map(\.keys), cuts: cuts)

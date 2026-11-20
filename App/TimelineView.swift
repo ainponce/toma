@@ -23,6 +23,8 @@ struct TimelineGeometry {
     let rows: [Row]
     let rowsHeight: Double
     let backingScale: Double
+    /// The lanes of the Annotations row (phase 3), where its blocks are.
+    var annotations: TimelineAnnotationItems?
 
     /// Where output time `τ` is, from the left of the area: `TimelineLayout.x(ofOutput:)` without the headers.
     func x(_ τ: Int64) -> Double {
@@ -46,13 +48,17 @@ struct TimelineGeometry {
         case .video, .screen: return itemRect(item.output, top: top + 2, height: row.height - 4, gap: 1)
         case .zoom: return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1)
         case .privacy, .captions: return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1)
+        case .annotations:
+            // In its lane, or the bar on top (plan 3a decision 17).
+            guard let band = annotations?.band(of: item.id, rowTop: top, rowHeight: row.height) else { return nil }
+            return itemRect(item.output, top: band.top, height: band.height, gap: 1)
         case .camera:
             // A layout block is a rectangle; a change of the bubble, a diamond.
             if !item.output.isEmpty { return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1) }
             let x = snapped(self.x(item.output.lowerBound))
             guard x > -8, x < areaWidth + 8 else { return nil }
             return CGRect(x: x - 6, y: top + row.height / 2 - 6, width: 12, height: 12)
-        case .ruler, .audio, .annotations, .importedAudio, .music: return nil
+        case .ruler, .audio, .importedAudio, .music: return nil
         }
     }
 
@@ -249,6 +255,12 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     var onScrub: (Int64) -> Void = { _ in }
     var onScrubEnd: () -> Void = {}
     var onMute: (_ track: String, _ muted: Bool) -> Void = { _, _ in }
+    /// Solo (phase 3 design §7.2): the headers' Solo shows it and the audio rows it leaves out are dimmed; a header's Solo
+    /// pressed is `onSolo`.
+    var audioSolo = AudioSolo() {
+        didSet { if audioSolo != oldValue { tracks.audioRows.solo = audioSolo; updateHeaders(); needsLayout = true } }
+    }
+    var onSolo: (AudioRowID) -> Void = { _ in }
     /// What is selected, by id: drawn outlined in the accent color.
     var selected: Set<String> = [] {
         didSet { if selected != oldValue { tracks.selected = selected; needsLayout = true } }
@@ -269,6 +281,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private(set) lazy var interaction = TimelineInteraction(view: self)
     /// What VoiceOver reads of it.
     private lazy var accessibility = TimelineAccessibility(view: self)
+    /// A video file dropped on the Video track (phase 3 design §5.4).
+    private lazy var mediaDrop = TimelineMediaDrop(view: self)
 
     let tracks = TimelineTracks()
     private(set) var content: TimelineContent?
@@ -355,6 +369,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         area.addSublayer(overlay)
         area.addSublayer(playheadLayer)
         tracks.thumbnailArrived = { [weak self] in self?.needsLayout = true }
+        registerForDraggedTypes([.fileURL])
         displayObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -375,6 +390,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         if let displayObserver { NSWorkspace.shared.notificationCenter.removeObserver(displayObserver) }
         displayObserver = nil
         tracks.clear()
+        mediaDrop.stop()
     }
 
     override var isFlipped: Bool { true }
@@ -463,6 +479,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
             // The longest first: the shortest under the pointer is found (plan 2c decision 4).
             + content.privacy.hitOrder
             + content.captions.items.map { TimelineItem(id: $0.id, track: .captions, output: $0.output) }
+            // Bottom to top; the row's own rule finds them in their lanes (`TimelineAnnotationItems.hit`).
+            + content.annotations.hitOrder.map(\.item)
         itemsCache = items
         return items
     }
@@ -555,7 +573,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         }
         return TimelineGeometry(
             layout: content.layout, scale: scale, offset: offset, areaWidth: areaWidth, verticalOffset: verticalOffset,
-            rows: rows, rowsHeight: top, backingScale: Double(window?.backingScaleFactor ?? 2))
+            rows: rows, rowsHeight: top, backingScale: Double(window?.backingScaleFactor ?? 2), annotations: content.annotations)
     }
 
     /// The scale within its range (fitted while it is), and the scrolls within the content.
@@ -837,6 +855,28 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         interaction.menu(for: event)
     }
 
+    // A video file dragged from Finder onto the Video track goes into the sequence (phase 3, `TimelineMediaDrop`).
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        mediaDrop.update(sender)
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        mediaDrop.update(sender)
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        mediaDrop.hide()
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        mediaDrop.perform(sender)
+    }
+
+    override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) {
+        mediaDrop.hide()
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let trackingArea { removeTrackingArea(trackingArea) }
@@ -910,6 +950,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
                 self?.onMute(id, muted)
             }
             header.onPress = { [weak self] in self?.onCameraHeader() }
+            header.onSolo = { [weak self] in TrackHeaderView.soloRow(row.track).map { self?.onSolo($0) } }
             headerRows.addSubview(header)
             return header
         }
@@ -926,6 +967,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
 
     private func updateHeaders() {
         for header in headers {
+            if let row = TrackHeaderView.soloRow(header.track) { header.setSolo(audioSolo.rows.contains(row)) }
             if case .camera = header.track {
                 header.setSubtitle(content.map { LayoutNames.name($0.projectLayout) })
                 continue

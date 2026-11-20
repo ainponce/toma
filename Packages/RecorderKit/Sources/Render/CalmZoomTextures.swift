@@ -18,12 +18,15 @@ final class CalmZoomTextures: @unchecked Sendable {
     /// How many kinds of textures are kept: Dim's copy and its blur's two, and a lens's copy.
     private static let keptKinds = 4
 
-    /// A texture, to be handed back: textures are not `Sendable`. Made with `state`'s lock held.
+    /// A texture, to be handed back: textures are not `Sendable`. Made with `state`'s lock held. With it, a view of its
+    /// last mipmap level, made once with it (the texture itself with one level): what Dim blurs.
     private final class Held: @unchecked Sendable {
         let texture: any MTLTexture
+        let lastLevel: any MTLTexture
 
-        init(_ texture: any MTLTexture) {
+        init(_ texture: any MTLTexture, lastLevel: any MTLTexture) {
             self.texture = texture
+            self.lastLevel = lastLevel
         }
     }
 
@@ -84,10 +87,18 @@ final class CalmZoomTextures: @unchecked Sendable {
     func texture(
         width: Int, height: Int, pixelFormat: MTLPixelFormat, levels: Int = 1, commandBuffer: any MTLCommandBuffer
     ) throws -> any MTLTexture {
+        try mipmapped(width: width, height: height, pixelFormat: pixelFormat, levels: levels, commandBuffer: commandBuffer).texture
+    }
+
+    /// `texture(width:height:pixelFormat:levels:commandBuffer:)` with a view of its last level (`levels − 1`), made with
+    /// the texture and kept with it: the texture itself with one level.
+    func mipmapped(
+        width: Int, height: Int, pixelFormat: MTLPixelFormat, levels: Int, commandBuffer: any MTLCommandBuffer
+    ) throws -> (texture: any MTLTexture, lastLevel: any MTLTexture) {
         let kind = Kind(width: max(width, 1), height: max(height, 1), pixelFormat: pixelFormat, levels: max(levels, 1))
         guard let held = take(kind) else { throw RenderError.metalResourceUnavailable("the calm zoom's copy of the frame") }
         commandBuffer.addCompletedHandler { [self] _ in give(held) }
-        return held.texture
+        return (held.texture, held.lastLevel)
     }
 
     /// A free texture of that kind, or a new one; `nil` when Metal cannot make it, or for tests.
@@ -107,9 +118,13 @@ final class CalmZoomTextures: @unchecked Sendable {
         descriptor.storageMode = .private
         guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
         texture.label = "Compositor calm zoom"
+        let last = kind.levels - 1
+        guard let lastLevel = last == 0 ? texture : texture.makeTextureView(
+            pixelFormat: kind.pixelFormat, textureType: .type2D, levels: last..<(last + 1), slices: 0..<1)
+        else { return nil }
         return state.withLock { state in
             state.made += 1
-            return Held(texture)
+            return Held(texture, lastLevel: lastLevel)
         }
     }
 

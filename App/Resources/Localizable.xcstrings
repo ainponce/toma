@@ -67,6 +67,17 @@
         }
       }
     },
+    "%@ dB" : {
+      "comment" : "A volume of an audio row of the timeline, in decibels: «−6 dB»",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ dB"
+          }
+        }
+      }
+    },
     "%@ in the trash" : {
       "comment" : "The library's sidebar: what the trash takes",
       "localizations" : {
@@ -912,6 +923,17 @@
         }
       }
     },
+    "Arrow" : {
+      "comment" : "An annotation: an arrow",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Flecha"
+          }
+        }
+      }
+    },
     "Ascending" : {
       "comment" : "The library's bar: the order",
       "localizations" : {
@@ -940,6 +962,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Audio y guion"
+          }
+        }
+      }
+    },
+    "Audio cut moved %@ earlier" : {
+      "comment" : "VoiceOver: a J cut of the timeline, how much sooner the next clip is heard",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corte del audio %@ antes"
+          }
+        }
+      }
+    },
+    "Audio cut moved %@ later" : {
+      "comment" : "VoiceOver: an L cut of the timeline, how much longer the clip before is heard",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corte del audio %@ después"
           }
         }
       }
@@ -1216,6 +1260,28 @@
         }
       }
     },
+    "Bring Forward" : {
+      "comment" : "The menu of an annotation: one layer up, over the next one it overlaps",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Traer adelante"
+          }
+        }
+      }
+    },
+    "Bring to Front" : {
+      "comment" : "The menu of an annotation: over all of its group",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Traer al frente"
+          }
+        }
+      }
+    },
     "Bringing in the .cube…" : {
       "comment" : "Camera tab, Color: a .cube being copied into the project",
       "localizations" : {
@@ -1255,6 +1321,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Calculando…"
+          }
+        }
+      }
+    },
+    "Callout" : {
+      "comment" : "An annotation: a text in a speech bubble with a tail that points at something",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Globo"
+          }
+        }
+      }
+    },
+    "Callout “%@”" : {
+      "comment" : "VoiceOver: a speech bubble annotation of the timeline and its words",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Globo «%@»"
           }
         }
       }
@@ -2146,6 +2234,17 @@
         }
       }
     },
+    "Clip" : {
+      "comment" : "An annotation: an imported video over the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clip"
+          }
+        }
+      }
+    },
     "Close" : {
       "localizations" : {
         "es" : {
@@ -2908,6 +3007,17 @@
         }
       }
     },
+    "Delete Range" : {
+      "comment" : "The menu of a stretch at another volume of an audio row",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar el tramo"
+          }
+        }
+      }
+    },
     "Delete Zoom" : {
       "comment" : "The Zoom tab: a button",
       "localizations" : {
@@ -3162,6 +3272,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Duración"
+          }
+        }
+      }
+    },
+    "Duration…" : {
+      "comment" : "The menu of a frozen frame or a title card of the Video track: asks for its length",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duración…"
           }
         }
       }
@@ -3773,6 +3894,17 @@
         }
       }
     },
+    "From 0.1 to 60 s." : {
+      "comment" : "Duration… of a frozen frame or a title card: the lengths it takes",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De 0,1 a 60 s."
+          }
+        }
+      }
+    },
     "From 0.25× to 16×." : {
       "comment" : "The sheet that asks for a clip's speed",
       "localizations" : {
@@ -3790,6 +3922,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "De otros escritorios"
+          }
+        }
+      }
+    },
+    "Frozen Frame, %@" : {
+      "comment" : "VoiceOver: a frozen frame of the Video track and what it lasts (\"2 s\")",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuadro congelado, %@"
           }
         }
       }
@@ -4147,6 +4290,17 @@
         }
       }
     },
+    "Imported Clip, %@" : {
+      "comment" : "VoiceOver: an imported video in the sequence on the Video track and what it lasts (\"4,5 s\")",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clip importado, %@"
+          }
+        }
+      }
+    },
     "Imported Clips" : {
       "comment" : "The header of the timeline's row of the sound of the imported clips",
       "localizations" : {
@@ -4154,6 +4308,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Clips importados"
+          }
+        }
+      }
+    },
+    "Importing “%@”…" : {
+      "comment" : "Over the timeline, while a clip dropped on the Video track is copied into the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importando «%@»…"
           }
         }
       }
@@ -4344,6 +4509,17 @@
         }
       }
     },
+    "J Cut" : {
+      "comment" : "The cut of the sound moved before the picture's: the next clip is heard sooner",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corte J"
+          }
+        }
+      }
+    },
     "Keep Open" : {
       "comment" : "Closing with unsaved changes: the window stays open (the default)",
       "localizations" : {
@@ -4417,6 +4593,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Las teclas no se grabaron: falta el permiso de Monitoreo de entrada."
+          }
+        }
+      }
+    },
+    "L Cut" : {
+      "comment" : "The cut of the sound moved after the picture's: the clip before is heard longer",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corte L"
           }
         }
       }
@@ -6402,6 +6589,28 @@
         }
       }
     },
+    "Range Volume" : {
+      "comment" : "The volume of a stretch of an audio row of the timeline, in dB",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volumen del tramo"
+          }
+        }
+      }
+    },
+    "Range Volume, %1$@, from %2$@ to %3$@" : {
+      "comment" : "VoiceOver: a stretch at another volume of an audio row of the timeline, its volume, start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volumen del tramo, %1$@, de %2$@ a %3$@"
+          }
+        }
+      }
+    },
     "Re-record from Here" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): a new take recorded from the playhead replaced the rest of the video",
       "localizations" : {
@@ -6875,6 +7084,17 @@
         }
       }
     },
+    "Reset Audio Cut" : {
+      "comment" : "The menu of an audio row: the cut of the sound back to the picture's",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restablecer el corte del audio"
+          }
+        }
+      }
+    },
     "Resolution" : {
       "comment" : "The export sheet: the MP4's resolution",
       "localizations" : {
@@ -7252,6 +7472,17 @@
         }
       }
     },
+    "Seconds" : {
+      "comment" : "The field of Duration…: a length in seconds",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Segundos"
+          }
+        }
+      }
+    },
     "See Findings (%lld)" : {
       "comment" : "The Privacy tab: opens the sheet of what the sensitive data search found, and how many",
       "localizations" : {
@@ -7303,6 +7534,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Zoom seleccionado"
+          }
+        }
+      }
+    },
+    "Send Backward" : {
+      "comment" : "The menu of an annotation: one layer down, under the previous one it overlaps",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar atrás"
+          }
+        }
+      }
+    },
+    "Send to Back" : {
+      "comment" : "The menu of an annotation: under all of its group",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar al fondo"
           }
         }
       }
@@ -7640,6 +7893,17 @@
         }
       }
     },
+    "Solo" : {
+      "comment" : "An audio row's button of the timeline: only the rows with it are heard in the preview",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo"
+          }
+        }
+      }
+    },
     "Some camera frames couldn't be saved." : {
       "localizations" : {
         "es" : {
@@ -7959,6 +8223,17 @@
         }
       }
     },
+    "Step %lld" : {
+      "comment" : "A step annotation and its number: a number in a circle",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paso %lld"
+          }
+        }
+      }
+    },
     "Stop" : {
       "localizations" : {
         "es" : {
@@ -8206,6 +8481,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Un texto que se desplaza rápido entre dos muestras puede verse un instante. Revisar antes de publicar."
+          }
+        }
+      }
+    },
+    "Text “%@”" : {
+      "comment" : "VoiceOver: a text annotation of the timeline and its words",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto «%@»"
           }
         }
       }
@@ -9576,6 +9862,39 @@
         }
       }
     },
+    "Title Card" : {
+      "comment" : "A clip of the sequence that shows a title over the whole frame",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Placa"
+          }
+        }
+      }
+    },
+    "Title Card “%@”, %@" : {
+      "comment" : "VoiceOver: a title card of the Video track, its title and what it lasts (\"3 s\")",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Placa «%@», %@"
+          }
+        }
+      }
+    },
+    "Title Card, %@" : {
+      "comment" : "VoiceOver: a title card without a title on the Video track and what it lasts (\"3 s\")",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Placa, %@"
+          }
+        }
+      }
+    },
     "To Download" : {
       "comment" : "The Captions tab's language menu: the languages whose model has to be downloaded",
       "localizations" : {
@@ -9789,6 +10108,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Transcribir el audio para editar el video por su texto y mostrar subtítulos."
+          }
+        }
+      }
+    },
+    "Transcribing %lld of %lld…" : {
+      "comment" : "The Captions tab: the transcription of several takes under way, which of them it is on",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcribiendo %lld de %lld…"
           }
         }
       }
@@ -11618,6 +11948,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "«%@» se movió a la papelera."
+          }
+        }
+      }
+    },
+    "−∞ dB" : {
+      "comment" : "A volume of an audio row of the timeline: silence (minus infinity decibels)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "−∞ dB"
           }
         }
       }

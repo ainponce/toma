@@ -57,8 +57,8 @@ struct GainRangePlan: Sendable {
         var ramps: [Ramp]
     }
 
-    init(document: EditDocument, timeMap: TimeMap, keys: [[String]], cuts: AudioCuts? = nil) {
-        let cuts = cuts ?? AudioCuts(document: document, timeMap: timeMap)
+    /// The plan of `document`'s ranges for the tracks `keys`, heard where `cuts` (the mix's) plays each clip's sound.
+    init(document: EditDocument, timeMap: TimeMap, keys: [[String]], cuts: AudioCuts) {
         self.cuts = cuts
         let sequence = document.sequence
         // The clips with a sound of their own that plays any frame.

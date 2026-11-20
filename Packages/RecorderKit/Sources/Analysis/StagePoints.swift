@@ -28,10 +28,11 @@ public struct StagePoints: Sendable {
     /// The output the window frame is placed in: the document's aspect, 1080 px on its shorter side.
     private static let windowFrameShortSide = 1080
 
-    /// Width over height of the stage: the document's aspect (`auto`: the content's).
+    /// Width over height of the stage: the document's aspect (`auto`: the content's), the output's.
     private let ratio: Double
-    /// The ratio of the content `auto` follows (`StageLayout.contentRatio`); `nil` without a screen. The same one the
-    /// export and the preview size themselves by.
+    /// The ratio of the content `auto` follows (`StageLayout.contentRatio`): of the take of the document's first clip
+    /// (`StageLayout.contentRatioTake(of:ownTake:)`), given for a stage of another take; `nil` without a screen. The same
+    /// one the export and the preview size themselves by.
     public let contentRatio: Double?
     /// The document's padding, as a fraction of the stage's width.
     private let padding: Double
@@ -55,23 +56,32 @@ public struct StagePoints: Sendable {
     /// `screens.changes` as listed. Those a frame can show.
     public let screenTrackIDs: [String]
 
-    public init(take: TakeRecord, events: [InputEvent], document: EditDocument) {
+    /// `contentRatio`: the ratio `auto` follows, for a stage of a take that is not the one of the document's first clip
+    /// (phase 3 design §9: every take's stage is laid out in the output, its screens fitted inside it):
+    /// `StageLayout.contentRatio(project:document:)`, `.some(nil)` when that take has no screen. `nil` (the default) works
+    /// it out from `take`, as phase 2 does: the stage of the take of the first clip, or of the only take.
+    public init(take: TakeRecord, events: [InputEvent], document: EditDocument, contentRatio: Double?? = nil) {
         let ordered = events.sortedByTime()
-        self.init(take: take, document: document, geometryTimes: TakeScreens.geometryTimes(of: ordered)) {
+        self.init(
+            take: take, document: document, geometryTimes: TakeScreens.geometryTimes(of: ordered), contentRatio: contentRatio
+        ) {
             ScreenGeometry(track: $0, events: ordered)
         }
     }
 
-    /// The same as `init(take:events:document:)`, from the take's screens read once (`TakeScreens`): it reads only what
-    /// the document names, so an editor makes one for each revision without going over the take's events again.
-    public init(take: TakeRecord, document: EditDocument, screens: TakeScreens) {
-        self.init(take: take, document: document, geometryTimes: screens.geometryTimes) { screens.geometry(of: $0) }
+    /// The same as `init(take:events:document:contentRatio:)`, from the take's screens read once (`TakeScreens`): it reads
+    /// only what the document names, so an editor makes one for each revision without going over the take's events again.
+    public init(take: TakeRecord, document: EditDocument, screens: TakeScreens, contentRatio: Double?? = nil) {
+        self.init(take: take, document: document, geometryTimes: screens.geometryTimes, contentRatio: contentRatio) {
+            screens.geometry(of: $0)
+        }
     }
 
     private init(
-        take: TakeRecord, document: EditDocument, geometryTimes: [HostTime], geometry: (TrackRecord) -> ScreenGeometry
+        take: TakeRecord, document: EditDocument, geometryTimes: [HostTime], contentRatio given: Double??,
+        geometry: (TrackRecord) -> ScreenGeometry
     ) {
-        let contentRatio = StageLayout.contentRatio(take: take, document: document, geometry: geometry)
+        let contentRatio = given ?? StageLayout.contentRatio(take: take, document: document, geometry: geometry)
         self.contentRatio = contentRatio
         ratio = document.aspect.ratio(contentRatio: contentRatio)
         padding = document.style.padding
@@ -280,6 +290,18 @@ public struct TakeScreens: Sendable {
     /// The ratio `auto` takes for `document` (`StageLayout.contentRatio`), from the screens read once.
     public func contentRatio(take: TakeRecord, document: EditDocument) -> Double? {
         StageLayout.contentRatio(take: take, document: document) { geometry(of: $0) }
+    }
+
+    /// `StageLayout.contentRatio(project:document:)` from the screens of each take read once (`screens`, by take id):
+    /// those of the take of the document's first clip (`StageLayout.contentRatioTake(of:ownTake:)`), one of `takes` (the
+    /// manifest's); `nil` for a take `takes` or `screens` does not have. What an editor sizes its preview and its export by
+    /// for each revision, without going over a take's events again.
+    public static func contentRatio(
+        of document: EditDocument, takes: [TakeRecord], ownTake: String, screens: [String: TakeScreens]
+    ) -> Double? {
+        let id = StageLayout.contentRatioTake(of: document, ownTake: ownTake)
+        guard let take = takes.first(where: { $0.id == id }), let shown = screens[id] else { return nil }
+        return shown.contentRatio(take: take, document: document)
     }
 
     /// The screen `track` of the take, as the take's events place it.

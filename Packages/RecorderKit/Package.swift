@@ -64,6 +64,8 @@ let package = Package(
                 "AppSupport", "ProjectFormat", "Recording", "Analysis", "Editing", "SyntheticCapture", "RecorderKitTestSupport",
                 // Only the tests: they tie what the export sheet remembers to Export's own values (plan decision 41).
                 "Export",
+                // Only the tests: a metered microphone's listener feeding Follow the Voice's live feed (plan 3d, T5).
+                "Transcription",
             ]),
         .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "Render", "RecorderKitTestSupport"]),
         .testTarget(name: "TranscriptionTests", dependencies: ["Transcription", "ProjectFormat", "Export", "Recording", "SyntheticCapture", "RecorderKitTestSupport"]),

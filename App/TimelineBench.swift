@@ -102,8 +102,11 @@ enum TimelineBench {
         }
         let clip = document.sequence[250]
         let limits = SequenceCommands.trimLimits(document, clipID: clip.id, edge: .end, take: project.take, events: project.events)
+        let bounds = TakeTimeline.editableBounds(take: project.take, events: project.events)
         let steps = (1...120).compactMap { k in
-            SequenceCommands.trim(document, clipID: clip.id, edge: .end, toSource: clip.end.adding(seconds: -Double(k) / 60), limits: limits)
+            SequenceCommands.trim(
+                document, clipID: clip.id, edge: .end, toSource: clip.end.adding(seconds: -Double(k) / 60), limits: limits,
+                takeBounds: [project.take.id: bounds.start...bounds.end])
         }
         var before: [Double] = [], after: [Double] = []
         for step in steps {

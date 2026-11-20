@@ -90,7 +90,12 @@ public enum TypingSpeed {
         let clips = distinct(takes).flatMap { plan(doc, take: $0.0, events: $0.1, speed: speed) }.sorted { $0.index < $1.index }
         guard !clips.isEmpty else { return nil }
         var ids = Set(doc.sequence.map(\.id))
-        var changes = SequenceChanges(doc.sequence)
+        // A clip sped up heard sooner reads further back in its take: the cuts held to what each of `takes` has.
+        let bounds = Dictionary(distinct(takes).map { take, events in
+            let editable = TakeTimeline.editableBounds(take: take, events: events)
+            return (take.id, editable.start...editable.end)
+        }) { first, _ in first }
+        var changes = SequenceChanges(doc.sequence, takeBounds: bounds)
         var inserted = 0
         var touched: [String] = []
         for clip in clips {

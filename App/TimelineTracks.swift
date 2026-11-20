@@ -112,6 +112,10 @@ struct TimelineContent {
     let cameraChanges: TrackItems<CameraChangeInfo>
     /// The privacy blocks (phase 2 design §7.1).
     let privacy: TimelinePrivacyItems
+    /// The annotations, in their lanes (phase 3 design §5.6).
+    let annotations: TimelineAnnotationItems
+    /// The clips with content of the Video track (phase 3 design §5.2–§5.4).
+    let contentClips: TimelineContentClipItems
     /// The captions (phase 2 design §5.2); none without a transcript.
     let captions: TrackItems<CaptionInfo>
     /// The layout blocks, where the preview shows them.
@@ -127,6 +131,12 @@ struct TimelineContent {
     /// The spans of the screen or the camera that could not be read (`MissingVideo`), in order.
     let missing: [Range<Int64>]
     let audio: [String: AudioTrack]
+    /// Where each clip's sound plays (phase 3 design §7.3: a J or L cut moves it off its picture), the stretches at another
+    /// volume of each audio row by its track's id, where the output plays them (`AudioRangeCommands.shownRanges`), and
+    /// the cuts of the sequence the sound can be cut at J or L (`AudioRowRules.cuts`).
+    let audioWindows: TrackItems<AudioWindowInfo>
+    let audioRanges: [String: [AudioRangeCommands.ShownRange]]
+    let audioCuts: [(clip: Int, picture: Int64, audio: Int64)]
     /// The width of the screen the take starts on over its height: the thumbnails' shape.
     let screenAspect: Double
     /// The screen shown from each source instant on: the take's first, then its changes in time order.
@@ -190,6 +200,8 @@ struct TimelineContent {
                 info: Zoom(depth: region.depth ?? document.zoom.auto.depth, automatic: region.origin == .auto))
         })
         privacy = TimelinePrivacyItems(document: document)
+        annotations = TimelineAnnotationItems(document: document, map: map)
+        contentClips = TimelineContentClipItems(document: document, map: map, take: take.id)
         let output = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080, contentRatio: contentRatio)
         captions = TimelineCaptionItems.items(document: document, map: map, outputSize: output)
         let orientation = CameraLayoutGeometry.orientation(output: SIMD2(Double(output.x), Double(output.y)))
@@ -236,6 +248,11 @@ struct TimelineContent {
             }
         }
         self.audio = audio
+        audioWindows = TimelineAudioItems.windows(document.sequence, map: map)
+        let hasRanges = document.audio.tracks.values.contains { !$0.ranges.isEmpty }
+        audioRanges = hasRanges
+            ? Dictionary(uniqueKeysWithValues: audio.keys.map { ($0, AudioRangeCommands.shownRanges(document, track: $0, timeMap: map)) }) : [:]
+        audioCuts = AudioRowRules.cuts(document, timeMap: map)
 
         let first = initialScreen.flatMap(take.track)
         let frame = first?.source.captureArea ?? first?.source.globalFrame
@@ -446,12 +463,15 @@ final class TimelineTracks {
     private let spans: LayerPool<SpanLayer>
     private let layouts: LayerPool<LayoutBlockLayer>
     private let diamonds: LayerPool<CALayer>
-    /// Under each audio track's waveform, a region for each clip in sight, so the row reads as sound.
-    private let audioClips: LayerPool<CALayer>
     private let cameraNotice = CATextLayer()
-    private var waveforms: [String: CAShapeLayer] = [:]
+    /// The audio rows: their waveforms, volume lines, stretches and cuts of the sound (phase 3).
+    let audioRows = TimelineAudioRows()
     /// The Privacy row's blocks (phase 2).
     private let privacyRow = TimelinePrivacyRow()
+    /// The Annotations row's blocks (phase 3).
+    private let annotationsRow = TimelineAnnotationsRow()
+    /// The clips with content of the Video row (phase 3), and the lengths and frames of the imported clips' files.
+    let contentClips = TimelineContentClipsRow()
     /// The Captions row's blocks (phase 2).
     private let captionsRow = CaptionTrackLayers()
     /// The output time under the playhead, for the caption it highlights (`moved(playhead:)` when it moves).
@@ -481,8 +501,6 @@ final class TimelineTracks {
     /// The thumbnail each tile shows, or is waiting for.
     private var tileKeys: [String: ThumbnailKey] = [:]
     private static let keptThumbnails = 400
-    /// Clips faster than this are silent (`SpeedStretch.maximumSpeed` of the export): their waveform is flat.
-    private static let fastestHeard = 4.0
     /// The narrowest piece of a thumbnail drawn: under it, the clip's color.
     private static let narrowestThumbnail = 16.0
 
@@ -491,6 +509,7 @@ final class TimelineTracks {
         layer.addSublayer(rows)
         thumbnailStrip.mask = clipMask
         rows.addSublayer(thumbnailStrip)
+        thumbnailStrip.addSublayer(contentClips.layer)
         clipLayers = LayerPool(parent: rows) { ClipLayer() }
         hatches = LayerPool(parent: rows) {
             let hatch = CAShapeLayer()
@@ -519,19 +538,14 @@ final class TimelineTracks {
             diamond.zPosition = 2
             return diamond
         }
-        audioClips = LayerPool(parent: rows) {
-            let region = CALayer()
-            region.cornerRadius = 4
-            region.borderWidth = 1
-            // Under the waveforms.
-            region.zPosition = -1
-            return region
-        }
+        rows.addSublayer(audioRows.layer)
         TimelineText.setUp(cameraNotice, size: 10, weight: .regular)
         cameraNotice.string = String(localized: "The camera can't be read: only the screen is shown.")
         rows.addSublayer(cameraNotice)
         rows.addSublayer(privacyRow.layer)
+        rows.addSublayer(annotationsRow.layer)
         rows.addSublayer(captionsRow.layer)
+        contentClips.arrived = { [weak self] in self?.thumbnailArrived() }
         layer.addSublayer(separators)
         separators.lineWidth = 1
         separators.fillColor = nil
@@ -551,13 +565,15 @@ final class TimelineTracks {
         }
         separators.path = lines
 
-        for pool in [clipLayers.begin, tiles.begin, hatches.begin, blocks.begin, spans.begin, layouts.begin, diamonds.begin, audioClips.begin] {
+        for pool in [clipLayers.begin, tiles.begin, hatches.begin, blocks.begin, spans.begin, layouts.begin, diamonds.begin] {
             pool()
         }
         privacyRow.begin()
+        annotationsRow.begin()
+        contentClips.begin()
         captionsRow.begin()
+        audioRows.begin()
         var wanted: Set<ThumbnailKey> = []
-        var shownWaveforms: Set<String> = []
         for row in geometry.rows {
             switch row.track {
             case .ruler: break
@@ -568,19 +584,18 @@ final class TimelineTracks {
             case .privacy: privacyRow.layOut(content, row, geometry, palette, selected: selected, settling: settling)
             case .camera: layOutCamera(content, row, geometry, palette)
             case let .audio(id):
-                layOutWaveform(id, content, row, geometry, palette)
-                shownWaveforms.insert(id)
-            // Empty in the base of phase 3: the annotations (3a) and the sound (3c) draw in them.
-            case .annotations, .importedAudio, .music: break
+                audioRows.layOut(id, content, row, geometry, palette, levels: waveformLevels[id], selected: selected, settling: settling)
+            case .annotations: annotationsRow.layOut(content, row, geometry, palette, selected: selected, settling: settling)
+            // Empty in the base of phase 3: the sound (3c) draws in them.
+            case .importedAudio, .music: break
             }
         }
-        for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end, audioClips.end] { pool() }
+        for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end] { pool() }
         privacyRow.end()
+        annotationsRow.end()
+        contentClips.end()
         captionsRow.end()
-        for (id, waveform) in waveforms where !shownWaveforms.contains(id) {
-            waveform.removeFromSuperlayer()
-            waveforms[id] = nil
-        }
+        audioRows.end()
         // What is no longer in sight is not made.
         for (key, task) in loading where !wanted.contains(key) {
             task.cancel()
@@ -599,21 +614,23 @@ final class TimelineTracks {
         layer.isHidden = true
         for task in loading.values { task.cancel() }
         loading = [:]
+        contentClips.stop()
     }
 
     /// Forgets the layers, so the next update makes them again with new colors.
     func reset() {
         for pool in [
             clipLayers.removeAll, tiles.removeAll, hatches.removeAll, blocks.removeAll, spans.removeAll, layouts.removeAll,
-            diamonds.removeAll, audioClips.removeAll,
+            diamonds.removeAll,
         ] {
             pool()
         }
         privacyRow.reset()
+        annotationsRow.reset()
+        contentClips.reset()
         captionsRow.reset()
+        audioRows.reset()
         tileKeys = [:]
-        for waveform in waveforms.values { waveform.removeFromSuperlayer() }
-        waveforms = [:]
     }
 
     /// Forgets the thumbnails (another project, or the package moved).
@@ -624,12 +641,14 @@ final class TimelineTracks {
         thumbnailOrder = []
         tileKeys = [:]
         tiles.removeAll()
+        contentClips.forgetFrames()
     }
 
     /// How many layers the rows have in sight now, for the benchmark.
     var layerCount: Int {
         clipLayers.shownCount + tiles.shownCount + hatches.shownCount + blocks.shownCount + spans.shownCount
-            + layouts.shownCount + diamonds.shownCount + audioClips.shownCount + waveforms.count + captionsRow.layerCount
+            + layouts.shownCount + diamonds.shownCount + audioRows.layerCount + captionsRow.layerCount
+            + contentClips.layerCount
     }
 
     // MARK: - Video
@@ -678,6 +697,9 @@ final class TimelineTracks {
         }
 
         layOutThumbnails(content, geometry, height: height, &wanted)
+        // A frozen frame, a title card and an imported clip (phase 3), over the strip.
+        contentClips.layOut(
+            content, geometry, palette, height: height, selected: selected, settling: settling, thumbnails: thumbnailCache)
 
         for (i, span) in content.missing.enumerated() where span.upperBound >= lower && span.lowerBound <= upper {
             guard let rect = geometry.itemRect(span, top: top, height: height, gap: 0) else { continue }
@@ -1001,96 +1023,5 @@ final class TimelineTracks {
         let drawn = image.cgImage(forProposedRect: &rect, context: nil, hints: [.ctm: AffineTransform(scaleByX: scale, byY: scale)])
         if let drawn { symbols[key] = drawn }
         return drawn
-    }
-
-    // MARK: - Audio
-
-    /// The waveform of audio track `id` across what is in sight: for each point of width, the lowest and highest sample
-    /// of the source its output shows (none of a clip faster than 4×, which is silent), times the track's gain, and flat
-    /// when it is muted.
-    private func layOutWaveform(
-        _ id: String, _ content: TimelineContent, _ row: TimelineGeometry.Row, _ geometry: TimelineGeometry, _ palette: TimelinePalette
-    ) {
-        let shape: CAShapeLayer
-        if let existing = waveforms[id] {
-            shape = existing
-        } else {
-            shape = CAShapeLayer()
-            rows.addSublayer(shape)
-            waveforms[id] = shape
-        }
-        let track = content.audio[id]
-        let isMicrophone = track?.isMicrophone != false
-        shape.fillColor = isMicrophone ? palette.microphone : palette.systemAudio
-        shape.opacity = track?.muted == true ? 0.5 : 1
-        let top = row.top + 2, height = row.height - 4
-        shape.frame = CGRect(x: 0, y: top, width: geometry.areaWidth, height: height)
-        // A region under the waveform for each clip in sight, tinted as the track.
-        let tint = isMicrophone ? palette.microphoneClip : palette.systemAudioClip
-        let (lower, upper) = geometry.visibleOutput
-        content.clips.forEach(from: lower, to: upper) { item in
-            guard let rect = geometry.itemRect(item.output, top: top, height: height, gap: 1) else { return }
-            let (region, isNew) = audioClips.layer("\(id) \(item.id)")
-            if isNew {
-                region.backgroundColor = tint.fill
-                region.borderColor = palette.increaseContrast ? palette.contrastBorder : tint.stroke
-            }
-            region.opacity = shape.opacity
-            place(region, rect, isNew: isNew)
-        }
-        guard let track, let levels = waveformLevels[id] else {
-            shape.path = nil
-            return
-        }
-        let gain = Float(track.muted ? 0 : min(max(track.gain, 0), 2))
-        // Inside the regions, clear of their borders.
-        let middle = height / 2, half = height / 2 - 3
-        let clips = content.clips.items
-        let columns = Int(geometry.areaWidth.rounded(.up))
-        var tops: [CGPoint] = []
-        var bottoms: [CGPoint] = []
-        tops.reserveCapacity(columns + 1)
-        bottoms.reserveCapacity(columns + 1)
-        var k = 0
-        let duration = content.map.duration
-        for column in 0...columns {
-            let x = Double(column)
-            let a = geometry.output(atX: x), b = geometry.output(atX: x + 1)
-            guard b > 0, a < duration else { continue }
-            let from = max(a, 0), to = min(b, duration)
-            while k < clips.count, clips[k].output.upperBound <= from { k += 1 }
-            var low = Float.infinity, high = -Float.infinity
-            var t = from, j = k
-            while t < to, j < clips.count {
-                let clip = clips[j]
-                let end = min(to, clip.output.upperBound)
-                if !clip.info.silent, clip.info.speed <= Self.fastestHeard {
-                    let start = Double(clip.info.start) - Double(track.origin)
-                    let sa = start + Double(t - clip.output.lowerBound) * clip.info.speed
-                    let sb = start + Double(end - clip.output.lowerBound) * clip.info.speed
-                    if let range = levels.range(fromPair: sa / 1e7, toPair: sb / 1e7) {
-                        low = min(low, range.x)
-                        high = max(high, range.y)
-                    }
-                }
-                t = end
-                j += 1
-            }
-            if low > high { (low, high) = (0, 0) }
-            low = min(max(low * gain, -1), 1)
-            high = min(max(high * gain, -1), 1)
-            // At least half a point, so silence is a line.
-            let topY = middle - Double(high) * half, bottomY = max(middle - Double(low) * half, topY + 0.5)
-            tops.append(CGPoint(x: x, y: topY))
-            bottoms.append(CGPoint(x: x, y: bottomY))
-        }
-        guard !tops.isEmpty else {
-            shape.path = nil
-            return
-        }
-        let path = CGMutablePath()
-        path.addLines(between: tops + bottoms.reversed())
-        path.closeSubpath()
-        shape.path = path
     }
 }

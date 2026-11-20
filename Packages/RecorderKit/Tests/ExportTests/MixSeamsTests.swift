@@ -54,10 +54,10 @@ import Testing
         for round in 0..<50 {
             document.sequence = randomSequence(using: &generator)
             let timeMap = TimeMap(sequence: document.sequence)
-            let cuts = AudioCuts(document: document, timeMap: timeMap)
+            let cuts = AudioCuts(document: document, timeMap: timeMap, takeBounds: [:])
             #expect(cuts.starts == timeMap.clipOutputStarts.map(EditedMix.frames(ofNanoseconds:)), "round \(round)")
             #expect(cuts.sourceShift == Array(repeating: 0, count: document.sequence.count), "round \(round)")
-            #expect(GainRangePlan(document: document, timeMap: timeMap, keys: [["take-001/mic"], ["take-002/mic"]]).isEmpty)
+            #expect(GainRangePlan(document: document, timeMap: timeMap, keys: [["take-001/mic"], ["take-002/mic"]], cuts: cuts).isEmpty)
         }
     }
 

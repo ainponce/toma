@@ -188,12 +188,16 @@ public enum ZoomCommands {
     /// the document as it is: its settings, its stage, its user's blocks and suppressed ranges; nothing with `enabled`
     /// off): the others kept in their order, each planned one before the first kept that starts after it. A planned block
     /// the document has already, the same, stays where it is; one whose id a kept block has is left out, so no two blocks
-    /// share an id. What `regenerate` and `StyleCommands.applyDefaultStyle` write.
-    static func replanned(_ doc: EditDocument, take: TakeRecord, events: [InputEvent]) -> [ZoomRegion] {
+    /// share an id. What `regenerate` and `StyleCommands.applyDefaultStyle` write. `contentRatio`: the ratio `auto`
+    /// follows for a take that is not the first clip's (`AutoZoomPlanner.plan`); `nil`, `take`'s own.
+    static func replanned(
+        _ doc: EditDocument, take: TakeRecord, events: [InputEvent], contentRatio: Double?? = nil
+    ) -> [ZoomRegion] {
         func untouched(_ region: ZoomRegion) -> Bool { region.origin == .auto && region.take == take.id }
         var planned = doc
         planned.zoom.regions = doc.zoom.regions.filter { !untouched($0) }
-        let made = doc.zoom.auto.enabled ? AutoZoomPlanner.plan(take: take, events: events, document: planned) : []
+        let made = doc.zoom.auto.enabled
+            ? AutoZoomPlanner.plan(take: take, events: events, document: planned, contentRatio: contentRatio) : []
 
         let taken = Set(planned.zoom.regions.map(\.id))
         let old = Dictionary(doc.zoom.regions.filter(untouched).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

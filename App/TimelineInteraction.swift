@@ -23,28 +23,30 @@ import QuartzCore
 ///   end, within 8 pt (`snapping` of the view, ⌘ inverts it while dragging).
 @MainActor
 final class TimelineInteraction {
-    private unowned let view: EditorTimelineView
+    unowned let view: EditorTimelineView
     weak var model: EditorModel?
 
-    private var drag = Drag.none
+    var drag = Drag.none
     private var hover: TimelineHit?
     private let highlight = CALayer()
     private let dragLabel = CATextLayer()
     private let noticeLabel = CATextLayer()
     private var noticeTask: Task<Void, Never>?
     /// The step the gesture in progress has now.
-    private var lastStep: EditStep?
+    var lastStep: EditStep?
 
     /// What a drag started from: the document and what it needs to work out its steps, taken once at its start.
-    private struct Base {
+    struct Base {
         var document: EditDocument
         var map: TimeMap
         /// The edit points that edges snap to, in output time.
         var points: [Int64]
         var project: LoadedProject?
+        /// What each take has, which a trim holds the cuts of the sound to (`EditorModel.takeBounds`).
+        var takeBounds: [String: ClosedRange<HostTime>]
     }
 
-    private enum Drag {
+    enum Drag {
         case none
         /// The playhead follows the mouse.
         case playhead
@@ -68,6 +70,15 @@ final class TimelineInteraction {
         /// A privacy block (phase 2): trimmed by an edge, or moved by its body; neither stops at another block.
         case trimPrivacy(Base, id: String, edge: ClipEdge, range: Range<Int64>)
         case movePrivacy(Base, id: String, range: Range<Int64>, grab: Int64)
+        /// An annotation (phase 3): trimmed by an edge, or moved by its body, in one step; one of the take through the cuts.
+        case trimAnnotation(Base, id: String, edge: ClipEdge, range: Range<Int64>)
+        case moveAnnotation(Base, id: String, range: Range<Int64>, grab: Int64)
+        /// An audio row's (phase 3, `TimelineAudioDrags`).
+        case audio(AudioDrag)
+        /// A clip with content (phase 3): the right edge of a frozen frame or a title card sets its length; the edges of an
+        /// imported clip trim its file, `fileDuration` ns long.
+        case contentDuration(Base, clip: Clip, outputStart: Int64)
+        case trimMedia(Base, clip: Clip, edge: ClipEdge, outputStart: Int64, fileDuration: Int64)
     }
 
     init(view: EditorTimelineView) {
@@ -87,9 +98,9 @@ final class TimelineInteraction {
 
     // MARK: - Looking
 
-    private var canEdit: Bool { model?.canEdit == true }
+    var canEdit: Bool { model?.canEdit == true }
 
-    private func point(_ event: NSEvent) -> CGPoint {
+    func point(_ event: NSEvent) -> CGPoint {
         view.convert(event.locationInWindow, from: nil)
     }
 
@@ -99,7 +110,13 @@ final class TimelineInteraction {
         let scrolled = CGPoint(
             x: point.x, y: point.y < TimelineLayout.rulerHeight ? point.y : point.y + view.verticalOffset)
         let hit = TimelineHitTest.hit(at: scrolled, items: view.hitItems, layout: content.layout, scale: view.scale, offset: view.offset)
-        return normalized(hit)
+        // The Annotations row has lanes: what is under the point is its lane's (plan 3a decision 17).
+        switch hit {
+        case .empty(.annotations, _), .item(.annotations, _), .edge(.annotations, _, _):
+            return content.annotations.hit(at: scrolled, layout: content.layout, scale: view.scale, offset: view.offset) ?? hit
+        default:
+            return normalized(hit)
+        }
     }
 
     /// The edge of a screen's stretch is the limit between two: the start of the first stretch, and the end of the last, are
@@ -107,6 +124,10 @@ final class TimelineInteraction {
     private func normalized(_ hit: TimelineHit) -> TimelineHit {
         // A caption has no edges to grab: its body is all there is (the captions follow the words).
         if case let .edge(.captions, id, _) = hit { return .item(.captions, id: id) }
+        // The left edge of a frozen frame or a title card (phase 3) is where the clip before it ends: its body.
+        if case let .edge(.video, id, edge) = hit, let info = view.content?.contentClips.info(id),
+            ContentClipTrackRules.drag(for: edge, of: info.clip) == nil
+        { return .item(.video, id: id) }
         guard case let .edge(.screen, id, edge) = hit, let content = view.content else { return hit }
         switch edge {
         case .start: return id == "initial" ? .item(.screen, id: id) : hit
@@ -115,11 +136,11 @@ final class TimelineInteraction {
     }
 
     /// The output time at `point`.
-    private func output(at point: CGPoint) -> Int64 {
+    func output(at point: CGPoint) -> Int64 {
         view.content?.layout.output(atX: point.x, scale: view.scale, offset: view.offset) ?? 0
     }
 
-    private func clamped(_ τ: Int64) -> Int64 {
+    func clamped(_ τ: Int64) -> Int64 {
         min(max(τ, 0), view.content?.map.duration ?? 0)
     }
 
@@ -134,6 +155,8 @@ final class TimelineInteraction {
         case let .clips(ids)?, let .zooms(ids)?: ids
         case let .cameraChange(id)?, let .screenChange(id)?, let .layoutBlock(id)?: [id]
         case let .privacyBlocks(ids)?: ids
+        case let .annotations(ids)?: ids
+        case let .gainRange(id)?: [id]
         case nil: []
         }
     }
@@ -165,7 +188,8 @@ final class TimelineInteraction {
         case .camera: return isLayoutBlock(id) ? .layoutBlock(id) : .cameraChange(id)
         case .screen: return id == "initial" ? nil : .screenChange(id)
         case .privacy: return .privacyBlocks(ids)
-        case .ruler, .audio, .captions, .annotations, .importedAudio, .music: return nil
+        case .annotations: return .annotations(ids)
+        case .ruler, .audio, .captions, .importedAudio, .music: return nil
         }
     }
 
@@ -186,6 +210,8 @@ final class TimelineInteraction {
             }
             return
         }
+        // An audio row (3c): its volume line, its stretches and its cuts of the sound (`TimelineAudioDrags`).
+        if audioMouseDown(event, at: point, hit: hit) { return }
         // A caption is not selected, dragged or trimmed; a double click shows its word in the Captions tab.
         if case let .item(.captions, id) = hit {
             if event.clickCount >= 2 { revealCaption(id, at: output(at: point)) }
@@ -196,6 +222,12 @@ final class TimelineInteraction {
         // A double click on a privacy block selects it and takes the playhead into it: the preview shows its rect.
         if event.clickCount >= 2, case let .item(.privacy, id) = hit {
             model?.selectPrivacyBlock(id, showingIt: true)
+            drag = .none
+            return
+        }
+        // A double click on an annotation selects it and takes the playhead into it: the preview shows it.
+        if event.clickCount >= 2, case let .item(.annotations, id) = hit {
+            model?.selectAnnotation(id, showingIt: true)
             drag = .none
             return
         }
@@ -262,6 +294,12 @@ final class TimelineInteraction {
             updateDrag(event)
         case .trimPrivacy, .movePrivacy:
             updateDrag(event)
+        case .trimAnnotation, .moveAnnotation:
+            updateDrag(event)
+        case let .audio(audio):
+            audioMouseDragged(audio, event)
+        case .contentDuration, .trimMedia:
+            updateDrag(event)
         }
     }
 
@@ -284,6 +322,12 @@ final class TimelineInteraction {
             finish()
         case .trimPrivacy, .movePrivacy:
             finish()
+        case .trimAnnotation, .moveAnnotation:
+            finish()
+        case let .audio(audio):
+            audioMouseUp(audio, event)
+        case .contentDuration, .trimMedia:
+            finish()
         }
     }
 
@@ -298,6 +342,7 @@ final class TimelineInteraction {
         }
         let next = hit(at: point)
         setCursor(for: next)
+        if case .empty(.audio, _) = next { setAudioCursor(event, at: point) }
         guard next != hover else { return }
         hover = next
         refreshHighlight()
@@ -398,7 +443,7 @@ final class TimelineInteraction {
     // MARK: - Drags
 
     /// Starts the model's gesture and takes what the drag's steps are made from: nothing if the document cannot be edited.
-    private func begin() -> Base? {
+    func begin() -> Base? {
         guard let model, canEdit, !model.isGesturing, let document = model.document else { return nil }
         model.beginGesture()
         guard model.isGesturing else { return nil }
@@ -406,7 +451,7 @@ final class TimelineInteraction {
         let project = model.overlayProject
         let points = EditPoints(document: document, timeMap: map, markers: model.markerTimes).all
         lastStep = nil
-        return Base(document: document, map: map, points: points, project: project)
+        return Base(document: document, map: map, points: points, project: project, takeBounds: model.takeBounds)
     }
 
     /// The drag of the pressed item `hit`, if it has one.
@@ -416,6 +461,27 @@ final class TimelineInteraction {
             return
         }
         switch hit {
+        case let .edge(.video, id, edge) where view.content?.contentClips.info(id) != nil:
+            // A clip with content (phase 3): a frozen frame's or a title card's right edge sets its length, an imported
+            // clip's edges trim its file (as long as it was read; until then, as long as the clip shows).
+            guard let k = document.sequence.firstIndex(where: { $0.id == id }),
+                let rule = ContentClipTrackRules.drag(for: edge, of: document.sequence[k])
+            else {
+                drag = .none
+                return
+            }
+            let clip = document.sequence[k]
+            var fileDuration: Int64 = 0
+            if case let .media(media)? = clip.content {
+                fileDuration = view.tracks.contentClips.fileDuration(of: media.asset) ?? max(media.end, 0)
+            }
+            guard let base = begin() else { return }
+            let outputStart = base.map.clipOutputStarts[k]
+            switch rule {
+            case .duration: drag = .contentDuration(base, clip: clip, outputStart: outputStart)
+            case .mediaStart, .mediaEnd:
+                drag = .trimMedia(base, clip: clip, edge: edge, outputStart: outputStart, fileDuration: fileDuration)
+            }
         case let .edge(.video, id, edge):
             guard let k = document.sequence.firstIndex(where: { $0.id == id }), let base = begin(), let project = base.project else { return }
             let limits = SequenceCommands.trimLimits(document, clipID: id, edge: edge, take: project.take, events: project.events)
@@ -447,6 +513,16 @@ final class TimelineInteraction {
         case let .item(.privacy, id):
             guard let base = begin(), let range = TimelinePrivacyItems.range(of: id, in: base.document) else { return }
             drag = .movePrivacy(base, id: id, range: range, grab: output(at: point) - range.lowerBound)
+        case let .item(.annotations, id) where TimelineAnnotationItems.isWhole(id, in: document),
+            let .edge(.annotations, id, _) where TimelineAnnotationItems.isWhole(id, in: document):
+            // The whole video neither moves nor trims: no gesture for it.
+            drag = .none
+        case let .edge(.annotations, id, edge):
+            guard let range = TimelineAnnotationItems.range(of: id, in: document), let base = begin() else { return }
+            drag = .trimAnnotation(base, id: id, edge: edge, range: range)
+        case let .item(.annotations, id):
+            guard let range = TimelineAnnotationItems.range(of: id, in: document), let base = begin() else { return }
+            drag = .moveAnnotation(base, id: id, range: range, grab: output(at: point) - range.lowerBound)
         default:
             drag = .none
         }
@@ -469,7 +545,7 @@ final class TimelineInteraction {
     }
 
     /// `τ` at what it snaps to: the edit points, the playhead and the marks (nothing, without a base: only the last two).
-    private func snapped(_ τ: Int64, event: NSEvent, base: Base?) -> Int64 {
+    func snapped(_ τ: Int64, event: NSEvent, base: Base?) -> Int64 {
         let active = TimelineDragRules.snapActive(enabled: view.snapping, commandHeld: event.modifierFlags.contains(.command))
         return TimelineDragRules.snap(
             τ, points: base?.points ?? [], extra: snapTargets(), tolerance: TimelineHitTest.snapTolerance(scale: view.scale), active: active)
@@ -489,13 +565,16 @@ final class TimelineInteraction {
         var trimmedZoom: (id: String, edge: ClipEdge, output: Int64)?
         var trimmedLayout: (id: String, edge: ClipEdge, output: Int64)?
         var trimmedPrivacy: (id: String, edge: ClipEdge, output: Int64)?
+        var trimmedAnnotation: (id: String, edge: ClipEdge, output: Int64)?
+        var trimmedMedia: (clip: Clip, edge: ClipEdge, outputStart: Int64)?
         let base: Base
         switch drag {
         case let .trimClip(trimBase, clip, edge, outputStart, limits):
             base = trimBase
             let τ = snapped(output(at: point), event: event, base: base)
             let source = TimelineDragRules.sourceInstant(atOutput: τ, clipOutputStart: outputStart, clipStart: clip.start, speed: clip.speed)
-            step = SequenceCommands.trim(base.document, clipID: clip.id, edge: edge, toSource: source, limits: limits)
+            step = SequenceCommands.trim(
+                base.document, clipID: clip.id, edge: edge, toSource: source, limits: limits, takeBounds: base.takeBounds)
             let speed = ClipSpeed.clamped(clip.speed)
             let origin = edge == .start ? clip.start : clip.end
             let to = min(max(source, limits.lowerBound), limits.upperBound)
@@ -564,11 +643,36 @@ final class TimelineInteraction {
                 of: range, by: proposed, points: base.points, extra: snapTargets(),
                 tolerance: TimelineHitTest.snapTolerance(scale: view.scale), active: active)
             step = PrivacyCommands.move(base.document, id: id, toOutputStart: range.lowerBound + shift)
+        case let .trimAnnotation(trimBase, id, edge, range):
+            base = trimBase
+            let τ = snapped(output(at: point), event: event, base: base)
+            step = AnnotationCommands.trim(base.document, id: id, edge: edge, toOutput: τ)
+            trimmedAnnotation = (id, edge, edge == .start ? range.lowerBound : range.upperBound)
+        case let .moveAnnotation(moveBase, id, range, grab):
+            base = moveBase
+            let proposed = output(at: point) - grab - range.lowerBound
+            let active = TimelineDragRules.snapActive(enabled: view.snapping, commandHeld: event.modifierFlags.contains(.command))
+            let shift = TimelineDragRules.snapShift(
+                of: range, by: proposed, points: base.points, extra: snapTargets(),
+                tolerance: TimelineHitTest.snapTolerance(scale: view.scale), active: active)
+            step = AnnotationCommands.move(base.document, id: id, toOutputStart: range.lowerBound + shift)
+        case let .contentDuration(durationBase, clip, outputStart):
+            base = durationBase
+            let τ = snapped(output(at: point), event: event, base: base)
+            let duration = ContentClipTrackRules.duration(dragging: clip, toOutputEnd: τ, start: outputStart)
+            step = ContentClipCommands.setDuration(base.document, clipID: clip.id, duration)
+            label = (duration - TimeMap.outputDuration(of: clip), outputStart + duration)
+        case let .trimMedia(trimBase, clip, edge, outputStart, fileDuration):
+            base = trimBase
+            let τ = snapped(output(at: point), event: event, base: base)
+            step = ContentClipCommands.trimMedia(base.document, clipID: clip.id, edge: edge, toOutput: τ, fileDuration: fileDuration)
+            trimmedMedia = (clip, edge, outputStart)
         default:
             return
         }
         switch drag {
-        case .trimPrivacy: NSCursor.resizeLeftRight.set()
+        case .trimPrivacy, .trimAnnotation: NSCursor.resizeLeftRight.set()
+        case .contentDuration, .trimMedia: NSCursor.resizeLeftRight.set()
         case .trimClip, .trimZoom, .trimLayout: NSCursor.resizeLeftRight.set()
         default: break
         }
@@ -590,6 +694,14 @@ final class TimelineInteraction {
             let now = moved.map { trimmed.edge == .start ? $0.lowerBound : $0.upperBound } ?? trimmed.output
             label = (now - trimmed.output, now)
         }
+        if let trimmed = trimmedAnnotation {
+            let moved = preview.flatMap { TimelineAnnotationItems.range(of: trimmed.id, in: $0) }
+            let now = moved.map { trimmed.edge == .start ? $0.lowerBound : $0.upperBound } ?? trimmed.output
+            label = (now - trimmed.output, now)
+        }
+        if let trimmed = trimmedMedia {
+            label = TimelineContentClipItems.trimLabel(trimmed.clip, edge: trimmed.edge, outputStart: trimmed.outputStart, in: preview)
+        }
         view.setPreview(preview)
         if let label, let total = view.content?.map.duration {
             showLabel(TimelineDragRules.trimLabel(delta: label.delta, position: label.position, total: total, locale: .current), at: point.x)
@@ -604,7 +716,8 @@ final class TimelineInteraction {
     func cancelDrag() -> Bool {
         switch drag {
         case .none:
-            return false
+            // Esc gives up a stretch marked on an audio row, as it does a drag.
+            return cancelAudioMark()
         case .playhead:
             view.endScrub()
         case .marks, .emptyZoom, .emptyLayout, .pressed:
@@ -614,6 +727,16 @@ final class TimelineInteraction {
             model?.cancelGesture()
             view.setPreview(nil)
         case .trimPrivacy, .movePrivacy:
+            lastStep = nil
+            model?.cancelGesture()
+            view.setPreview(nil)
+        case .trimAnnotation, .moveAnnotation:
+            lastStep = nil
+            model?.cancelGesture()
+            view.setPreview(nil)
+        case let .audio(audio):
+            cancelAudioDrag(audio)
+        case .contentDuration, .trimMedia:
             lastStep = nil
             model?.cancelGesture()
             view.setPreview(nil)
@@ -642,13 +765,15 @@ final class TimelineInteraction {
             model.rememberBlockLayout(newBlockKind)
         case .moveLayout, .trimLayout: model.selection = .layoutBlock(step.target)
         case .movePrivacy, .trimPrivacy: model.selection = .privacyBlocks([step.target])
+        case .moveAnnotation, .trimAnnotation: model.selection = .annotations([step.target])
+        case .contentDuration, .trimMedia: model.selection = .clips([step.target])
         default: break
         }
     }
 
     // MARK: - Labels
 
-    private func showLabel(_ text: String, at x: Double) {
+    func showLabel(_ text: String, at x: Double) {
         let palette = view.palette
         dragLabel.string = text
         dragLabel.foregroundColor = palette.dragLabelText
@@ -665,7 +790,7 @@ final class TimelineInteraction {
         CATransaction.commit()
     }
 
-    private func hideLabel() {
+    func hideLabel() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         dragLabel.opacity = 0
@@ -717,7 +842,11 @@ final class TimelineInteraction {
         switch hit {
         case let .item(.video, id), let .edge(.video, id, _):
             if !selectedIDs.contains(id) { select(hit, shift: false) }
-            addClipItems(to: menu, at: τ)
+            if let info = view.content?.contentClips.info(id) {
+                addContentClipItems(to: menu, info, at: τ, window: view.window)
+            } else {
+                addClipItems(to: menu, at: τ)
+            }
         case let .item(.zoom, id), let .edge(.zoom, id, _):
             if !selectedIDs.contains(id) { select(hit, shift: false) }
             addZoomItems(to: menu, id: id)
@@ -730,11 +859,16 @@ final class TimelineInteraction {
         case let .item(.privacy, id), let .edge(.privacy, id, _):
             if !selectedIDs.contains(id) { select(hit, shift: false) }
             addPrivacyItems(to: menu, id: id)
+        case let .item(.annotations, id), let .edge(.annotations, id, _):
+            if !selectedIDs.contains(id) { select(hit, shift: false) }
+            addAnnotationItems(to: menu, id: id)
         case let .item(.camera, id), let .edge(.camera, id, _):
             select(hit, shift: false)
             let delete = MenuAction(String(localized: "Delete Change")) { model.deleteCameraChange(id) }
             delete.isEnabled = canEdit
             menu.addItem(delete)
+        case .empty(.audio, _):
+            return audioMenu(at: point)
         default:
             return nil
         }
@@ -767,6 +901,8 @@ final class TimelineInteraction {
         let typing = MenuAction(String(localized: "Speed Up Typing…")) { model.askTypingSpeed() }
         typing.isEnabled = canEdit
         menu.addItem(typing)
+        menu.addItem(.separator())
+        addContentInsertItems(to: menu, at: τ)
         menu.addItem(.separator())
         let delete = MenuAction(String(localized: "Delete")) { [weak self] in self?.deleteSelected() }
         delete.isEnabled = canEdit
@@ -1001,7 +1137,7 @@ extension EditorModel {
         let step: EditStep?
         switch selection {
         case let .clips(ids)?:
-            switch SequenceCommands.delete(document, clipIDs: ids) {
+            switch SequenceCommands.delete(document, clipIDs: ids, takeBounds: takeBounds) {
             case .failure(.lastClip): return .lastClip
             case let .success(deleted): step = deleted.changes.isEmpty ? nil : deleted
             }
@@ -1013,6 +1149,10 @@ extension EditorModel {
             step = LayoutCommands.delete(document, ids: [id])
         case let .privacyBlocks(ids)?:
             step = PrivacyCommands.delete(document, ids: ids)
+        case let .annotations(ids)?:
+            step = AnnotationCommands.delete(document, ids: ids)
+        case let .gainRange(id)?:
+            step = gainRangeDeletion(id)
         case .screenChange?, nil:
             step = nil
         }
@@ -1022,7 +1162,9 @@ extension EditorModel {
 
     /// Plays the clips of `speedTargets` at `speed` (0.25× to 16×).
     func setSpeed(_ speed: Double) {
-        guard canEdit, let document, let step = SequenceCommands.setSpeed(document, clipIDs: speedTargets, speed: speed) else { return }
+        guard canEdit, let document,
+            let step = SequenceCommands.setSpeed(document, clipIDs: speedTargets, speed: speed, takeBounds: takeBounds)
+        else { return }
         perform(step)
     }
 

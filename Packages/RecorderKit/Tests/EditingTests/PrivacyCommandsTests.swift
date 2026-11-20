@@ -212,7 +212,7 @@ private enum PrivacyFixture {
 
     @Test func aBlockOverACutIsKept() throws {
         let doc = F.document([F.block("p-a", from: 2, to: 4)])
-        let step = try SequenceCommands.deleteRange(doc, output: F.output(1)..<F.output(6), makeID: F.counter()).get()
+        let step = try SequenceCommands.deleteRange(doc, output: F.output(1)..<F.output(6), takeBounds: [:], makeID: F.counter()).get()
         let cut = try doc.applying(step.changes)
         #expect(cut.privacy.blocks.count == 1)
         #expect(PrivacyCommands.outputRange(of: cut.privacy.blocks[0], in: cut) == nil)

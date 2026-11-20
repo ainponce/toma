@@ -73,6 +73,33 @@ import Testing
         #expect(CalmZoomLook.lensSample(corner, center: c, radius: r, shape: .roundedRect, magnification: 2) == corner)
     }
 
+    @Test func theLensBoxKeepsItsSizeInsideTheTarget() {
+        let target = SIMD2(1280, 720), half = SIMD2(288.0, 288.0), toTarget = SIMD2(1.0, 1.0)
+        let reach = half * 1.08 + 1
+        for x in stride(from: -300.0, through: 1580, by: 13.37) {
+            for y in stride(from: -300.0, through: 1020, by: 11.71) {
+                let c = SIMD2(x, y)
+                guard let box = CalmZoomLook.lensBox(halfSize: half, center: c, toTarget: toTarget, targetSize: target) else {
+                    // None of it in the target.
+                    #expect(x + reach.x <= 0 || y + reach.y <= 0 || x - reach.x >= 1280 || y - reach.y >= 720, "\(c)")
+                    continue
+                }
+                // One size wherever it is, inside the target, holding all of the lens's reach that is in the target.
+                #expect(box.size.width == 626 && box.size.height == 626, "\(c): \(box)")
+                #expect(box.origin.x >= 0 && box.origin.y >= 0 && box.origin.x + 626 <= 1280 && box.origin.y + 626 <= 720, "\(c)")
+                #expect(Double(box.origin.x) <= max(x - reach.x, 0) && Double(box.origin.y) <= max(y - reach.y, 0), "\(c)")
+                #expect(Double(box.origin.x + 626) >= min(x + reach.x, 1280) && Double(box.origin.y + 626) >= min(y + reach.y, 720), "\(c)")
+            }
+        }
+        // Wider than the target: cut to it on that axis.
+        let wide = CalmZoomLook.lensBox(halfSize: SIMD2(432, 288), center: SIMD2(360, 640), toTarget: toTarget, targetSize: SIMD2(720, 1280))
+        #expect(wide?.origin.x == 0 && wide?.size.width == 720 && wide?.size.height == 626)
+        // In the target's pixels, at another size.
+        let half4K = CalmZoomLook.lensBox(halfSize: half, center: SIMD2(640, 360), toTarget: SIMD2(3, 3), targetSize: SIMD2(3840, 2160))
+        let reach4K: Double = 288 * 1.08 * 3 + 1
+        #expect(half4K?.size.width == Int((2 * reach4K).rounded(.up)) + 1)
+    }
+
     @Test func theFocusIsDrawnWithItsCornersAndTheLooksNumbers() {
         let size = SIMD2(1920, 1080)
         let focus = Rect(x: 100, y: 200, width: 400, height: 300)

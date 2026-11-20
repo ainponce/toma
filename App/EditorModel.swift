@@ -22,6 +22,10 @@ enum EditorSelection: Equatable {
     case layoutBlock(String)
     /// Privacy blocks (phase 2 design §7.1), all of the Privacy track.
     case privacyBlocks(Set<String>)
+    /// Annotations (phase 3 design §5.6), by id.
+    case annotations(Set<String>)
+    /// A stretch at another volume of an audio row (phase 3 design §7.2), by its id (`GainRange.id`, one in every take).
+    case gainRange(String)
 }
 
 /// A track of sound, as a row of the Audio tab and of the timeline: a track by its id in every take the sequence shows
@@ -38,6 +42,8 @@ struct AudioTrackRow: Equatable, Identifiable {
     /// Every take the sequence shows that recorded it, in the order it first shows them: its volume and Mute are written
     /// in each (`TrackCommands.setTrackGain`).
     var takes: [String]
+    /// The app whose sound it is, for a track of one app (phase 3 design §7.1, `TrackRecord.appName`).
+    var appName: String?
 
     /// The track's id: one row whichever takes recorded it.
     var id: String { track }
@@ -58,7 +64,7 @@ struct AudioTrackRow: Equatable, Identifiable {
                 index[track.id] = rows.count
                 rows.append((track.kind, AudioTrackRow(
                     take: take.id, track: track.id, isMicrophone: track.kind == .microphone, deviceName: track.source.name,
-                    isDevice: track.kind == .deviceAudio, takes: [take.id])))
+                    isDevice: track.kind == .deviceAudio, takes: [take.id], appName: track.appName)))
             }
         }
         return [TrackKind.microphone, .systemAudio, .deviceAudio].flatMap { kind in rows.filter { $0.kind == kind }.map(\.row) }
@@ -211,6 +217,12 @@ final class EditorModel {
     private(set) var canHoldWhileTyping = false
     /// The tracks of sound of the takes the sequence shows, as the Audio tab and the timeline list them.
     private(set) var audioTracks: [AudioTrackRow] = []
+    /// Solo (phase 3 design §7.2): the audio rows the preview lets be heard, none for all of them; never saved, so it is
+    /// gone when the window closes (`EditorModel+AudioRows`).
+    var audioSolo = AudioSolo()
+    /// Each take's source the sound can be read in, by take id, read off the main thread (`audioTakeBounds`).
+    @ObservationIgnored var audioBoundsCache: [String: ClosedRange<HostTime>] = [:]
+    @ObservationIgnored var audioBoundsTask: Task<Void, Never>?
     /// The automatic zoom's settings that are being planned again off the main thread: the controls show them meanwhile.
     var autoZoomPending: AutoZoomSettings?
     @ObservationIgnored var autoZoomTask: Task<Void, Never>?
@@ -222,6 +234,9 @@ final class EditorModel {
     /// Where the take's screens are (`TakeScreens`), read once when the project opens, off the main thread: each
     /// revision's `StagePoints` for the overlays then reads only what its document names.
     @ObservationIgnored private(set) var takeScreens: TakeScreens?
+    /// The screens of every take of the package the same way, by take id (`takeScreens` too): "Like the Recording"
+    /// follows those of the take of the document's first clip (`contentRatio(of:)`).
+    @ObservationIgnored private(set) var screensByTake: [String: TakeScreens] = [:]
     /// The edit session, for what the panel does with it (`EditorModel+Panel`).
     var panelSession: EditSession? { session }
     /// The scene the preview draws now (the last revision built and shown): the overlays read the frame at the playhead
@@ -502,13 +517,18 @@ final class EditorModel {
         let project = currentProject(of: session)
         let size = previewSize(of: document)
         let renderer: FrameRenderer
-        let screens: TakeScreens, markers: [HostTime]
+        let screens: TakeScreens, markers: [HostTime], byTake: [String: TakeScreens]
         do {
-            // Builds the motion paths, and reads the take's events for what the overlays and the timeline read of them:
+            // Builds the motion paths, and reads the takes' events for what the overlays and the timeline read of them:
             // never on the main thread.
-            (renderer, screens, markers) = try await Task.detached {
+            (renderer, screens, markers, byTake) = try await Task.detached {
                 let renderer = try FrameRenderer(project: project, document: document, outputSize: size)
-                return (renderer, TakeScreens(take: project.take, events: project.events), TimelineContent.markerTimes(in: project.events))
+                let screens = TakeScreens(take: project.take, events: project.events)
+                var byTake = [project.take.id: screens]
+                for take in project.takes where byTake[take.id] == nil {
+                    byTake[take.id] = TakeScreens(take: take, events: project.events(ofTake: take.id))
+                }
+                return (renderer, screens, TimelineContent.markerTimes(in: project.events), byTake)
             }.value
         } catch {
             Self.logger.error("Cannot draw \(project.package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
@@ -520,6 +540,7 @@ final class EditorModel {
         guard !closed, self.session === session, state == .opening else { return }
         self.renderer = renderer
         takeScreens = screens
+        screensByTake = byTake
         markerTimes = markers
         let engine = PreviewEngine(renderer: renderer, layer: previewLayer)
         self.engine = engine
@@ -596,8 +617,8 @@ final class EditorModel {
             if isGesturing {
                 // The gesture's look, with the mix.
                 showGesture()
-            } else if shownRevision != revision, session != nil {
-                // Edited meanwhile: the mix (and scene) of the revision shown, played once built if playing.
+            } else if shownRevision != revision || !audioSolo.isEmpty, session != nil {
+                // Edited (or soloed, 3c) meanwhile: the mix (and scene) of the revision shown, played once built if playing.
                 showSessionRevision()
             } else if isPlaying {
                 startClock(at: clockSeconds())
@@ -797,7 +818,9 @@ final class EditorModel {
         let applied: EditDocument? = gestureStep.flatMap { try? document.applying($0.changes) }
         let shown = gestureLook(applied ?? document)
         let ticket = builds.request(revision: session.revision, ofGesture: true)
-        builder.build(ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis)
+        builder.build(
+            ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis,
+            mixDocument: soloDocument(of: shown))
         return applied
     }
 
@@ -810,7 +833,7 @@ final class EditorModel {
     /// The preview is built again as it is shown now (with a new mix or analysis): the gesture's look while one lasts
     /// (a session revision's build would put the document from before the drag back and drop the drag's own builds on
     /// their way, `PreviewBuilds`), otherwise the session's document.
-    private func showCurrentDocument() {
+    func showCurrentDocument() {
         if isGesturing { showGesture() } else { showSessionRevision() }
     }
 
@@ -819,7 +842,9 @@ final class EditorModel {
         guard let builder else { return }
         let shown = heldLook?(document) ?? document
         let ticket = builds.request(revision: revision, ofGesture: false)
-        builder.build(ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis)
+        builder.build(
+            ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis,
+            mixDocument: soloDocument(of: shown))
     }
 
     /// A take starts or stops recording: the analysis queue pauses while it does (`ProjectJobs.setRecording(_:)`; an
@@ -869,6 +894,17 @@ final class EditorModel {
 
     /// The project as the session has it, for what the overlays place.
     var overlayProject: LoadedProject? { session.map(currentProject(of:)) }
+    /// What each take the sequence shows has, by take ID: the mix's (`EditedMix.takeBounds`, its sources' events read off
+    /// the main thread), and the session's own take's until the mix is there. The commands that move a clip in its take
+    /// hold the cuts of the sound to them, as the mix does (phase 3 design §7.3).
+    var takeBounds: [String: ClosedRange<HostTime>] {
+        var bounds = baseMix?.takeBounds ?? [:]
+        if let project = session?.project, bounds[project.take.id] == nil {
+            let own = TakeTimeline.editableBounds(take: project.take, events: project.events)
+            bounds[project.take.id] = own.start...own.end
+        }
+        return bounds
+    }
     /// The playhead in output nanoseconds.
     var playheadNanoseconds: Int64 { timeline.map { Int64(TimeMap.frameTime(playheadFrame, frameRate: $0.frameRate)) } ?? 0 }
 
@@ -985,6 +1021,11 @@ final class EditorModel {
         case let .privacyBlocks(ids)?:
             let kept = ids.intersection(document.privacy.blocks.map(\.id))
             selection = kept.isEmpty ? nil : .privacyBlocks(kept)
+        case let .annotations(ids)?:
+            let kept = ids.intersection(document.annotations.items.map(\.id))
+            selection = kept.isEmpty ? nil : .annotations(kept)
+        case let .gainRange(id)?:
+            if !document.audio.tracks.values.contains(where: { $0.ranges.contains { $0.id == id } }) { selection = nil }
         case nil:
             break
         }
@@ -1003,7 +1044,8 @@ final class EditorModel {
         previewAspect = built.document.aspect
         if let mix = built.mix, let player {
             player.setMix(mix)
-            sound.hold(built.document)
+            // What the mix hears: the document with the solo (`soloDocument(of:)`), so a change of it is heard playing.
+            sound.hold(built.mixDocument ?? built.document)
         }
         if isPlaying, built.ticket.gesture != nil {
             if player != nil, sound.needsPlay { startClock(at: clockSeconds()) }

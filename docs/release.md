@@ -1051,6 +1051,15 @@ Antes de cada caso, en Finder, «Mostrar contenido del paquete» del proyecto y 
 - Con cámara y micrófono reales, regrabar, hablar unos segundos y parar con «Al parar» en «Quedarse acá»: el editor vuelve igual (no se abre otra ventana) con la toma nueva desde el cursor; se oye la voz nueva.
 - Regrabar y, en la cuenta regresiva, cancelarla: el editor vuelve sin cambios y `takes/` no cambió. Regrabar, grabar unos segundos y «Reiniciar»: graba otra vez en el mismo proyecto; al parar quedan las dos tomas nuevas en `takes/`, la del reinicio sin usar en el menú Tomas.
 - Desenchufar la cámara elegida justo antes de que termine la cuenta regresiva (o elegir una que falle): graba sin cámara, con el aviso, en el mismo proyecto. Con una toma regrabándose, salir de la app (⌘Q): al abrirla otra vez el proyecto tiene la toma, y nada se perdió.
+**Filas de audio** (U11)
+
+Con una toma con micrófono y dos apps en Por app (Safari y Música, por ejemplo), partida en dos clips (C en la mitad), en claro y en oscuro.
+- Las cabeceras de las apps dicen su nombre entero con su ícono («Safari», «Música»); el panel ▸ Audio las titula igual. Cada fila de audio tiene Silenciar y Solo (una «S»); Clips importados y Música, si están, solo Solo. Nada se corta en español.
+- Solo en el micrófono: se oye solo él, las otras filas se ven atenuadas y la música (si hay) sigue bajando cuando se habla como sin el solo. Dos solos a la vez se oyen los dos. Prender y apagar el solo reproduciendo cambia lo que se oye enseguida. Exportar con un solo prendido exporta todo. Al cerrar y abrir el proyecto, ningún solo queda prendido.
+- Arrastrar de lado sobre la onda del micrófono marca un tramo punteado con la cápsula «0 dB»; Esc o un clic afuera lo sacan sin cambiar nada (Edición ▸ Deshacer no tiene un paso nuevo). Subir la línea dentro del tramo lo crea (un ⌘Z) y la cápsula sigue el valor: a +6 dB se oye más fuerte con fundidos suaves, sin clic; bajarla del todo dice «−∞ dB» y calla. Doble clic en la cápsula y escribir «-12» lo pone a −12 dB. Los bordes del tramo se arrastran (el cursor cambia); un clic lo selecciona y ⌫ o «Borrar el tramo» (menú contextual) lo borran.
+- Fuera de los tramos, arrastrar la línea cambia el volumen de toda la fila (llega a +6 dB y se imanta a 0 dB), igual que el control de Volumen del panel.
+- ⌥ y arrastrar en el borde entre los dos clips sobre una fila de audio: hacia la izquierda la muesca dice «J» y se oye antes el clip que viene; hacia la derecha dice «L» y sigue el que se fue; la etiqueta dice «Corte J · 0,30 s». La imagen corta donde cortaba y la cámara también. Cerca del corte de la imagen se imanta a 0; no pasa de la mitad del clip más corto. Doble clic en la muesca o «Restablecer el corte del audio» lo vuelve a 0; ⌘Z deshace cada cambio.
+- Con VoiceOver, un tramo se lee «Volumen del tramo, −6 dB, de 0:01 a 0:03» con la acción Borrar el tramo, y un corte movido «Corte del audio 0,30 s antes» con Restablecer el corte del audio; al soltar un corte J o L lo anuncia.
 
 **Escuchar Calma, Piano y Brisa** (U2)
 
@@ -1071,6 +1080,44 @@ La vara del agente fueron las medidas (sonoridad, pico, costura, mono, graves y 
 **La voz con una pista por app** (T7)
 
 - Grabar 30 s sin micrófono, Por app con Música (sonando todo el tiempo, con una canción con voz) y Safari con un video de alguien hablando la mitad del tiempo, y transcribir: el texto es lo que dice la persona del video, no la letra de la canción, aunque Música esté primera en el manifiesto. Con el micrófono prendido se transcribe el micrófono, como en la fase 2.
+
+**La pista Anotaciones** (A12)
+
+- Anotaciones: en la pista, mover y recortar una pegada a la grabación a través de un corte y una de la salida; dos que se pisan van en sublíneas; borrar con ⌫ y desde el menú; VoiceOver lee cada bloque.
+- Con el proyecto de la vitrina (`TOMA_SHOWCASE_P3_ANNOTATIONS=track scripts/ui-shots.sh build/shots/a12 editor <proyecto>`, en oscuro y en claro, Ajustes ▸ Apariencia): debajo de Video, la fila Anotaciones con la barra naranja fina arriba (Todo el video), «Hola» y «Flecha» en dos sublíneas, «Paso 1» y «Forma»; la flecha elegida con el borde violeta y el cursor de reproducción adentro; un alfiler en las pegadas a la grabación (no en «Forma»); ningún texto cortado en español. El agente no pudo capturar la pantalla (estaba bloqueada): vio la fila dibujada desde sus capas (`TOMA_SHOWCASE_P3_TIMELINE_PNG`).
+- Con el puntero en el borde de un bloque, el cursor de cambiar el ancho; en la barra de Todo el video, nunca (no se mueve ni se recorta). Doble clic en un bloque lo elige y lleva el cursor de reproducción adonde se ve entero. El menú de un bloque: Traer adelante, Enviar atrás, Traer al frente y Enviar al fondo (apagados donde no cambian nada o con varias elegidas), Duplicar y Borrar la anotación; cada uno es un solo ⌘Z con su nombre.
+Una sola pasada de fin de fase, contra la app de la rama `fase-3`. Cada comprobación dice qué se tiene que ver; si se ve otra cosa, anotarlo con la versión exacta de macOS. Cada tarea de la fase 3 suma sus comprobaciones al final de esta sección.
+
+**Seguir la voz: el motor en vivo** (T5)
+
+- En Toma.app (macOS 26), con el teleprompter en Seguir la voz, grabar leyendo el guion en español con el micrófono de siempre. No aparece ningún aviso de permiso de macOS (ni de reconocimiento de voz ni de dictado): los agentes no lo pueden comprobar, heredan los permisos de la app que los lanzó. Con el modelo de dictado del español en la Mac (en la Mac de desarrollo ya estaban es-MX y es-ES), el guion avanza menos de un segundo después de cada palabra (el agente midió 0,4 s); sin él, con el de la transcripción, hasta un segundo y medio. Después, la toma suena entera: el micrófono no pierde nada mientras se lo escucha. Si macOS pide un permiso o el guion no se mueve, anotarlo con el idioma.
+- Con el dictado (el modelo de dictado del español en la Mac), leer un guion de cinco minutos o más de corrido, con dos o tres pausas largas en el medio (de 15 a 30 s, como para pensar o tomar agua) y alguna frase que se repite o se improvisa: después de cada pausa el guion sigue con la palabra siguiente, sin quedarse quieto ni saltar; a los cinco minutos sigue tan rápido como al principio. Si deja de seguir después de una pausa o pasado un tiempo, anotar cuánto duró la pausa y en qué minuto.
+
+**Placas de título** (A8)
+
+- Con una placa de cada estilo (Centrado, A la izquierda, Grande, Mínimo) y cada fondo (el del proyecto, un color, el cuadro desenfocado), en 16:9 y en 9:16, apenas la pestaña Anotaciones permita agregarlas (A14): se ven como dice `docs/format/README.md` («Las placas»), sin un texto cortado ni una palabra partida; la vista previa reproduciendo y el export a 4K muestran la misma placa, con el fundido de 0,3 s contra el último cuadro del clip de antes y el primero del de después, quietos. Con el cuadro desenfocado sobre un tramo con un bloque de privacidad, nada de lo que el bloque esconde se ve nítido durante la placa ni su fundido.
+
+**La voz y el texto con varias tomas** (T9)
+
+Con macOS 26, el modelo del idioma instalado y Ajustes ▸ General ▸ «Transcribir automáticamente» prendido, en español.
+- Un proyecto de dos tomas sin transcripción (la segunda agregada desde el menú Tomas), Subtítulos ▸ Transcribir: dice «Transcribiendo 1 de 2…» y después «Transcribiendo 2 de 2…», la barra avanza sobre las dos, el texto de la primera toma aparece apenas termina y el de la segunda debajo, en un párrafo nuevo, sin que se corte ningún texto de la pestaña. Cancelar a mitad de la segunda: la primera queda transcrita y la segunda sin palabras.
+- Corregir una palabra de la primera toma y regrabar una tercera desde el final (Regrabar desde acá, ⇧⌘R): al volver al editor la tercera se transcribe sola («Transcribiendo…»), sin preguntar, y la corrección de la primera sigue. Transcribir otra vez: pregunta solo por las correcciones de las tomas que se vuelven a oír («Transcribir de nuevo reemplaza 1 palabra corregida.») y, con «Conservar la actual», esa toma no cambia.
+- En el texto, borrar con ⌫ unas palabras de la segunda toma y Restaurarlas: vuelven exactas (se oyen y se ven como antes) y un ⌘Z deshace cada paso; lo mismo con una selección que toma el final de la primera y el principio de la segunda.
+- Cámara ▸ Ocultar en los silencios con dos tomas transcritas: bloques Solo pantalla en las pausas de las dos, en un solo ⌘Z. Sin transcripción (o con una toma sin transcribir), los silencios salen del micrófono de cada toma, y una pausa que cruza el corte entre tomas es un solo bloque.
+- Edición ▸ Acelerar el tipeo… con tipeo en las dos tomas: la cuenta de tramos suma los de las dos, y Acelerar los acelera en las dos en un solo ⌘Z; con una toma, lo mismo que en la fase 2.
+
+**Congelados, placas y clips en la pista Video** (A15)
+
+- Pista Video: estirar un congelado y una placa, recortar un clip importado, soltar un `.mov` entre dos clips; deshacer cada uno.
+- En detalle: el menú de un tramo (clic derecho) tiene Congelar cuadro y Agregar placa, en el punto del clic; el congelado repite su cuadro a lo largo con un copo de nieve, la placa es índigo con su título («Título») y un ícono de texto. Su borde derecho cambia el largo (0,1 a 60 s, con la etiqueta «+0,70 s · 0:12,70»); el izquierdo no (el cursor no cambia); Duración… pide los segundos («2,5»). Un clip importado muestra los cuadros de su archivo con una tira de película; sus dos bordes recortan el archivo y nunca pasan de su principio ni de su final.
+- Arrastrar un `.mov` (o `.mp4`, `.m4v`) desde Finder sobre la fila Video: una línea violeta marca el borde del clip más cercano; al soltar dice «Importando «nombre»…» abajo a la izquierda mientras lo copia (con un archivo de varios GB la línea de tiempo y la vista previa siguen respondiendo) y entra ahí, elegido, sin partir nada. Un `.png` o dos archivos a la vez no se aceptan; un `.mov` que no se reproduce dice «No se pudo abrir el archivo.».
+- VoiceOver lee «Placa «Intro», 3 s», «Cuadro congelado, 2 s» y «Clip importado, 4,5 s», con la acción Borrar.
+- Con el proyecto de la vitrina (`TOMA_SHOWCASE_P3_ANNOTATIONS=content scripts/ui-shots.sh build/shots/a15 editor <proyecto>`, en oscuro y en claro): «Intro» al principio, el congelado elegido a los 6 s y la toma importada como clip al final, los tres distintos de un tramo de la toma; ningún texto cortado en español. El agente no pudo capturar la pantalla (estaba bloqueada): vio la fila dibujada desde sus capas (`TOMA_SHOWCASE_P3_TIMELINE_PNG`).
+
+**La edición con varias tomas** (T8, con la app de T10)
+
+- En un proyecto de dos tomas (la segunda agregada con Tomas ▸ «Agregar al final» o regrabada) en «Como la grabación», con la segunda grabada en otra pantalla de otra proporción (la de la MacBook y un monitor 16:9): la vista previa, el MP4 y el GIF tienen la forma de la pantalla de la toma del primer clip; en el tramo de la otra toma su pantalla entra entera, centrada, y un zoom con foco fijo, el cursor y la burbuja caen donde apuntan, sin correrse a un costado. Mover al principio un clip de la otra toma cambia la forma de las tres a la suya.
+- Con las dos tomas en la secuencia: Regenerar los zooms automáticos y Seguir el cursor cambian los bloques y las pantallas de las dos, y dejan los del usuario; Aplicar un estilo (y el estilo por defecto) cambia el estilo del proyecto y vuelve a planear los zooms de las dos; con la cámara en Fondo borroso en las dos, la tarjeta de la Biblioteca muestra la burbuja sin el cuarto y dice que el proyecto tiene cámara aunque solo la tenga la segunda.
 
 **Las anotaciones dibujadas** (A6)
 

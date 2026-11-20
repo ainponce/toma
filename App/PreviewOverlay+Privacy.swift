@@ -143,7 +143,8 @@ final class PrivacyRectEditorView: NSView {
 
     private func points(of document: EditDocument) -> StagePoints? {
         if stagePoints?.document != document, let take = model.overlayProject?.take, let screens = model.takeScreens {
-            stagePoints = (document, StagePoints(take: take, document: document, screens: screens))
+            let ratio = model.contentRatio(of: document)
+            stagePoints = (document, StagePoints(take: take, document: document, screens: screens, contentRatio: .some(ratio)))
         }
         return stagePoints?.points
     }

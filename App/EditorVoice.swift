@@ -23,6 +23,13 @@ import os
 ///   in the project's queue (never while a take records) and what it makes becomes one step, `transcript.create`; if
 ///   the project cannot be edited by then, it is dropped. Transcribing again asks first when corrections would be lost
 ///   ("Transcribing again replaces %lld corrected words.").
+/// - **Several takes** (phase 3 design §8.1, plan 3d decision 16). Transcribing runs one job for each take of the
+///   sequence whose words the transcript lacks in the language chosen (`SequenceTranscription.takes(toTranscribe:)`;
+///   each of them again once none lacks its own), one after the other in the sequence's order, and each one's words go
+///   into the document as they arrive (`TranscriptCommands.mergeTakes`), asking first if corrections of that take alone
+///   would be lost; the Captions tab says which of them it is on ("Transcribing 2 of 3…"). With the document transcribed
+///   and "Transcribe Automatically" on, a take that comes into the sequence is transcribed by itself in the document's
+///   language, once in each opening.
 /// - **The clean voice and the loudness.** With each document whose needs change (a microphone's cleanup above 0 or
 ///   not, Normalize, the takes its sequence shows), the jobs `SequenceVoiceJobs.needed` lists are enqueued, off the main
 ///   thread: those the queue has no state for, and a job done whose cache is missing again (macOS emptied the caches)
@@ -35,19 +42,19 @@ import os
 ///   here, and says so once it is done.
 @MainActor @Observable
 final class EditorVoice {
-    /// Where the transcription of the take is, as the Captions tab shows it.
+    /// Where the transcription of the takes is, as the Captions tab shows it.
     enum Transcription: Equatable {
         /// This macOS has no `SpeechTranscriber`: "Transcription needs macOS 26."
         case needsMacOS26
         /// This Mac cannot transcribe (`SpeechTranscriber.isAvailable` is false, or it transcribes no language).
         case unavailable
-        /// The take has no microphone, system audio or device audio that recorded anything.
+        /// No take of the sequence has a microphone, system audio or device audio that recorded anything.
         case noAudio
         /// Nothing under way and no transcript: the Transcribe button.
         case idle
-        /// Asked for, waiting its turn in the queue.
+        /// Asked for, waiting its turn in the queue (with several takes, the one it is on: `transcriptionCount`).
         case queued
-        /// Hearing the words, from 0 to 1.
+        /// Hearing the words of a take, from 0 to 1 (with several, of the one it is on: `transcriptionCount`).
         case running(Double)
         /// The last transcription failed, with the sentence that says why.
         case failed(String)
@@ -65,7 +72,15 @@ final class EditorVoice {
         let installed: Bool
     }
 
+    /// Which of the takes being transcribed it is on: the `take`th (from 1) of `of`.
+    struct TakeCount: Equatable {
+        var take: Int
+        var of: Int
+    }
+
     private(set) var transcription = Transcription.idle
+    /// While a transcription of more than one take is under way, which of them it is on; `nil` otherwise.
+    private(set) var transcriptionCount: TakeCount?
     /// The languages to choose from, by name; empty until they are found, and on macOS 15.
     private(set) var languages: [Language] = []
     /// The language the next transcription is in (BCP 47); choosing one remembers it (`TranscriptionPreferences`). Empty
@@ -104,8 +119,16 @@ final class EditorVoice {
     @ObservationIgnored private var voiceJobs: SequenceVoiceJobs?
     /// The session's document, as last told.
     @ObservationIgnored private var document: EditDocument?
-    /// The job of the take's transcription; `nil` when it has nothing to transcribe.
-    @ObservationIgnored private var transcriptionKind: AnalysisJobKind?
+    /// Whether a take the sequence shows has something to transcribe (`SequenceTranscription.transcribable`).
+    @ObservationIgnored private var transcribable = false
+    /// The jobs of the transcription under way, one for each take it hears, in order, and the one it is on.
+    @ObservationIgnored private var batch: [AnalysisJobKind] = []
+    @ObservationIgnored private var batchIndex = 0
+    /// Cancel was pressed: the transcription under way hears no more takes.
+    @ObservationIgnored private var batchCancelled = false
+    /// The takes transcribed (or asked for) since the project opened: a take new to the sequence is transcribed by
+    /// itself once, never again after it failed or was cancelled.
+    @ObservationIgnored private var tried: Set<String> = []
     /// The needs the jobs were asked for and the caches read with; `nil` until the project opened.
     @ObservationIgnored private var needs: Needs?
     /// The cleanup jobs of each track since it last had none waiting or running, and the loudness jobs likewise: what
@@ -162,10 +185,10 @@ final class EditorVoice {
         cleanupBatches = [:]
         loudnessBatch = []
         askedAgain = []
+        tried = []
         transcriptionFailure = nil
         let voiceJobs = SequenceVoiceJobs(project: project, caches: caches, engine: Self.engine(), isolator: SystemVoiceIsolation())
         self.voiceJobs = voiceJobs
-        transcriptionKind = Transcriber.track(for: project.take).map { .transcription(take: project.take.id, track: $0.id) }
         listen()
         follow(document)
         refreshTranscription()
@@ -201,6 +224,8 @@ final class EditorVoice {
                 recordedThisSession: model.recordedThisSession)
             {
                 self.transcribe()
+            } else {
+                self.transcribeNewTakes()
             }
         }
     }
@@ -234,49 +259,108 @@ final class EditorVoice {
 
     // MARK: - Transcribing
 
-    /// Transcribes the take in `language`, first in the queue: what it hears replaces the transcript in one step (after
-    /// asking, if corrections would be lost). Nothing if it cannot be edited, there is nothing to transcribe or one is
-    /// under way. The session's take (`project.take`): the words of every take in the sequence's order are 3d's.
+    /// Transcribes in `language`, first in the queue, the takes of the sequence whose words the transcript lacks in it, or
+    /// each of them again once none does (`SequenceTranscription.takes(toTranscribe:)`): what each one hears goes into the
+    /// document as it arrives, in one step (after asking, if corrections of that take would be lost). Nothing if it
+    /// cannot be edited, there is nothing to transcribe or one is under way. With one take, the phase 2's.
     func transcribe() {
-        guard !closed, transcriptionTask == nil, let voiceJobs, let project, let jobs = model?.jobs, model?.canEdit == true,
-              !chosenLanguage.isEmpty, let job = voiceJobs.jobs(ofTake: project.take.id)?.transcription(language: chosenLanguage)
+        transcribe(in: chosenLanguage, takes: nil)
+    }
+
+    /// Stops the transcription under way, or takes it out of the queue: nothing more reaches the document (the takes
+    /// already transcribed stay).
+    func cancelTranscription() {
+        guard transcriptionTask != nil else { return }
+        batchCancelled = true
+        guard batch.indices.contains(batchIndex), let jobs = model?.jobs else { return }
+        let kind = batch[batchIndex]
+        Task { await jobs.cancel(kind) }
+    }
+
+    /// Transcribes in `language` the takes `takes` of the sequence (those `transcribe()` picks when `nil`), one after the
+    /// other in its order, each first in the queue, and puts each one's words in the document as they arrive. Stops at a
+    /// cancel or once the language's model is gone; a take that fails says so and the next one goes on.
+    private func transcribe(in language: String, takes: [String]?) {
+        guard !closed, transcriptionTask == nil, let voiceJobs, let project, let model, model.canEdit, !language.isEmpty,
+              let document = model.document
         else { return }
+        let jobs = model.jobs
         transcriptionFailure = nil
+        batch = []
+        batchIndex = 0
+        batchCancelled = false
         transcriptionTask = Task { [weak self] in
-            let outcome: Result<JobOutput, any Error>
-            do {
-                outcome = .success(try await jobs.result(of: job.0, work: job.1))
-            } catch {
-                outcome = .failure(error)
-            }
+            let wanted = takes ?? SequenceTranscription.takes(
+                toTranscribe: document, shown: SequenceAnalyses.takes(shownBy: document, in: project), language: language)
+            // `transcriptions` reads what `VoiceJobs` reads: off the main thread.
+            let all = await Task.detached(priority: .userInitiated) {
+                voiceJobs.transcriptions(language: language, document: document)
+            }.value
+            let jobsToRun = all.filter { kind, _ in Self.take(of: kind).map(wanted.contains) ?? false }
             guard let self, !self.closed else { return }
-            self.transcriptionTask = nil
-            switch outcome {
-            case .success(.transcript(let transcript)):
-                self.transcribed(transcript)
-            case .success(.cached):
-                break
-            case .failure(let error as JobError):
-                Self.logger.error("The transcription failed: \(String(describing: error.problem), privacy: .public)")
-                if case .modelNotInstalled = error.problem {
-                    // Its model went away: the tab offers to download it.
-                    self.refreshStatus()
-                } else {
-                    self.transcriptionFailure = Self.failure(error.problem)
+            self.batch = jobsToRun.map(\.0)
+            self.tried.formUnion(wanted)
+            for (index, (kind, work)) in jobsToRun.enumerated() where !self.batchCancelled {
+                self.batchIndex = index
+                self.refreshTranscription()
+                let outcome: Result<JobOutput, any Error>
+                do {
+                    outcome = .success(try await jobs.result(of: kind, work: work))
+                } catch {
+                    outcome = .failure(error)
                 }
-            case .failure:
-                // Cancelled.
-                break
+                guard !self.closed else { return }
+                var stop = false
+                switch outcome {
+                case .success(.transcript(let transcript)):
+                    await self.transcribed(transcript)
+                case .success(.cached):
+                    break
+                case .failure(let error as JobError):
+                    Self.logger.error("The transcription failed: \(String(describing: error.problem), privacy: .public)")
+                    if case .modelNotInstalled = error.problem {
+                        // Its model went away: the tab offers to download it.
+                        self.refreshStatus()
+                        stop = true
+                    } else {
+                        self.transcriptionFailure = Self.failure(error.problem)
+                    }
+                case .failure:
+                    // Cancelled.
+                    stop = true
+                }
+                guard !self.closed else { return }
+                // Nothing more could go into the document.
+                if self.model?.canEdit != true { stop = true }
+                if stop { break }
             }
+            self.transcriptionTask = nil
+            self.batch = []
+            self.batchIndex = 0
             self.refreshTranscription()
+            // A take that came into the sequence meanwhile.
+            self.transcribeNewTakes()
         }
         refreshTranscription()
     }
 
-    /// Stops the transcription under way, or takes it out of the queue: nothing reaches the document.
-    func cancelTranscription() {
-        guard let kind = transcriptionKind, let jobs = model?.jobs else { return }
-        Task { await jobs.cancel(kind) }
+    /// With the document transcribed and "Transcribe Automatically" on, transcribes by itself, in the document's language,
+    /// the takes of the sequence it lacks (`SequenceTranscription.newTakes`) that were not transcribed since the project
+    /// opened, if the model of that language is the one chosen and installed and nothing is transcribing.
+    private func transcribeNewTakes() {
+        guard !closed, transcriptionTask == nil, speechAvailable == true, let project, let model, model.canEdit,
+              let document = model.document, let transcript = document.transcript, preferences.preferences.automatic,
+              modelStatus == .installed, Locale(identifier: transcript.language).identifier(.bcp47) == chosenLanguage
+        else { return }
+        let new = SequenceTranscription.newTakes(document, shown: SequenceAnalyses.takes(shownBy: document, in: project))
+            .filter { !tried.contains($0) }
+        guard !new.isEmpty else { return }
+        transcribe(in: chosenLanguage, takes: new)
+    }
+
+    /// The take of a transcription job; `nil` for any other kind.
+    private nonisolated static func take(of kind: AnalysisJobKind) -> String? {
+        if case .transcription(let take, _) = kind { take } else { nil }
     }
 
     /// "Download the Language": the model of `language`, with its progress (`downloadProgress`). The only place a model is
@@ -317,33 +401,41 @@ final class EditorVoice {
 
     // MARK: - Hiding the camera
 
-    /// "Hide During Silences" (plan decision 9): a Screen Only block in each silence of 3 s or more, in one step. With a
-    /// transcript the silences are between the words that stay; without one, where the take's first microphone is quiet
-    /// (found off the main thread). How many blocks it added (0 when none fits); `nil` when it could not: the project
-    /// cannot be edited, or without a transcript the take has no microphone or it cannot be read.
+    /// "Hide During Silences" (plan decision 9): a Screen Only block in each silence of 3 s or more, in one step, over
+    /// every take of the sequence (plan 3d decision 17). With a transcript of every take it shows that can be heard, the
+    /// silences are between the words that stay; otherwise, where each take's first microphone is quiet (found off the
+    /// main thread), joined across takes. How many blocks it added (0 when none fits); `nil` when it could not: the
+    /// project cannot be edited, or without the words no take has a microphone or one cannot be read.
     func hideCameraInSilences() async -> Int? {
         guard !closed, !isFindingSilences, let model, model.canEdit, let document = model.document,
               let project = model.exportProject
         else { return nil }
         isFindingSilences = true
         defer { isFindingSilences = false }
-        var quiet: [Range<HostTime>]?
-        if document.transcript == nil {
-            guard let microphone = project.take.tracks.first(where: { $0.kind == .microphone && !$0.segments.isEmpty }) else {
-                return nil
+        let shown = SequenceAnalyses.takes(shownBy: document, in: project)
+        var quiet: [String: [Range<HostTime>]]?
+        if !SequenceTranscription.silencesFromWords(document, shown: shown) {
+            let microphones = shown.compactMap { take in
+                take.tracks.first { $0.kind == .microphone && !$0.segments.isEmpty }.map { (take: take.id, track: $0.id) }
             }
+            guard !microphones.isEmpty else { return nil }
+            var found: [String: [Range<HostTime>]] = [:]
             do {
-                let audio = try await TrackAudio.load(project, track: microphone.id, channels: 1)
-                quiet = try await SilenceFinder.quietSpans(audio)
+                for microphone in microphones {
+                    guard let take = project.focused(on: microphone.take) else { continue }
+                    let audio = try await TrackAudio.load(take, track: microphone.track, channels: 1)
+                    found[microphone.take] = try await SilenceFinder.quietSpans(audio)
+                }
             } catch {
                 Self.logger.error("Cannot find the silences: \(String(describing: error), privacy: .public)")
                 return nil
             }
+            quiet = found
         }
         // The document as it is now: edited, or closed, meanwhile.
         guard !closed, model.canEdit, let latest = model.document else { return nil }
         let map = TimeMap(sequence: latest.sequence)
-        let silences = quiet.map { VoiceSilences.fromQuiet($0, take: project.take.id, timeMap: map) }
+        let silences = quiet.map { VoiceSilences.fromQuiet(ofTakes: $0, timeMap: map) }
             ?? VoiceSilences.fromWords(latest, timeMap: map)
         guard let step = VoiceSilences.hideCamera(latest, silences: silences, timeMap: map, makeID: EditorModel.newID) else {
             return 0
@@ -459,18 +551,22 @@ final class EditorVoice {
         downloadProgress = fraction
     }
 
-    /// What the transcription is now, from the Mac, the take, the queue, the last failure and the document.
+    /// What the transcription is now, from the Mac, the takes, the queue, the last failure and the document.
     private func refreshTranscription() {
+        let kind = batch.indices.contains(batchIndex) ? batch[batchIndex] : nil
         let next: Transcription
         if !SpeechLanguages.isSupportedOS {
             next = .needsMacOS26
-        } else if project != nil, transcriptionKind == nil {
+        } else if project != nil, !transcribable, transcriptionTask == nil {
             next = .noAudio
         } else if speechAvailable == false || (speechAvailable == true && languages.isEmpty) {
             next = .unavailable
-        } else if let kind = transcriptionKind, case .running(let progress)? = states[kind] {
+        } else if let kind, case .running(let progress)? = states[kind] {
             next = .running(progress)
-        } else if let kind = transcriptionKind, states[kind] == .waiting || (transcriptionTask != nil && states[kind] == nil) {
+        } else if let kind, states[kind] == .waiting || (transcriptionTask != nil && states[kind] == nil) {
+            next = .queued
+        } else if transcriptionTask != nil, kind == nil {
+            // Finding the takes' jobs.
             next = .queued
         } else if transcriptionTask != nil {
             // Ended, its outcome on its way.
@@ -481,16 +577,20 @@ final class EditorVoice {
             next = document?.transcript == nil ? .idle : .done
         }
         if next != transcription { transcription = next }
+        let count = transcriptionTask != nil && batch.count > 1 ? TakeCount(take: batchIndex + 1, of: batch.count) : nil
+        if count != transcriptionCount { transcriptionCount = count }
     }
 
-    /// The transcription made `transcript`: it replaces the document's in one step, after asking when corrections would
-    /// be lost; dropped if the project cannot be edited.
-    private func transcribed(_ transcript: Transcript) {
+    /// The transcription made `transcript` (the words of the takes it heard): they replace those takes' in the document
+    /// in one step, after asking when corrections of those takes would be lost (the others' are kept); dropped if the
+    /// project cannot be edited. Returns once it is in the document, or the alert was answered.
+    private func transcribed(_ transcript: Transcript) async {
         guard let model, model.canEdit, let document = model.document else {
             Self.logger.notice("A transcription was dropped: the project can't be edited")
             return
         }
-        let lost = document.transcript.map { TranscriptCommands.lostCorrections($0, transcript) } ?? 0
+        let heard = Set(transcript.takes.map(\.take))
+        let lost = document.transcript.map { TranscriptCommands.lostCorrections($0, transcript, inTakes: heard) } ?? 0
         guard lost > 0 else { return create(transcript) }
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -499,21 +599,26 @@ final class EditorVoice {
             comment: "An alert before a new transcription replaces one whose words were corrected")
         alert.addButton(withTitle: String(localized: "Replace", comment: "The alert before a new transcription replaces the corrected one"))
         alert.addButton(withTitle: String(localized: "Keep the Current One", comment: "The alert before a new transcription replaces the corrected one"))
-        let answered: (NSApplication.ModalResponse) -> Void = { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
-            self?.create(transcript)
-        }
+        let response: NSApplication.ModalResponse
         if let window = model.window, window.isVisible {
-            alert.beginSheetModal(for: window, completionHandler: answered)
+            response = await withCheckedContinuation { answered in
+                alert.beginSheetModal(for: window) { answered.resume(returning: $0) }
+            }
         } else {
-            answered(alert.runModal())
+            response = alert.runModal()
         }
+        guard response == .alertFirstButtonReturn else { return }
+        create(transcript)
     }
 
-    /// `transcript.create` of `transcript` on the document as it is now, if it can be edited.
+    /// The words of `transcript` in the document as it is now, if it can be edited: `transcript.create` of it whole when
+    /// it has every take of the transcript there (with one take, the phase 2's step), otherwise those takes merged in
+    /// (`TranscriptCommands.mergeTakes`), the others as they are.
     private func create(_ transcript: Transcript) {
-        guard !closed, let model, model.canEdit, let document = model.document,
-              let step = TranscriptCommands.create(document, transcript)
+        guard !closed, let model, model.canEdit, let document = model.document else { return }
+        let heard = Set(transcript.takes.map(\.take))
+        let whole = document.transcript.map { $0.takes.allSatisfy { heard.contains($0.take) } } ?? true
+        guard let step = whole ? TranscriptCommands.create(document, transcript) : TranscriptCommands.mergeTakes(document, transcript)
         else { return }
         model.perform(step)
     }
@@ -587,14 +692,21 @@ final class EditorVoice {
         return done / Double(batch.count)
     }
 
-    /// `document` is the latest: when its needs change, what it needs is asked for and the caches are read for it.
+    /// `document` is the latest: when its needs change, what it needs is asked for and the caches are read for it; when
+    /// the takes its sequence shows change, whether it has something to transcribe is found again and a take new in it
+    /// is transcribed by itself if it is to be (`transcribeNewTakes`).
     private func follow(_ document: EditDocument) {
         guard let project else { return }
         let next = Needs(document, project: project)
         guard next != needs else { return }
+        let takesChanged = next.takes != needs?.takes
         needs = next
         enqueue(document)
         read(document)
+        guard takesChanged else { return }
+        transcribable = !SequenceTranscription.transcribable(SequenceAnalyses.takes(shownBy: document, in: project)).isEmpty
+        refreshTranscription()
+        transcribeNewTakes()
     }
 
     /// Enqueues, off the main thread and after what was enqueued before, the jobs `document` needs that the queue has no
