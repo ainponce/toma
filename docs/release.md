@@ -1072,6 +1072,12 @@ La vara del agente fueron las medidas (sonoridad, pico, costura, mono, graves y 
 
 - Grabar 30 s sin micrófono, Por app con Música (sonando todo el tiempo, con una canción con voz) y Safari con un video de alguien hablando la mitad del tiempo, y transcribir: el texto es lo que dice la persona del video, no la letra de la canción, aunque Música esté primera en el manifiesto. Con el micrófono prendido se transcribe el micrófono, como en la fase 2.
 
+**La pista Anotaciones** (A12)
+
+- Anotaciones: en la pista, mover y recortar una pegada a la grabación a través de un corte y una de la salida; dos que se pisan van en sublíneas; borrar con ⌫ y desde el menú; VoiceOver lee cada bloque.
+- Con el proyecto de la vitrina (`TOMA_SHOWCASE_P3_ANNOTATIONS=track scripts/ui-shots.sh build/shots/a12 editor <proyecto>`, en oscuro y en claro, Ajustes ▸ Apariencia): debajo de Video, la fila Anotaciones con la barra naranja fina arriba (Todo el video), «Hola» y «Flecha» en dos sublíneas, «Paso 1» y «Forma»; la flecha elegida con el borde violeta y el cursor de reproducción adentro; un alfiler en las pegadas a la grabación (no en «Forma»); ningún texto cortado en español. El agente no pudo capturar la pantalla (estaba bloqueada): vio la fila dibujada desde sus capas (`TOMA_SHOWCASE_P3_TIMELINE_PNG`).
+- Con el puntero en el borde de un bloque, el cursor de cambiar el ancho; en la barra de Todo el video, nunca (no se mueve ni se recorta). Doble clic en un bloque lo elige y lleva el cursor de reproducción adonde se ve entero. El menú de un bloque: Traer adelante, Enviar atrás, Traer al frente y Enviar al fondo (apagados donde no cambian nada o con varias elegidas), Duplicar y Borrar la anotación; cada uno es un solo ⌘Z con su nombre.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

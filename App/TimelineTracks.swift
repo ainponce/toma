@@ -112,6 +112,8 @@ struct TimelineContent {
     let cameraChanges: TrackItems<CameraChangeInfo>
     /// The privacy blocks (phase 2 design §7.1).
     let privacy: TimelinePrivacyItems
+    /// The annotations, in their lanes (phase 3 design §5.6).
+    let annotations: TimelineAnnotationItems
     /// The captions (phase 2 design §5.2); none without a transcript.
     let captions: TrackItems<CaptionInfo>
     /// The layout blocks, where the preview shows them.
@@ -190,6 +192,7 @@ struct TimelineContent {
                 info: Zoom(depth: region.depth ?? document.zoom.auto.depth, automatic: region.origin == .auto))
         })
         privacy = TimelinePrivacyItems(document: document)
+        annotations = TimelineAnnotationItems(document: document, map: map)
         let output = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080, contentRatio: contentRatio)
         captions = TimelineCaptionItems.items(document: document, map: map, outputSize: output)
         let orientation = CameraLayoutGeometry.orientation(output: SIMD2(Double(output.x), Double(output.y)))
@@ -452,6 +455,8 @@ final class TimelineTracks {
     private var waveforms: [String: CAShapeLayer] = [:]
     /// The Privacy row's blocks (phase 2).
     private let privacyRow = TimelinePrivacyRow()
+    /// The Annotations row's blocks (phase 3).
+    private let annotationsRow = TimelineAnnotationsRow()
     /// The Captions row's blocks (phase 2).
     private let captionsRow = CaptionTrackLayers()
     /// The output time under the playhead, for the caption it highlights (`moved(playhead:)` when it moves).
@@ -531,6 +536,7 @@ final class TimelineTracks {
         cameraNotice.string = String(localized: "The camera can't be read: only the screen is shown.")
         rows.addSublayer(cameraNotice)
         rows.addSublayer(privacyRow.layer)
+        rows.addSublayer(annotationsRow.layer)
         rows.addSublayer(captionsRow.layer)
         layer.addSublayer(separators)
         separators.lineWidth = 1
@@ -555,6 +561,7 @@ final class TimelineTracks {
             pool()
         }
         privacyRow.begin()
+        annotationsRow.begin()
         captionsRow.begin()
         var wanted: Set<ThumbnailKey> = []
         var shownWaveforms: Set<String> = []
@@ -570,12 +577,14 @@ final class TimelineTracks {
             case let .audio(id):
                 layOutWaveform(id, content, row, geometry, palette)
                 shownWaveforms.insert(id)
-            // Empty in the base of phase 3: the annotations (3a) and the sound (3c) draw in them.
-            case .annotations, .importedAudio, .music: break
+            case .annotations: annotationsRow.layOut(content, row, geometry, palette, selected: selected, settling: settling)
+            // Empty in the base of phase 3: the sound (3c) draws in them.
+            case .importedAudio, .music: break
             }
         }
         for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end, audioClips.end] { pool() }
         privacyRow.end()
+        annotationsRow.end()
         captionsRow.end()
         for (id, waveform) in waveforms where !shownWaveforms.contains(id) {
             waveform.removeFromSuperlayer()
@@ -610,6 +619,7 @@ final class TimelineTracks {
             pool()
         }
         privacyRow.reset()
+        annotationsRow.reset()
         captionsRow.reset()
         tileKeys = [:]
         for waveform in waveforms.values { waveform.removeFromSuperlayer() }

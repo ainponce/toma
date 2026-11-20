@@ -912,6 +912,17 @@
         }
       }
     },
+    "Arrow" : {
+      "comment" : "An annotation: an arrow",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Flecha"
+          }
+        }
+      }
+    },
     "Ascending" : {
       "comment" : "The library's bar: the order",
       "localizations" : {
@@ -1216,6 +1227,28 @@
         }
       }
     },
+    "Bring Forward" : {
+      "comment" : "The menu of an annotation: one layer up, over the next one it overlaps",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Traer adelante"
+          }
+        }
+      }
+    },
+    "Bring to Front" : {
+      "comment" : "The menu of an annotation: over all of its group",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Traer al frente"
+          }
+        }
+      }
+    },
     "Bringing in the .cube…" : {
       "comment" : "Camera tab, Color: a .cube being copied into the project",
       "localizations" : {
@@ -1255,6 +1288,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Calculando…"
+          }
+        }
+      }
+    },
+    "Callout" : {
+      "comment" : "An annotation: a text in a speech bubble with a tail that points at something",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Globo"
+          }
+        }
+      }
+    },
+    "Callout “%@”" : {
+      "comment" : "VoiceOver: a speech bubble annotation of the timeline and its words",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Globo «%@»"
           }
         }
       }
@@ -2142,6 +2197,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Clics y pausas del cursor"
+          }
+        }
+      }
+    },
+    "Clip" : {
+      "comment" : "An annotation: an imported video over the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clip"
           }
         }
       }
@@ -7307,6 +7373,28 @@
         }
       }
     },
+    "Send Backward" : {
+      "comment" : "The menu of an annotation: one layer down, under the previous one it overlaps",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar atrás"
+          }
+        }
+      }
+    },
+    "Send to Back" : {
+      "comment" : "The menu of an annotation: under all of its group",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar al fondo"
+          }
+        }
+      }
+    },
     "Sensitive Data Found" : {
       "comment" : "The title of the sheet of the findings of the sensitive data search",
       "localizations" : {
@@ -7959,6 +8047,17 @@
         }
       }
     },
+    "Step %lld" : {
+      "comment" : "A step annotation and its number: a number in a circle",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paso %lld"
+          }
+        }
+      }
+    },
     "Stop" : {
       "localizations" : {
         "es" : {
@@ -8206,6 +8305,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Un texto que se desplaza rápido entre dos muestras puede verse un instante. Revisar antes de publicar."
+          }
+        }
+      }
+    },
+    "Text “%@”" : {
+      "comment" : "VoiceOver: a text annotation of the timeline and its words",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto «%@»"
           }
         }
       }
