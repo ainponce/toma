@@ -6,7 +6,7 @@ import SwiftUI
 
 /// The editor's bar (design §5.2), in the window's unified toolbar: on the left the project's name (which a click edits,
 /// design §6.7) and what the output lasts, in the middle the format, on the right the Takes and Markers menus (phase 3
-/// design §8.1 and §8.3), the panel's button and Export. Each item
+/// design §8.1 and §8.3), the panel's button, Share (plan 5a) and Export. Each item
 /// has the identifier `-TomaDumpEditorStructure` prints. On macOS 26 the name and the duration are the window's title, not
 /// a glass capsule (`TitledEditorToolbar`).
 struct EditorToolbar: CustomizableToolbarContent {
@@ -21,6 +21,7 @@ struct EditorToolbar: CustomizableToolbarContent {
         takesItem
         markersItem
         panelItem
+        shareItem
         exportItem
     }
 
@@ -78,6 +79,13 @@ struct EditorToolbar: CustomizableToolbarContent {
         }
     }
 
+    /// Share (plan 5a, Task S4): a link to a page of the video, uploaded to the person's own storage.
+    var shareItem: some CustomizableToolbarContent {
+        ToolbarItem(id: "editor.share", placement: .primaryAction) {
+            ShareControl(model: model)
+        }
+    }
+
     var exportItem: some CustomizableToolbarContent {
         ToolbarItem(id: "editor.export", placement: .primaryAction) {
             ExportControl(model: model)
@@ -99,6 +107,7 @@ struct TitledEditorToolbar: CustomizableToolbarContent {
         toolbar.takesItem
         toolbar.markersItem
         toolbar.panelItem
+        toolbar.shareItem
         toolbar.exportItem
     }
 }

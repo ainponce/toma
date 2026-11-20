@@ -144,6 +144,17 @@
         }
       }
     },
+    "%lld days" : {
+      "comment" : "Settings ▸ Share: a signed link lasts 2 to 7 days",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld días"
+          }
+        }
+      }
+    },
     "%lld markers" : {
       "comment" : "A saved take: how many markers it has",
       "localizations" : {
@@ -281,6 +292,17 @@
         }
       }
     },
+    "1 day" : {
+      "comment" : "Settings ▸ Share: a signed link lasts one day",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 día"
+          }
+        }
+      }
+    },
     "16:9 Landscape" : {
       "comment" : "A format of the project",
       "localizations" : {
@@ -413,6 +435,17 @@
         }
       }
     },
+    "A bucket's name has only letters, numbers, periods, hyphens and underscores." : {
+      "comment" : "Settings ▸ Share: the bucket's name has characters a bucket cannot have",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El nombre de un bucket lleva solo letras, números, puntos, guiones y guiones bajos."
+          }
+        }
+      }
+    },
     "A clip always goes over the video, above the zoom." : {
       "comment" : "The inspector of a clip over the video",
       "localizations" : {
@@ -461,6 +494,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ya hay una grabación en curso."
+          }
+        }
+      }
+    },
+    "A region has only lowercase letters, numbers and hyphens." : {
+      "comment" : "Settings ▸ Share: the region has characters a region cannot have",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una región lleva solo minúsculas, números y guiones."
           }
         }
       }
@@ -947,6 +991,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cantidad"
+          }
+        }
+      }
+    },
+    "An Access Key ID has no spaces or / , = ;" : {
+      "comment" : "Settings ▸ Share: the Access Key ID has a character that breaks the signature",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un Access Key ID no lleva espacios ni / , = ;"
           }
         }
       }
@@ -1744,6 +1799,17 @@
         }
       }
     },
+    "Bucket" : {
+      "comment" : "Settings ▸ Share: the storage's bucket",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bucket"
+          }
+        }
+      }
+    },
     "By App" : {
       "localizations" : {
         "es" : {
@@ -1996,6 +2062,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cancelar la exportación"
+          }
+        }
+      }
+    },
+    "Canceling…" : {
+      "comment" : "Share: cancelled, removing what was uploaded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelando…"
           }
         }
       }
@@ -2902,6 +2979,17 @@
         }
       }
     },
+    "Connected: a test file was uploaded and deleted." : {
+      "comment" : "Settings ▸ Share: Test Connection went well",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conectado: se subió y se borró un archivo de prueba."
+          }
+        }
+      }
+    },
     "Cool" : {
       "comment" : "Camera tab, Color",
       "localizations" : {
@@ -3032,6 +3120,28 @@
         }
       }
     },
+    "Couldn't change the secret key in the Keychain (error %lld)." : {
+      "comment" : "Settings ▸ Share: saving or deleting the secret key in the Keychain failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo cambiar la clave secreta en el Llavero (error %lld)."
+          }
+        }
+      }
+    },
+    "Couldn't connect to the storage (error %lld)." : {
+      "comment" : "Share: a network error, its URLError code",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo conectar con el almacenamiento (error %lld)."
+          }
+        }
+      }
+    },
     "Couldn't delete “%@”: %@" : {
       "comment" : "The library: the strip; the project's name and why",
       "localizations" : {
@@ -3092,6 +3202,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo exportar el video"
+          }
+        }
+      }
+    },
+    "Couldn't export the video: %@" : {
+      "comment" : "Share failed while exporting the video, and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo exportar el video: %@"
           }
         }
       }
@@ -3327,6 +3448,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo restaurar «%1$@»: %2$@"
+          }
+        }
+      }
+    },
+    "Couldn't share the video" : {
+      "comment" : "Share failed; why follows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo compartir el video"
           }
         }
       }
@@ -3590,6 +3722,17 @@
         }
       }
     },
+    "Delete Key" : {
+      "comment" : "Settings ▸ Share: deletes the secret key from the Keychain",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar la clave"
+          }
+        }
+      }
+    },
     "Delete Layout Block" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): camera layout blocks were deleted",
       "localizations" : {
@@ -3667,6 +3810,28 @@
         }
       }
     },
+    "Delete from Storage" : {
+      "comment" : "Deletes a shared link's video, poster and page from the storage",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar del almacenamiento"
+          }
+        }
+      }
+    },
+    "Delete from storage?" : {
+      "comment" : "Asking before deleting a shared link's video, poster and page from the storage",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Borrar del almacenamiento?"
+          }
+        }
+      }
+    },
     "Delete the style “%@”?" : {
       "comment" : "Manage Styles: the alert before a style goes to the Trash",
       "localizations" : {
@@ -3685,6 +3850,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "¿Eliminar «%@» para siempre?"
+          }
+        }
+      }
+    },
+    "Deleting from storage…" : {
+      "comment" : "A shared link being deleted from the storage",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrando del almacenamiento…"
           }
         }
       }
@@ -3968,6 +4144,17 @@
         }
       }
     },
+    "Earlier Links" : {
+      "comment" : "Share: the project's links shared before",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Links anteriores"
+          }
+        }
+      }
+    },
     "Edit" : {
       "comment" : "The teleprompter: edit its script",
       "localizations" : {
@@ -4187,6 +4374,94 @@
         }
       }
     },
+    "Endpoint" : {
+      "comment" : "Settings ▸ Share: the storage's address",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Endpoint"
+          }
+        }
+      }
+    },
+    "Enter an address like https://host, without a path." : {
+      "comment" : "Settings ▸ Share: the endpoint is not a URL of a host",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribir una dirección como https://host, sin ruta."
+          }
+        }
+      }
+    },
+    "Enter an address like https://host/path." : {
+      "comment" : "Settings ▸ Share: the public base URL is not a URL",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribir una dirección como https://host/ruta."
+          }
+        }
+      }
+    },
+    "Enter the Access Key ID to save the secret key." : {
+      "comment" : "Settings ▸ Share: a secret key typed before its Access Key ID",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribir el Access Key ID para guardar la clave secreta."
+          }
+        }
+      }
+    },
+    "Enter the Access Key ID." : {
+      "comment" : "Settings ▸ Share: the Access Key ID is empty",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribir el Access Key ID."
+          }
+        }
+      }
+    },
+    "Enter the bucket." : {
+      "comment" : "Settings ▸ Share: the bucket is empty",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribir el bucket."
+          }
+        }
+      }
+    },
+    "Enter the secret key." : {
+      "comment" : "Settings ▸ Share: the Keychain has no secret key",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribir la clave secreta."
+          }
+        }
+      }
+    },
+    "Enter the service's endpoint." : {
+      "comment" : "Settings ▸ Share: the endpoint is empty",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribir el endpoint del servicio."
+          }
+        }
+      }
+    },
     "Entrance" : {
       "comment" : "The inspector of an annotation: how it comes in",
       "localizations" : {
@@ -4236,6 +4511,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Desplegado"
+          }
+        }
+      }
+    },
+    "Expired" : {
+      "comment" : "A shared link that no longer works",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vencido"
+          }
+        }
+      }
+    },
+    "Expires %@" : {
+      "comment" : "A shared link: when it stops working",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vence el %@"
           }
         }
       }
@@ -5932,6 +6229,72 @@
         }
       }
     },
+    "Link" : {
+      "comment" : "A shared link, for VoiceOver",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Link"
+          }
+        }
+      }
+    },
+    "Link Expiration" : {
+      "comment" : "Settings ▸ Share: how long a signed link works",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vencimiento del link"
+          }
+        }
+      }
+    },
+    "Link copied. It expired on %@ and no longer works." : {
+      "comment" : "After copying a shared link that expired",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Link copiado. Venció el %@ y ya no funciona."
+          }
+        }
+      }
+    },
+    "Link copied. It's public: anyone with the link can watch it." : {
+      "comment" : "After copying a public shared link",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Link copiado. Es público: cualquiera con el link puede verlo."
+          }
+        }
+      }
+    },
+    "Link copied. Until %@, anyone with the link can watch it." : {
+      "comment" : "After copying a signed shared link: when it stops working",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Link copiado. Hasta el %@, cualquiera con el link puede verlo."
+          }
+        }
+      }
+    },
+    "Link ready" : {
+      "comment" : "Share: the video was uploaded and its link is ready",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Link listo"
+          }
+        }
+      }
+    },
     "Lo-fi" : {
       "comment" : "The style of a theme of the music library",
       "localizations" : {
@@ -7524,6 +7887,17 @@
         }
       }
     },
+    "Other S3-Compatible" : {
+      "comment" : "Settings ▸ Share: a storage service that speaks S3's API",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otro compatible con S3"
+          }
+        }
+      }
+    },
     "Over 10 MB, some sites don't show it." : {
       "comment" : "The export sheet: a GIF estimated at more than 10 MB",
       "localizations" : {
@@ -7869,6 +8243,17 @@
         }
       }
     },
+    "Prefix" : {
+      "comment" : "Settings ▸ Share: what the uploaded files' names start with",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prefijo"
+          }
+        }
+      }
+    },
     "Preparing the cutout… %lld %%" : {
       "comment" : "The camera's background being prepared",
       "localizations" : {
@@ -8006,6 +8391,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Capítulos propuestos"
+          }
+        }
+      }
+    },
+    "Public" : {
+      "comment" : "A shared link that never expires",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Público"
+          }
+        }
+      }
+    },
+    "Public Base URL (Optional)" : {
+      "comment" : "Settings ▸ Share: the public address of the bucket",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "URL pública base (opcional)"
           }
         }
       }
@@ -8494,6 +8901,17 @@
         }
       }
     },
+    "Region" : {
+      "comment" : "Settings ▸ Share: the storage's region",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Región"
+          }
+        }
+      }
+    },
     "Regular" : {
       "comment" : "A text annotation's weight",
       "localizations" : {
@@ -8818,6 +9236,17 @@
         }
       }
     },
+    "Retry" : {
+      "comment" : "Share failed: try sharing again",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reintentar"
+          }
+        }
+      }
+    },
     "Right" : {
       "comment" : "A place of the camera bubble",
       "localizations" : {
@@ -8954,6 +9383,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Áreas guardadas"
+          }
+        }
+      }
+    },
+    "Saved in the Keychain" : {
+      "comment" : "Settings ▸ Share: the secret key's field when the Keychain has it",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardada en el Llavero"
           }
         }
       }
@@ -9155,6 +9595,17 @@
         }
       }
     },
+    "Secret Key" : {
+      "comment" : "Settings ▸ Share: the secret access key",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clave secreta"
+          }
+        }
+      }
+    },
     "See Findings (%lld)" : {
       "comment" : "The Privacy tab: opens the sheet of what the sensitive data search found, and how many",
       "localizations" : {
@@ -9276,12 +9727,56 @@
         }
       }
     },
+    "Service" : {
+      "comment" : "Settings ▸ Share: the storage service",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Servicio"
+          }
+        }
+      }
+    },
+    "Set Up…" : {
+      "comment" : "Share, before it is set up: opens Settings ▸ Share",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configurar…"
+          }
+        }
+      }
+    },
     "Settings" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ajustes"
+          }
+        }
+      }
+    },
+    "Settings ▸ Share has no secret key. Enter it there." : {
+      "comment" : "Share: the Keychain has no secret key for the Access Key ID",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustes ▸ Compartir no tiene la clave secreta. Escribirla ahí."
+          }
+        }
+      }
+    },
+    "Settings ▸ Share isn't complete: %@" : {
+      "comment" : "Share: what Settings ▸ Share is missing, a sentence after the colon",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustes ▸ Compartir no está completo: %@"
           }
         }
       }
@@ -9324,6 +9819,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Compartir"
+          }
+        }
+      }
+    },
+    "Share a Link" : {
+      "comment" : "The help of the editor's Share button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compartir un link"
+          }
+        }
+      }
+    },
+    "Share uploads the video to your storage: R2, S3, B2 or MinIO." : {
+      "comment" : "Share, before it is set up",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compartir sube el video a tu almacenamiento: R2, S3, B2 o MinIO."
           }
         }
       }
@@ -10267,6 +10784,17 @@
         }
       }
     },
+    "Test Connection" : {
+      "comment" : "Settings ▸ Share: uploads and deletes a small file",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Probar conexión"
+          }
+        }
+      }
+    },
     "Text" : {
       "comment" : "The Captions tab: the section with the transcript's words",
       "localizations" : {
@@ -10339,6 +10867,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo correr el atajo de No Molestar. Puede que suenen notificaciones durante la grabación."
+          }
+        }
+      }
+    },
+    "The Keychain couldn't give the secret key (error %lld)." : {
+      "comment" : "Share: reading or saving the secret key in the Keychain failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El Llavero no pudo dar la clave secreta (error %lld)."
+          }
+        }
+      }
+    },
+    "The bucket doesn't exist at this endpoint." : {
+      "comment" : "Share: the storage has no bucket of that name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El bucket no existe en este endpoint."
           }
         }
       }
@@ -10487,6 +11037,17 @@
         }
       }
     },
+    "The earlier links can't be listed: the project's shares.json can't be read." : {
+      "comment" : "Share: the project's shares.json is unreadable; “shares.json” stays as it is",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pueden listar los links anteriores: no se puede leer el shares.json del proyecto."
+          }
+        }
+      }
+    },
     "The edit was recovered up to %@. What couldn't be read was kept apart." : {
       "comment" : "Editor banner: the edit log was damaged; the time of the last good change",
       "localizations" : {
@@ -10494,6 +11055,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se recuperó la edición hasta las %@. Lo que no se pudo leer quedó guardado aparte."
+          }
+        }
+      }
+    },
+    "The endpoint's server wasn't found. Check the endpoint." : {
+      "comment" : "Share: the endpoint's host does not resolve",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró el servidor del endpoint. Revisar el endpoint."
           }
         }
       }
@@ -10666,6 +11238,61 @@
         }
       }
     },
+    "The link couldn't be recorded in the project, so it was removed from the storage." : {
+      "comment" : "Share: shares.json could not be written after the upload, so the uploaded objects were deleted",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo anotar el link en el proyecto, así que se borró del almacenamiento."
+          }
+        }
+      }
+    },
+    "The link expires in %lld days." : {
+      "comment" : "Share, before sharing: a signed link of 2 to 7 days",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El link vence en %lld días."
+          }
+        }
+      }
+    },
+    "The link expires in a day." : {
+      "comment" : "Share, before sharing: a signed link of one day",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El link vence en un día."
+          }
+        }
+      }
+    },
+    "The link is public and never expires." : {
+      "comment" : "Share, before sharing: a public link",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El link es público y no vence."
+          }
+        }
+      }
+    },
+    "The link is public: anyone with the link can watch it." : {
+      "comment" : "Share: a public link, before it is copied",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El link es público: cualquiera con el link puede verlo."
+          }
+        }
+      }
+    },
     "The microphone couldn't start. Recording without it." : {
       "localizations" : {
         "es" : {
@@ -10782,6 +11409,17 @@
         }
       }
     },
+    "The prefix can't have “.” or “..” parts." : {
+      "comment" : "Settings ▸ Share: the prefix has a . or .. segment",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El prefijo no puede tener partes «.» ni «..»."
+          }
+        }
+      }
+    },
     "The preview shows the transparency as a checkerboard." : {
       "comment" : "The export sheet: under the codec, with a codec with alpha",
       "localizations" : {
@@ -10837,6 +11475,17 @@
         }
       }
     },
+    "The project's list of links (shares.json) can't be read, so nothing was shared." : {
+      "comment" : "Share: the project's shares.json is unreadable; “shares.json” stays as it is",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede leer la lista de links del proyecto (shares.json), así que no se compartió nada."
+          }
+        }
+      }
+    },
     "The projects folder can't be read." : {
       "comment" : "The library: a strip",
       "localizations" : {
@@ -10844,6 +11493,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se puede leer la carpeta de proyectos."
+          }
+        }
+      }
+    },
+    "The public URL didn't give back the test file (HTTP %lld). Check that the bucket is public at that address." : {
+      "comment" : "Test Connection: the public base URL did not serve the uploaded file",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La URL pública no devolvió el archivo de prueba (HTTP %lld). Revisar que el bucket sea público en esa dirección."
           }
         }
       }
@@ -10973,6 +11633,17 @@
         }
       }
     },
+    "The secret key is saved in the macOS Keychain, never in a file." : {
+      "comment" : "Under the secret key in Settings ▸ Share",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La clave secreta se guarda en el Llavero de macOS, nunca en un archivo."
+          }
+        }
+      }
+    },
     "The sound of the apps, on a track of its own." : {
       "comment" : "Under system audio in the permissions window",
       "localizations" : {
@@ -10980,6 +11651,61 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "El sonido de las apps, en una pista propia."
+          }
+        }
+      }
+    },
+    "The storage answered with an error (%@)." : {
+      "comment" : "Share: the storage's error code or HTTP status in parentheses",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El almacenamiento respondió con un error (%@)."
+          }
+        }
+      }
+    },
+    "The storage didn't accept the keys (%@). Check the Access Key ID and the secret key." : {
+      "comment" : "Share: the storage refused the credentials; the storage's error code in parentheses",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El almacenamiento no aceptó las claves (%@). Revisar el Access Key ID y la clave secreta."
+          }
+        }
+      }
+    },
+    "The storage says this Mac's clock is wrong. Check the date and time in System Settings." : {
+      "comment" : "Share: the storage refused the request's time",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El almacenamiento dice que el reloj de esta Mac está mal. Revisar la fecha y la hora en Ajustes del Sistema."
+          }
+        }
+      }
+    },
+    "The storage took too long to answer." : {
+      "comment" : "Share: a request timed out",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El almacenamiento tardó demasiado en responder."
+          }
+        }
+      }
+    },
+    "The storage's secure connection isn't valid." : {
+      "comment" : "Share: TLS failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La conexión segura con el almacenamiento no es válida."
           }
         }
       }
@@ -11344,6 +12070,17 @@
         }
       }
     },
+    "The video, the poster and the page are deleted from “%@”. The link stops working. This can't be undone." : {
+      "comment" : "Asking before deleting a shared link from the storage; the bucket's name in quotes",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El video, el póster y la página se borran de «%@». El link deja de funcionar. No se puede deshacer."
+          }
+        }
+      }
+    },
     "The whole display is recorded: what's outside the area is saved too. The area can be changed later." : {
       "localizations" : {
         "es" : {
@@ -11501,6 +12238,17 @@
         }
       }
     },
+    "This Mac isn't connected to the internet." : {
+      "comment" : "Share: no network",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta Mac no está conectada a internet."
+          }
+        }
+      }
+    },
     "This build doesn't say where its source code is: it wasn't made by the release workflow." : {
       "localizations" : {
         "es" : {
@@ -11540,6 +12288,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Este idioma todavía no está en esta Mac. Se descarga una sola vez, de Apple."
+          }
+        }
+      }
+    },
+    "This link is on another storage than the one in Settings ▸ Share, so it can't be deleted from here." : {
+      "comment" : "Delete from Storage: the link was shared to another endpoint or bucket",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este link está en otro almacenamiento que el de Ajustes ▸ Compartir, así que no se puede borrar desde aquí."
           }
         }
       }
@@ -12549,6 +13308,28 @@
         }
       }
     },
+    "Uploading…" : {
+      "comment" : "Share: the video, its poster and its page are being uploaded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subiendo…"
+          }
+        }
+      }
+    },
+    "Uploads to %@ on %@" : {
+      "comment" : "Share, before sharing: the bucket and the storage's host it uploads to",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se sube a %@ en %@"
+          }
+        }
+      }
+    },
     "Uppercase" : {
       "comment" : "The Captions tab: the captions in capital letters",
       "localizations" : {
@@ -12599,6 +13380,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Usar desde acá"
+          }
+        }
+      }
+    },
+    "Use https://." : {
+      "comment" : "Settings ▸ Share: an http:// public URL that is not localhost",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar https://."
+          }
+        }
+      }
+    },
+    "Use https://. Only this Mac (localhost) can use http://." : {
+      "comment" : "Settings ▸ Share: an http:// endpoint that is not localhost",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar https://. Solo esta Mac (localhost) puede usar http://."
           }
         }
       }
@@ -12698,6 +13501,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Volumen"
+          }
+        }
+      }
+    },
+    "Wait for the export to finish." : {
+      "comment" : "Share: another export is running",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esperar a que termine el export."
           }
         }
       }
@@ -12825,6 +13639,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Peso"
+          }
+        }
+      }
+    },
+    "What the Keychain has for this key isn't text. Enter the secret key again in Settings ▸ Share." : {
+      "comment" : "Share: the Keychain item is not UTF-8 text",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lo que el Llavero guarda para esta clave no es texto. Volver a escribir la clave secreta en Ajustes ▸ Compartir."
           }
         }
       }
@@ -12977,12 +13802,34 @@
         }
       }
     },
+    "With a public URL, the link never expires." : {
+      "comment" : "Under the link's expiration in Settings ▸ Share, with a public URL",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con una URL pública el link no vence."
+          }
+        }
+      }
+    },
     "With many menus, Area or Display works better." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Con muchos menús, mejor Área o Pantalla."
+          }
+        }
+      }
+    },
+    "Without a public URL, the link is signed and stops working after this time." : {
+      "comment" : "Under the link's expiration in Settings ▸ Share, without a public URL",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin una URL pública, el link va firmado y deja de funcionar pasado este tiempo."
           }
         }
       }

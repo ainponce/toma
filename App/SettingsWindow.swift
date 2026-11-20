@@ -50,8 +50,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         tabs.selectedTabViewItemIndex = SettingsPane.recording.index
     }
 
+    /// Shows the Share pane (the editor's Share, before it is set up).
+    func showSharePane() {
+        tabs.selectedTabViewItemIndex = SettingsPane.share.index
+    }
+
     #if DEBUG
-    /// `-TomaShowcase settings <general|recording|shortcuts>`: the window on that pane. `recording-keys`: the Recording
+    /// `-TomaShowcase settings <general|recording|shortcuts|share>`: the window on that pane. `recording-keys`: the Recording
     /// pane with "Record Keys to Show Them" on and Input Monitoring not allowed, made up (nothing is saved or asked);
     /// `recording-focus`, the same with "Follow Keyboard Focus" and Accessibility.
     func showcase(pane: String) {
@@ -63,6 +68,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             model.keyboardFocus.showcaseNotAllowed()
             tabs.selectedTabViewItemIndex = SettingsPane.recording.index
         }
+        // `share`, `share-new`, `share-problems` or `share-tested`: the Share pane, made up (`SettingsShareModel.showcase`).
+        if pane.hasPrefix("share") { tabs.selectedTabViewItemIndex = SettingsPane.share.index }
         if let pane = SettingsPane(rawValue: pane) { tabs.selectedTabViewItemIndex = pane.index }
     }
     #endif

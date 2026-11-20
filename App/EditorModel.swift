@@ -312,7 +312,8 @@ final class EditorModel {
     /// "Rename Marker…" of the Markers menu: the popover over the marker's flag on the ruler; set by the timeline.
     @ObservationIgnored var askMarkerName: (VisibleMarker) -> Void = { _ in }
 
-    @ObservationIgnored private let exportGate: ExportGate
+    /// One export at a time in the whole app: the export sheet's and the share's (`EditorShare`).
+    @ObservationIgnored let exportGate: ExportGate
     @ObservationIgnored private var session: EditSession?
     /// The session's package folder, held open for the readers (`currentProject(of:)`); let go with the session.
     @ObservationIgnored private var packageHandle: PackageHandle?
@@ -346,6 +347,8 @@ final class EditorModel {
     @ObservationIgnored private(set) lazy var audio = EditorAudio(model: self)
     /// The takes (plan 3d, Task T12): the Takes menu's list and "Re-record from Here" (`EditorModel+Rerecord`).
     @ObservationIgnored private(set) lazy var takesState = EditorTakes(model: self)
+    /// Share, the bar's button (plan 5a, Task S4): the link to a page of the video on the person's storage.
+    @ObservationIgnored private(set) lazy var share = EditorShare(model: self)
     /// The last `jobs.setRecording(_:)` told, so the next one goes after it and they arrive in order.
     @ObservationIgnored private var recordingTold: Task<Void, Never>?
     /// Which remaking of the mix is the latest, so an older one that finishes late is dropped.
@@ -1436,38 +1439,24 @@ final class EditorModel {
         exportState = .running(progress: 0)
         exportTask = Task {
             do {
-                // What each feature needs before the export (its analysis done), each with an equal part of the ring's
-                // first 20 % once one of them waits; one that says no stops it quietly.
-                let preparation = PendingExport(document: document, project: project, hasSound: job.hasSound, analysis: analysis)
-                let preparations = exportPreparations
-                for (index, prepare) in preparations.enumerated() {
-                    try Task.checkCancellation()
-                    preparation.onProgress = { fraction in
-                        self.exportProgressed(Self.preparationShare * (Double(index) + fraction) / Double(preparations.count))
-                    }
-                    guard await prepare(self, preparation) else { throw CancellationError() }
-                }
-                preparation.onProgress = { _ in }
-                let analysis = preparation.analysis
-                let start = preparation.waited ? Self.preparationShare : 0
                 let throttle = ProgressThrottle()
                 // Called off the main thread, per frame; held only while the export runs, as the task holds the editor.
                 let progress: @Sendable (Double) -> Void = { value in
                     guard throttle.shouldReport(value) else { return }
-                    Task { @MainActor in self.exportProgressed(start + (1 - start) * value) }
+                    Task { @MainActor in self.exportProgressed(value) }
                 }
                 switch job {
                 case let .mp4(settings, range):
-                    let exporter = MP4Exporter(
-                        project: project, document: document, settings: settings, range: range, analysis: analysis,
-                        remakeMusic: preparation.remakeMusic)
-                    let summary = try await exporter.export(to: destination, progress: progress)
+                    let said = try await exportVideo(document, settings: settings, range: range, to: destination, progress: progress)
                     exportFinished(at: destination)
-                    let said = preparation.notices + Self.leftOut(summary, takes: project.takeRecords(shownBy: document))
+                    share.remember(document, settings: settings, range: range, at: destination)
                     if !said.isEmpty { showAlert(said.joined(separator: "\n\n"), style: .warning) }
                 case let .gif(settings):
-                    let exporter = GIFExporter(project: project, document: document, settings: settings, analysis: analysis)
-                    try await exporter.export(to: destination, progress: progress)
+                    let preparation = try await prepared(document, project: project, hasSound: job.hasSound, progress: progress)
+                    let start = preparation.waited ? Self.preparationShare : 0
+                    let exporter = GIFExporter(
+                        project: project, document: document, settings: settings, analysis: preparation.analysis)
+                    try await exporter.export(to: destination) { value in progress(start + (1 - start) * value) }
                     exportFinished(at: destination)
                     if !preparation.notices.isEmpty { showAlert(preparation.notices.joined(separator: "\n\n"), style: .warning) }
                 }
@@ -1487,6 +1476,44 @@ final class EditorModel {
             exportTask = nil
         }
         return true
+    }
+
+    /// The MP4 of `document` (a copy: what is edited meanwhile is not in it) with `settings`, of `range` or of the whole
+    /// video for `nil`, written to `destination` from the package where it is now: what each feature needs first (its
+    /// analysis done, `exportPreparations`), then `MP4Exporter`. `progress` gets 0 to 1, rising, on the main thread or off
+    /// it. Returns what the export says once it is done: the preparations' notices and what it had to leave out. The export
+    /// sheet's (`startExport`) and the share's (`EditorShare`); who calls it holds the `ExportGate`.
+    func exportVideo(
+        _ document: EditDocument, settings: ExportSettings, range: ExportRange?, to destination: URL,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> [String] {
+        guard let session else { throw CancellationError() }
+        let project = currentProject(of: session)
+        let preparation = try await prepared(document, project: project, hasSound: true, progress: progress)
+        let start = preparation.waited ? Self.preparationShare : 0
+        let exporter = MP4Exporter(
+            project: project, document: document, settings: settings, range: range, analysis: preparation.analysis,
+            remakeMusic: preparation.remakeMusic)
+        let summary = try await exporter.export(to: destination) { value in progress(start + (1 - start) * value) }
+        return preparation.notices + Self.leftOut(summary, takes: project.takeRecords(shownBy: document))
+    }
+
+    /// What each feature needs before an export of `document` (its analysis done), each with an equal part of the
+    /// progress's first 20 % once one of them waits; one that says no stops it quietly (`CancellationError`).
+    private func prepared(
+        _ document: EditDocument, project: LoadedProject, hasSound: Bool, progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> PendingExport {
+        let preparation = PendingExport(document: document, project: project, hasSound: hasSound, analysis: analysis)
+        let preparations = exportPreparations
+        for (index, prepare) in preparations.enumerated() {
+            try Task.checkCancellation()
+            preparation.onProgress = { fraction in
+                progress(Self.preparationShare * (Double(index) + fraction) / Double(preparations.count))
+            }
+            guard await prepare(self, preparation) else { throw CancellationError() }
+        }
+        preparation.onProgress = { _ in }
+        return preparation
     }
 
     /// "Export finished · Show in Finder · Copy" in the bar, for `exportFinishedDuration`.
@@ -1582,6 +1609,7 @@ final class EditorModel {
 
     /// Cancels an export in progress and waits for its task to end: the exporter has removed its partial file.
     func cancelExportAndWait() async {
+        await share.cancelAndWait()
         guard let exportTask else { return }
         exportTask.cancel()
         await exportTask.value
@@ -1696,6 +1724,7 @@ final class EditorModel {
         let export = exportTask
         export?.cancel()
         exportFinishedTask?.cancel()
+        share.cancel()
         tearDownPreview()
         image.close()
         voice.close()
