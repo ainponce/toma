@@ -8,7 +8,7 @@
 // MARK: - Settings
 
 /// The score's reverb: one for the whole theme, fed by each part's `reverbSend`.
-public struct ReverbSettings: Sendable, Equatable {
+public struct ReverbSettings: Sendable, Equatable, Codable {
     /// The time the reverb takes to fall 60 dB (T60), in seconds: 0.1 to 3 (outside, the nearest), so its tail is under
     /// −120 dB before `MusicSynth.tailFrames` are over.
     public var decay: Double
@@ -49,7 +49,7 @@ public struct ReverbSettings: Sendable, Equatable {
 }
 
 /// The score's delay: echoes at the tempo, fed by each part's `delaySend`.
-public struct DelaySettings: Sendable, Equatable {
+public struct DelaySettings: Sendable, Equatable, Codable {
     /// The time between echoes, in beats of the score (0.75 is a dotted eighth in 4/4), from 1/64 of a beat to 4 s.
     public var beats: Double
     /// How much of each echo comes back (0 to 0.95); capped so the echoes are under −120 dB within 6 s, inside the tail.
@@ -76,7 +76,7 @@ public struct DelaySettings: Sendable, Equatable {
 }
 
 /// A chorus on one part: two copies of it, each a little late by a time that sways, one on each side.
-public struct ChorusSettings: Sendable, Equatable {
+public struct ChorusSettings: Sendable, Equatable, Codable {
     /// How loud the copies are, as an amplitude next to the part's own sound (0 to 1).
     public var mix: Double
     /// Their mean delay and how far it sways, in seconds.

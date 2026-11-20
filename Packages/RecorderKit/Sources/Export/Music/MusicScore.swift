@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import CryptoKit
+import Foundation
 
 /// A theme of the music library as `MusicSynth` plays it (`music-1`): a loop of `bars` bars at `tempo`, made of parts,
 /// each an instrument playing notes, all of them through one reverb and one delay.
@@ -8,8 +10,9 @@
 /// - Its notes start inside the loop, beat 0 to `bars × beatsPerBar` (a note a little before 0, as `humanized` may leave
 ///   the downbeat, starts that much before the loop's end). Anything still sounding at the loop's end — a release, the
 ///   reverb, an echo — comes back at its start, so the last bar can lead into the first without a seam.
-/// - Everything must die out within `MusicSynth.tailFrames` (8 s) of the loop's end: releases up to 2 s
-///   (`MusicSynth.maxRelease`), the reverb's decay up to 3 s, the delay's echoes capped to fade within 6 s.
+/// - A note sounds to its end, its release included (up to 2 s, `MusicSynth.maxRelease`), even when that is well into
+///   the next pass; it may be held at most a whole loop. After the last note, the reverb (its decay up to 3 s) and the
+///   echoes (capped to fade within 6 s) die out within `MusicSynth.tailFrames` (8 s).
 /// - What sways over the loop (a filter sweep, a tremolo, a chorus) takes a whole number of cycles per loop: give it in
 ///   Hz and it is rounded. A note's own vibrato starts with the note.
 /// - Its randomness comes from `seed`: each note gets `SynthRandom.mix(seed, part, note)` (or its own `ScoreNote.seed`),
@@ -19,7 +22,7 @@
 ///
 /// Changing anything a theme sounds like changes its bytes, pinned in its test; after the merge of phase 3 into `main`,
 /// another sound is `music-2`.
-public struct MusicScore: Sendable, Equatable {
+public struct MusicScore: Sendable, Equatable, Codable {
     /// One of `MusicThemes.ids`.
     public var id: String
     /// Beats per minute.
@@ -78,10 +81,23 @@ public struct MusicScore: Sendable, Equatable {
     public func frame(atBeat beat: Double) -> Int {
         Int((beat * 60 * Double(MusicSynth.sampleRate) / tempo).rounded(.toNearestOrEven))
     }
+
+    /// What its render depends on, as 16 lowercase hex digits: the first 8 bytes of the SHA-256 of
+    /// `music-1/engine-<MusicSynth.engineVersion>/` and the score as JSON with sorted keys. A change to any note,
+    /// preset or setting of the score, or to the engine's version, changes it; the music library keeps a theme's file
+    /// under it, so a file made from another score is never taken for the theme.
+    public var fingerprint: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.nonConformingFloatEncodingStrategy = .convertToString(positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
+        var data = Data("\(MusicThemes.algorithm)/engine-\(MusicSynth.engineVersion)/".utf8)
+        data.append((try? encoder.encode(self)) ?? Data(String(describing: self).utf8))
+        return SHA256.hash(data: data).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 /// An instrument and the notes it plays, with where it sits in the mix.
-public struct ScorePart: Sendable, Equatable {
+public struct ScorePart: Sendable, Equatable, Codable {
     public var instrument: Instrument
     public var notes: [ScoreNote]
     /// Its level, as an amplitude.
@@ -109,7 +125,7 @@ public struct ScorePart: Sendable, Equatable {
 }
 
 /// One note: where it starts and how long it is held, in beats of the score, its pitch and how hard it is played.
-public struct ScoreNote: Sendable, Equatable {
+public struct ScoreNote: Sendable, Equatable, Codable {
     public var beat: Double
     public var beats: Double
     /// MIDI: 60 is C4, 69 A4 (440 Hz); a fraction is that many hundredths of a semitone. Drums take 60 as their own
@@ -131,7 +147,7 @@ public struct ScoreNote: Sendable, Equatable {
 }
 
 /// What plays a part's notes (`SynthInstruments.swift` has the presets and what each value does).
-public enum Instrument: Sendable, Equatable {
+public enum Instrument: Sendable, Equatable, Codable {
     case pad(PadPreset)
     case electricPiano(EPianoPreset)
     case piano(PianoPreset)

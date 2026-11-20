@@ -5,7 +5,7 @@ import Foundation
 import RecorderKitTestSupport
 import Synchronization
 import Testing
-// @testable for the library of test themes (`init(root:themes:score:synthesize:)`) and what it counts.
+// @testable for the library of test themes (`init(root:themes:score:synthesize:scratch:)`) and what it counts.
 @testable import ProjectJobs
 
 // Every test here runs in `make tsan`. The themes are short scores (a loop of 1 s, rendered with its 8 s of tail and no
@@ -21,10 +21,14 @@ private let testTheme = MusicScore(
     reverb: .none, delay: nil, masterGain: 0.8, isPlaceholder: false)
 private let testFrames = 48_000
 
-private func makeLibrary(_ root: URL, synthesize: (@Sendable (MusicScore, () -> Bool) -> [Float]?)? = nil) -> MusicLibrary {
-    let score: @Sendable (String) -> MusicScore? = { $0 == "calm" ? testTheme : nil }
-    if let synthesize { return MusicLibrary(root: root, themes: ["calm"], score: score, synthesize: synthesize) }
-    return MusicLibrary(root: root, themes: ["calm"], score: score)
+/// A library in `root` whose one theme, `calm`, is `theme`, with its placeholders in `scratch`.
+private func makeLibrary(
+    _ root: URL, theme: MusicScore = testTheme, scratch: URL? = nil,
+    synthesize: (@Sendable (MusicScore, () -> Bool) -> [Float]?)? = nil
+) -> MusicLibrary {
+    let score: @Sendable (String) -> MusicScore? = { $0 == "calm" ? theme : nil }
+    if let synthesize { return MusicLibrary(root: root, themes: ["calm"], score: score, synthesize: synthesize, scratch: scratch) }
+    return MusicLibrary(root: root, themes: ["calm"], score: score, scratch: scratch)
 }
 
 /// Long enough for a loaded machine under the thread sanitizer: `eventually` returns as soon as it holds.
@@ -64,13 +68,14 @@ private func names(in folder: URL) -> [String] {
             let library = makeLibrary(root)
             #expect(library.cachedFile(for: "calm") == nil)
             let url = try await library.file(for: "calm")
-            #expect(url == root.appending(path: "music-1/calm.caf"))
+            #expect(url == root.appending(path: "music-1/calm-\(testTheme.fingerprint).caf"))
+            #expect(testTheme.fingerprint.count == 16)
             #expect(try await library.file(for: "calm") == url)
             #expect(await library.syntheses == 1)
             #expect(library.cachedFile(for: "calm") == url)
             let expected = MusicFile.data(interleaved: try await offThePool { MusicSynth.render(testTheme) })
             #expect(try Data(contentsOf: url) == expected)
-            #expect(names(in: url.deletingLastPathComponent()) == ["calm.caf"])
+            #expect(names(in: url.deletingLastPathComponent()) == [url.lastPathComponent])
             // A new library on the same folder finds it.
             let again = makeLibrary(root)
             #expect(try await again.file(for: "calm") == url)
@@ -132,7 +137,8 @@ private func names(in folder: URL) -> [String] {
             gate.open()
             let url = try await library.file(for: "calm")
             #expect(library.cachedFile(for: "calm") == url)
-            #expect(await library.syntheses == 2)
+            // The cancelled one does not count.
+            #expect(await library.syntheses == 1)
         }
     }
 
@@ -197,8 +203,59 @@ private func names(in folder: URL) -> [String] {
         }
     }
 
-    @Test func theAppsLibraryIsInItsCaches() {
+    @Test func aChangedScoreIsNotTheCachedTheme() async throws {
+        try await withTemporaryDirectory { root in
+            let old = try await makeLibrary(root).file(for: "calm")
+            // The app updated: the theme sounds otherwise (here, louder), and its cache is the old one.
+            var tuned = testTheme
+            tuned.masterGain = 0.9
+            #expect(tuned.fingerprint != testTheme.fingerprint)
+            let library = makeLibrary(root, theme: tuned)
+            #expect(library.cachedFile(for: "calm") == nil)
+            let url = try await library.file(for: "calm")
+            #expect(url != old)
+            #expect(await library.syntheses == 1)
+            let now = tuned
+            let expected = MusicFile.data(interleaved: try await offThePool { MusicSynth.render(now) })
+            #expect(try Data(contentsOf: url) == expected)
+            // The old version is gone; only the theme as it is now is kept.
+            #expect(names(in: root.appending(path: "music-1")) == [url.lastPathComponent])
+            // A change to a single note is a change too.
+            var moved = tuned
+            moved.parts[1].notes[0].pitch += 1
+            #expect(moved.fingerprint != tuned.fingerprint)
+            #expect(makeLibrary(root, theme: moved).cachedFile(for: "calm") == nil)
+        }
+    }
+
+    @Test func aPlaceholderIsNeverCached() async throws {
+        try await withTemporaryDirectory { root in
+            var placeholder = testTheme
+            placeholder.isPlaceholder = true
+            let scratch = root.appending(path: "scratch-1")
+            var library: MusicLibrary? = makeLibrary(root, theme: placeholder, scratch: scratch)
+            let url = try #require(try await library?.file(for: "calm"))
+            #expect(url.path.hasPrefix(scratch.path))
+            #expect(library?.cachedFile(for: "calm") == url)
+            #expect(names(in: root.appending(path: "music-1")) == [])
+            // Another library (the app's next launch) does not find it, and makes it again where it keeps its own.
+            let next = makeLibrary(root, theme: placeholder, scratch: root.appending(path: "scratch-2"))
+            #expect(next.cachedFile(for: "calm") == nil)
+            // The library that made it removes it when it goes.
+            library = nil
+            #expect(await eventually(timeout: patience) { !FileManager.default.fileExists(atPath: scratch.path) })
+        }
+    }
+
+    @Test func theAppsLibraryIsInItsCaches() throws {
         #expect(MusicLibrary.defaultRoot.path.hasSuffix("/Library/Caches/dev.toma.Toma/Music"))
-        #expect(MusicLibrary.shared.url(for: "breeze") == MusicLibrary.defaultRoot.appending(path: "music-1/breeze.caf"))
+        let breeze = try #require(MusicThemes.score("breeze"))
+        let url = MusicLibrary.shared.url(for: "breeze")
+        #expect(url.lastPathComponent == "breeze-\(breeze.fingerprint).caf")
+        if breeze.isPlaceholder {
+            #expect(url.path.hasPrefix(FileManager.default.temporaryDirectory.path))
+        } else {
+            #expect(url == MusicLibrary.defaultRoot.appending(path: "music-1/breeze-\(breeze.fingerprint).caf"))
+        }
     }
 }

@@ -8,22 +8,28 @@ import Dispatch
 ///
 /// 1. Every note becomes a voice (`SynthInstruments.swift`) seeded with `SynthRandom.mix(seed, part, note)` (or the
 ///    note's own seed): a function of its note alone, never of the time it is rendered at or of another voice.
-/// 2. N + T frames are rendered (T = `tailFrames`, 8 s), a block of `blockFrames` at a time. In each block every voice
+/// 2. Every note sounds to its real end — a note that starts near the loop's end and is held into the next pass is never
+///    cut — and T frames more are rendered after the last one ends, or after the loop's end if that is later
+///    (T = `tailFrames`, 8 s: the reverb and the echoes die out within it), a block of `blockFrames` at a time. In each block every voice
 ///    writes into a buffer of its own — the voices of a block run on several threads at once — and then, on one thread,
 ///    the voices of a part are added in the order of its notes, each part gets its chorus, is panned and goes to the dry
 ///    mix, the reverb and the delay in the order of the parts, and the master is the dry mix plus the delay plus the reverb,
 ///    high-passed at 28 Hz and low-passed at 16 kHz. Every addition happens in the same order on every run, so no thread
 ///    changes a bit.
-/// 3. Frame k of the render is added onto frame k mod N of the loop: the tail [N, N + T) — releases, the reverb, echoes —
-///    lands on [0, T), where the next pass of the loop would hear it. Everything before this point is linear (or belongs
+/// 3. Frame k of the render is added onto frame k mod N of the loop: everything past N — notes held across the seam,
+///    releases, the reverb, echoes — lands on the start, where the next pass of the loop would hear it. Everything before this point is linear (or belongs
 ///    to one note), and what sways over the loop turns a whole number of times in it, so the loop is the steady state of
 ///    playing the score forever: its end leads into its start like any other two frames.
 /// 4. Only steps without memory follow: each channel's mean is taken out, the result is multiplied by `masterGain`, and a
 ///    soft clip (`SynthMath.tanh` above −6 dBFS) keeps every sample under −1 dBFS. Then, and only then, `Float(_:)`.
 public enum MusicSynth {
     public static let sampleRate = 48_000
-    /// T: 8 s, longer than anything a theme may sound after the loop's end (a 2 s release and a 3 s reverb, −120 dB at
-    /// 6 s after it).
+    /// The version of this engine, part of every score's `fingerprint`. Raise it with any change that makes a score
+    /// render other bytes (an instrument, an effect, this file): the pinned digest of `renderIsTheSameBytesEveryRun`
+    /// changes then, and gets a row of its own for the new version. So a cache made by an older engine is not used.
+    public static let engineVersion = 1
+    /// T: 8 s rendered after the last note ends (or after the loop's end, if that is later): longer than the reverb (3 s
+    /// at most, −120 dB at 6 s) and the echoes (capped to fade within 6 s) take to die out.
     public static let tailFrames = 384_000
     /// The longest release a voice takes, in seconds: a longer one is cut to this.
     public static let maxRelease = 2.0
@@ -50,9 +56,9 @@ public enum MusicSynth {
         guard let loop = score.loopFrames else {
             preconditionFailure("MusicSynth: the loop of \(score.id) is not a whole number of frames")
         }
-        let total = loop + tailFrames
         let rate = Double(sampleRate)
-        let parts = score.parts.enumerated().map { PartState(score: score, part: $0.element, index: $0.offset, loop: loop, total: total) }
+        let parts = score.parts.enumerated().map { PartState(score: score, part: $0.element, index: $0.offset, loop: loop) }
+        let total = max(loop, parts.map(\.latestEnd).max() ?? 0) + tailFrames
         var delay = score.delay.map { StereoDelay($0, framesPerBeat: score.framesPerBeat, sampleRate: rate) }
         var reverb = FDNReverb(score.reverb, sampleRate: rate)
         var highPass = (Biquad(.highPass, cutoff: masterHighPass), Biquad(.highPass, cutoff: masterHighPass))
@@ -209,7 +215,10 @@ private final class PartState {
     let reverbSend: Double
     let delaySend: Double
 
-    init(score: MusicScore, part: ScorePart, index: Int, loop: Int, total: Int) {
+    /// The frame where its last voice ends (0 without notes).
+    let latestEnd: Int
+
+    init(score: MusicScore, part: ScorePart, index: Int, loop: Int) {
         instrument = part.instrument
         let rate = Double(MusicSynth.sampleRate)
         let framesPerBeat = score.framesPerBeat
@@ -221,7 +230,8 @@ private final class PartState {
             var start = score.frame(atBeat: note.beat) % loop
             if start < 0 { start += loop }
             let gate = min(max(Int((note.beats * framesPerBeat).rounded(.toNearestOrEven)), 1), loop)
-            let length = min(part.instrument.frames(gate: gate, pitch: note.pitch, sampleRate: rate), total - start)
+            // To its real end: what passes the loop's end is folded onto its start.
+            let length = part.instrument.frames(gate: gate, pitch: note.pitch, sampleRate: rate)
             let seed = note.seed ?? SynthRandom.mix(score.seed, UInt64(index), UInt64(i))
             let context = NoteContext(
                 start: start, gate: gate, pitch: note.pitch, velocity: min(note.velocity, 1), random: SynthRandom(seed: seed),
@@ -230,6 +240,7 @@ private final class PartState {
         }
         // By start, and in the order of the score where two start together.
         self.events = events.sorted { ($0.start, $0.index) < ($1.start, $1.index) }
+        latestEnd = events.map(\.end).max() ?? 0
         chorus = part.chorus.map { Chorus($0, loopFrames: loop, sampleRate: rate) }
         let pan = SynthMath.panGains(part.pan)
         let gain = part.gain.isFinite ? part.gain : 0

@@ -11,7 +11,7 @@
 
 /// A pad: detuned saws spread across the stereo field and a sine an octave down, through a low-pass that opens with the
 /// note and sways slowly over the loop.
-public struct PadPreset: Sendable, Equatable {
+public struct PadPreset: Sendable, Equatable, Codable {
     /// How many saws (1 to 7), from the left to the right.
     public var oscillators: Int
     /// The cents between the lowest and the highest saw.
@@ -70,7 +70,7 @@ public struct PadPreset: Sendable, Equatable {
 
 /// An electric piano: two-operator FM, a bright tine that fades in a moment, the body that decays while held, and a
 /// stereo tremolo.
-public struct EPianoPreset: Sendable, Equatable {
+public struct EPianoPreset: Sendable, Equatable, Codable {
     /// The modulator's frequency over the carrier's.
     public var ratio: Double
     /// The modulation index at the attack (the brightness; more with velocity), and the time it takes to fall to 1/e.
@@ -110,7 +110,7 @@ public struct EPianoPreset: Sendable, Equatable {
 
 /// An acoustic piano: a few slightly inharmonic partials per string, two or three strings a hair apart, the felt's thump,
 /// lower notes ringing longer and to the left.
-public struct PianoPreset: Sendable, Equatable {
+public struct PianoPreset: Sendable, Equatable, Codable {
     /// Partials per string (1 to 16; those over 15 kHz are left out).
     public var partials: Int
     /// How sharp the upper partials are (B of fₙ = n·f₀·√(1 + B·n²)).
@@ -157,7 +157,7 @@ public struct PianoPreset: Sendable, Equatable {
 }
 
 /// A plucked string (Karplus–Strong): a burst of seeded noise ringing in a tuned delay line.
-public struct PluckPreset: Sendable, Equatable {
+public struct PluckPreset: Sendable, Equatable, Codable {
     /// How bright the pluck is (0 to 1), more with velocity.
     public var brightness: Double
     /// How fast its highs fade as it rings (0 bright to 1 dark).
@@ -194,7 +194,7 @@ public struct PluckPreset: Sendable, Equatable {
 }
 
 /// A bass: a sine and a saw through a low-pass that opens at the attack, with a little warmth.
-public struct BassPreset: Sendable, Equatable {
+public struct BassPreset: Sendable, Equatable, Codable {
     /// The levels of the sine and of the saw.
     public var sine: Double
     public var saw: Double
@@ -240,7 +240,7 @@ public struct BassPreset: Sendable, Equatable {
 
 /// A lead: a saw or a pulse, two of them a few cents apart (one on each side), through a low-pass, with vibrato that
 /// comes in after the note starts.
-public struct LeadPreset: Sendable, Equatable {
+public struct LeadPreset: Sendable, Equatable, Codable {
     /// 0 a saw, 1 a pulse of `pulseWidth` (0.5 is a square).
     public var square: Double
     public var pulseWidth: Double

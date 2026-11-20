@@ -1565,10 +1565,13 @@ Cómo graba las teclas esta versión (`KeyPressRecorder`, solo en las tomas con 
 
 ### La caché de la música
 
-Los temas de la biblioteca de música (`music-1`, diseño de la fase 3, §7.6) no van en el paquete ni en la carpeta de cachés del proyecto: van en la caché de la app, una vez para todos los proyectos, en `~/Library/Caches/dev.toma.Toma/Music/music-1/<id>.caf` (`MusicLibrary`), con `<id>` uno de `calm`, `focus`, `drive`, `piano`, `pulse` y `breeze`. Un documento nombra un tema por su fuente, `library:music-1/<id>`, nunca por la ruta del archivo.
+Los temas de la biblioteca de música (`music-1`, diseño de la fase 3, §7.6) no van en el paquete ni en la carpeta de cachés del proyecto: van en la caché de la app, una vez para todos los proyectos, en `~/Library/Caches/dev.toma.Toma/Music/music-1/<id>-<huella>.caf` (`MusicLibrary`), con `<id>` uno de `calm`, `focus`, `drive`, `piano`, `pulse` y `breeze`. Un documento nombra un tema por su fuente, `library:music-1/<id>`, nunca por la ruta del archivo.
+
+- **La huella** (`MusicScore.fingerprint`) son 16 dígitos hexadecimales en minúscula: los primeros 8 bytes del SHA-256 de `music-1/engine-<versión del motor>/` y la partitura del tema en JSON con las claves ordenadas. Cambia con cualquier nota, preset o ajuste de la partitura y con la versión del motor (`MusicSynth.engineVersion`), así que un archivo hecho con otra partitura (un marcador, una afinación anterior del tema, un motor anterior) nunca pasa por el tema: el tema se hace de nuevo con su nombre nuevo y los archivos de sus otras versiones (`<id>-<16 hex>.caf`) se borran.
+- **Un marcador no se guarda nunca.** Un tema que todavía es un marcador (`isPlaceholder`) se hace una vez por cada `MusicLibrary`, en una carpeta propia dentro de la carpeta temporal del sistema que se borra cuando la biblioteca se va, y la próxima lo hace otra vez.
 
 - **Se rehace igual si falta.** Un tema se sintetiza la primera vez que se lo pide (`MusicSynth`, código determinista: los mismos bytes en toda Mac y en cada corrida) y se guarda. Si macOS vacía la caché, o el archivo no está, se vuelve a sintetizar, idéntico, y quien lo necesita (el export) espera; nada del paquete depende de esa carpeta.
-- **Entero y atómico.** Se escribe en un temporal oculto de la misma carpeta (`.<id>.<UUID>.tmp.caf`) que se mueve sobre `<id>.caf` con `rename(2)` (`ProjectCaches.temporaryFile(for:)` y `commit(_:to:)`), fuera del hilo principal: el nombre tiene el archivo entero o no está. Una síntesis que se cancela (todos los que la pidieron se fueron) no deja ni el archivo ni el temporal.
+- **Entero y atómico.** Se escribe en un temporal oculto de la misma carpeta (`.<id>.<UUID>.tmp.caf`) que se mueve sobre `<id>-<huella>.caf` con `rename(2)` (`ProjectCaches.temporaryFile(for:)` y `commit(_:to:)`), fuera del hilo principal: el nombre tiene el archivo entero o no está. Una síntesis que se cancela (todos los que la pidieron se fueron) no deja ni el archivo ni el temporal.
 - **El archivo es un CAF propio:** PCM lineal en `Float32` little-endian, dos canales intercalados, 48 kHz, con solo sus bloques `desc` y `data` (`MusicFile`). Cada tema dura exactamente 5 760 000 cuadros (120 s), así que el archivo mide 68 + 8 × 5 760 000 = 46 080 068 bytes. Los 68 bytes de antes de las muestras (en big-endian, como pide CAF, salvo las muestras):
 
   | Bytes | Qué |
@@ -1579,5 +1582,5 @@ Los temas de la biblioteca de música (`music-1`, diseño de la fase 3, §7.6) n
   | 52–63 | el tipo del bloque `data` y su tamaño, 4 + 8 × cuadros |
   | 64–67 | su contador de ediciones, 0 |
 
-- **Un archivo con otro tamaño o encabezado no es el tema** y se rehace: uno cortado, otro CAF, uno de otra cantidad de cuadros. Un enlace en su lugar no se sigue nunca (`O_NOFOLLOW`): no es el tema, y el tema nuevo lo reemplaza a él, no a lo que apunta. Se mira solo el tamaño y los 68 bytes; las muestras no se comparan.
+- **Un archivo con otro tamaño o encabezado no es el tema** y se rehace: uno cortado, otro CAF, uno de otra cantidad de cuadros. Con el nombre de la huella, eso basta: las muestras no se comparan. Un enlace en su lugar no se sigue nunca (`O_NOFOLLOW`): no es el tema, y el tema nuevo lo reemplaza a él, no a lo que apunta.
 - El id del algoritmo lleva su versión: los bytes de cada tema se fijan en sus pruebas y pueden cambiar hasta el merge de la fase 3 a `main`; después, otro sonido es `music-2`, en otra carpeta, y `library:music-1/<id>` sigue sonando igual. Ver `docs/music.md`.

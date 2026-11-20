@@ -40,12 +40,15 @@ un retardo para todo el tema.
   piano aditivo de parciales inarmónicos, una cuerda pulsada (Karplus-Strong), un bajo, una melodía, bombo, caja,
   platillos, palmas, shaker y el crujido de un disco. Efectos: una reverb de 8 líneas (FDN), un retardo estéreo a tempo y
   un chorus.
+- **La versión del motor** (`MusicSynth.engineVersion`) sube con cualquier cambio del motor que cambie los bytes de una
+  partitura; el digest fijado en `renderIsTheSameBytesEveryRun` suma una fila por versión.
 - **Los mismos bytes en toda Mac:** todas las muestras salen de `+ − × ÷` y raíz cuadrada en `Double`, con polinomios
   propios para el seno, `exp2` y `tanh` (`SynthMath`) y la única aleatoriedad de SplitMix64 con semilla fija por tema y
   por nota. Nada de `sin`, `exp` o `pow` de libm ni de Accelerate, ningún reloj, y las voces que se calculan en varios
   hilos a la vez se suman siempre en el mismo orden. El build de depuración y el de release dan los mismos bytes.
-- **Sin costura:** se dibujan los dos minutos y 8 s más, y esa cola (las notas que se apagan, la reverb, los ecos) se suma
-  sobre el comienzo, donde la oiría la vuelta siguiente. Lo que se mueve a lo largo del tema (un filtro que se abre, un
+- **Sin costura:** cada nota suena hasta su final real (una que empieza justo antes del final y sigue en la vuelta
+  siguiente no se corta), se dibujan 8 s más después de la última, y todo lo que pasa del final (las notas ligadas, las que
+  se apagan, la reverb, los ecos) se suma sobre el comienzo, donde la oiría la vuelta siguiente. Lo que se mueve a lo largo del tema (un filtro que se abre, un
   trémolo, el chorus) da un número entero de vueltas por vuelta del tema. Después solo hay pasos sin memoria: se quita la
   media de cada canal, se aplica la ganancia del tema y un recorte suave que deja todo pico bajo −1 dBFS.
 - **Las medidas de un tema** (decisión 5 del plan 3c): −16 LUFS ± 1 integrados, pico ≤ −1 dBFS, ningún hueco de más de
@@ -56,9 +59,11 @@ un retardo para todo el tema.
 
 ## Dónde se guardan
 
-En la caché de la app, `~/Library/Caches/dev.toma.Toma/Music/music-1/<id>.caf` (`MusicLibrary`), enteros y atómicos, fuera
-del hilo principal. Si macOS vacía la caché, se vuelven a sintetizar iguales y el export espera. El formato del archivo y
-sus reglas están en `docs/format/README.md` ("La caché de la música").
+En la caché de la app, `~/Library/Caches/dev.toma.Toma/Music/music-1/<id>-<huella>.caf` (`MusicLibrary`), enteros y
+atómicos, fuera del hilo principal. La huella sale de la partitura y de la versión del motor: un tema que cambia (o un
+motor nuevo) se vuelve a sintetizar y su versión vieja se borra. Un tema que todavía es un marcador no se guarda nunca. Si
+macOS vacía la caché, se vuelven a sintetizar iguales y el export espera. El formato del archivo y sus reglas están en
+`docs/format/README.md` ("La caché de la música").
 
 ## El id del algoritmo
 

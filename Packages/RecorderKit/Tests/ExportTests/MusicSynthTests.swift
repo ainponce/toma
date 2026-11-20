@@ -151,10 +151,30 @@ private func seconds(_ s: Double) -> Int { Int(s * 48_000) }
         #expect(sameBits(first, MusicSynth.render(score)))
         #expect(first.allSatisfy { $0.isFinite && $0.magnitude < 0.9 })
         #expect(MusicMetrics.peak(first) > 0.05)
-        // Pinned, so another Mac (or another version of macOS) gives these very bytes. It changes with any change to
-        // the engine: until the merge of phase 3 into `main` that is fine (update it); after, another sound is music-2.
+        // Pinned, so another Mac (or another version of macOS) gives these very bytes. A change to the engine that changes
+        // them raises `MusicSynth.engineVersion` (so the music library makes its themes again) and adds a row here for
+        // it; a row is never edited. Until the merge of phase 3 into `main` that is fine; after, another sound is music-2.
+        let pinned = [1: "9c136a165a700d05c21d0e57af74ad83dcd4f9445969ef77b6db729ba180d597"]
         let digest = SHA256.hash(data: MusicFile.data(interleaved: first)).map { String(format: "%02x", $0) }.joined()
-        #expect(digest == "9c136a165a700d05c21d0e57af74ad83dcd4f9445969ef77b6db729ba180d597")
+        #expect(digest == pinned[MusicSynth.engineVersion])
+    }
+
+    @Test func fingerprintFollowsTheScore() {
+        let score = testScore()
+        #expect(score.fingerprint == testScore().fingerprint)
+        #expect(score.fingerprint.count == 16 && score.fingerprint.allSatisfy { $0.isHexDigit && !$0.isUppercase })
+        var other = score
+        other.seed = 43
+        #expect(other.fingerprint != score.fingerprint)
+        other = score
+        other.parts[0].instrument = .pad(.airy)
+        #expect(other.fingerprint != score.fingerprint)
+        other = score
+        other.reverb.decay = 1.6
+        #expect(other.fingerprint != score.fingerprint)
+        other = score
+        other.isPlaceholder = true
+        #expect(other.fingerprint != score.fingerprint)
     }
 
     @Test func aDifferentSeedIsADifferentSound() {
@@ -220,6 +240,39 @@ private func seconds(_ s: Double) -> Int { Int(s * 48_000) }
             }
         }
         #expect(worst <= 1e-5, "\(worst)")
+    }
+
+    @Test func aNoteAcrossTheLoopsEndIsNotCut() {
+        // 6 bars at 120 BPM: a loop of 12 s. A pad starts just before its end (beat −0.02, as `humanized` may leave a
+        // downbeat), held 8 s with a release of 2 s: it sounds 10 s into the next pass, past the 8 s of tail. It must tie
+        // across the seam and end where its release ends, never cut where the tail of 8 s would have ended.
+        let pad = PadPreset(attack: 0.05, release: 2, cutoff: 600, sweepDepth: 0)
+        let score = MusicScore(
+            id: "tie", tempo: testTempo, beatsPerBar: 4, bars: 6, seed: 1,
+            parts: [ScorePart(instrument: .pad(pad), notes: [ScoreNote(beat: -0.02, beats: 16, pitch: 57, velocity: 0.8)], gain: 0.5, reverbSend: 0)],
+            reverb: .none, delay: nil, masterGain: 1, isPlaceholder: false)
+        let samples = MusicSynth.render(score)
+        let frames = samples.count / 2
+        #expect(frames == 576_000)
+        /// The largest step from frame k to the next (around the loop), over both channels.
+        func step(_ k: Int) -> Float {
+            let next = (k + 1) % frames
+            return max((samples[2 * next] - samples[2 * k]).magnitude, (samples[2 * next + 1] - samples[2 * k + 1]).magnitude)
+        }
+        /// Whether the step after frame `k` is like the steps within 10 ms of it: no more than twice the largest of them.
+        func isLocal(_ k: Int) -> (Bool, Float, Float) {
+            var around: Float = 0
+            for j in (k - 480)...(k + 480) where j != k { around = max(around, step((j + frames) % frames)) }
+            return (step(k) <= 2 * around, step(k), around)
+        }
+        let atTheSeam = isLocal(frames - 1)
+        #expect(atTheSeam.0, "at the seam: \(atTheSeam.1) against \(atTheSeam.2)")
+        // Where the render of N + 8 s would end: frame 8 s of the loop, in the note's release.
+        let atTheTail = isLocal(MusicSynth.tailFrames - 1)
+        #expect(atTheTail.0, "at 8 s: \(atTheTail.1) against \(atTheTail.2)")
+        #expect(meanSquare(samples, seconds(7.9)..<seconds(8)) > 1e-4)
+        // Its release ends at 10 s minus 10 ms; after it, silence (but for the channel's mean taken out).
+        #expect(meanSquare(samples, seconds(10)..<seconds(11.9)) < 1e-10)
     }
 
     @Test func seamIsNotAJump() {

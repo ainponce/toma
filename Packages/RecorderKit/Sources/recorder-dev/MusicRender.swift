@@ -5,15 +5,16 @@ import Export
 import Foundation
 
 /// `recorder-dev music [--out <folder>] [--theme <id>]`: renders the themes of the music library (`music-1`) to
-/// `<id>.caf`, as the app's cache has them, and prints how long each took and what it measures (plan decision 5).
+/// `<id>.caf`, the bytes the app's cache holds as `<id>-<fingerprint>.caf`, and prints how long each took and what it
+/// measures (plan decision 5).
 struct MusicRender: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "music",
         abstract: "Renders the themes of the music library to <id>.caf and prints their measures.",
         discussion: """
             Renders every theme of music-1 (calm, focus, drive, piano, pulse, breeze), or only --theme, with \
-            MusicSynth.render and writes it to <out>/<id>.caf (MusicFile: the bytes the app's cache holds), replacing \
-            what is there. Prints a line per theme: the seconds it took and how many times faster than real time, its \
+            MusicSynth.render and writes it to <out>/<id>.caf (MusicFile: the bytes the app's cache holds as \
+            <id>-<fingerprint>.caf), replacing what is there. Prints a line per theme: its fingerprint, the seconds it took and how many times faster than real time, its \
             integrated loudness (LUFS), its peak (dBFS), its quietest 50 ms (dBFS), the correlation of its sides, its \
             energy under 30 Hz and over 16 kHz (dB of the total), and its seam (the step from its last frame to its \
             first next to the largest step inside it, and the level of its first 50 ms over its last 50 ms). A theme \
@@ -50,6 +51,7 @@ struct MusicRender: AsyncParsableCommand {
             func decibels(_ x: Float) -> String { String(format: "%.2f", 20 * log10(Double(max(x, 1e-12)))) }
             let fields = [
                 id + (score.isPlaceholder ? " (placeholder)" : ""),
+                score.fingerprint,
                 String(format: "%.2f s", seconds),
                 String(format: "%.1f× real time", duration / max(seconds, 1e-9)),
                 MusicMetrics.loudness(samples).map { String(format: "%.2f LUFS", $0) } ?? "silent",
