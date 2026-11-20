@@ -3276,6 +3276,17 @@
         }
       }
     },
+    "Duration…" : {
+      "comment" : "The menu of a frozen frame or a title card of the Video track: asks for its length",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duración…"
+          }
+        }
+      }
+    },
     "Dusk" : {
       "localizations" : {
         "es" : {
@@ -3883,6 +3894,17 @@
         }
       }
     },
+    "From 0.1 to 60 s." : {
+      "comment" : "Duration… of a frozen frame or a title card: the lengths it takes",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De 0,1 a 60 s."
+          }
+        }
+      }
+    },
     "From 0.25× to 16×." : {
       "comment" : "The sheet that asks for a clip's speed",
       "localizations" : {
@@ -3900,6 +3922,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "De otros escritorios"
+          }
+        }
+      }
+    },
+    "Frozen Frame, %@" : {
+      "comment" : "VoiceOver: a frozen frame of the Video track and what it lasts (\"2 s\")",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuadro congelado, %@"
           }
         }
       }
@@ -4257,6 +4290,17 @@
         }
       }
     },
+    "Imported Clip, %@" : {
+      "comment" : "VoiceOver: an imported video in the sequence on the Video track and what it lasts (\"4,5 s\")",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clip importado, %@"
+          }
+        }
+      }
+    },
     "Imported Clips" : {
       "comment" : "The header of the timeline's row of the sound of the imported clips",
       "localizations" : {
@@ -4264,6 +4308,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Clips importados"
+          }
+        }
+      }
+    },
+    "Importing “%@”…" : {
+      "comment" : "Over the timeline, while a clip dropped on the Video track is copied into the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importando «%@»…"
           }
         }
       }
@@ -7417,6 +7472,17 @@
         }
       }
     },
+    "Seconds" : {
+      "comment" : "The field of Duration…: a length in seconds",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Segundos"
+          }
+        }
+      }
+    },
     "See Findings (%lld)" : {
       "comment" : "The Privacy tab: opens the sheet of what the sensitive data search found, and how many",
       "localizations" : {
@@ -9792,6 +9858,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Título"
+          }
+        }
+      }
+    },
+    "Title Card" : {
+      "comment" : "A clip of the sequence that shows a title over the whole frame",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Placa"
+          }
+        }
+      }
+    },
+    "Title Card “%@”, %@" : {
+      "comment" : "VoiceOver: a title card of the Video track, its title and what it lasts (\"3 s\")",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Placa «%@», %@"
+          }
+        }
+      }
+    },
+    "Title Card, %@" : {
+      "comment" : "VoiceOver: a title card without a title on the Video track and what it lasts (\"3 s\")",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Placa, %@"
           }
         }
       }

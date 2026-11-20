@@ -1106,6 +1106,14 @@ Con macOS 26, el modelo del idioma instalado y Ajustes ▸ General ▸ «Transcr
 - Cámara ▸ Ocultar en los silencios con dos tomas transcritas: bloques Solo pantalla en las pausas de las dos, en un solo ⌘Z. Sin transcripción (o con una toma sin transcribir), los silencios salen del micrófono de cada toma, y una pausa que cruza el corte entre tomas es un solo bloque.
 - Edición ▸ Acelerar el tipeo… con tipeo en las dos tomas: la cuenta de tramos suma los de las dos, y Acelerar los acelera en las dos en un solo ⌘Z; con una toma, lo mismo que en la fase 2.
 
+**Congelados, placas y clips en la pista Video** (A15)
+
+- Pista Video: estirar un congelado y una placa, recortar un clip importado, soltar un `.mov` entre dos clips; deshacer cada uno.
+- En detalle: el menú de un tramo (clic derecho) tiene Congelar cuadro y Agregar placa, en el punto del clic; el congelado repite su cuadro a lo largo con un copo de nieve, la placa es índigo con su título («Título») y un ícono de texto. Su borde derecho cambia el largo (0,1 a 60 s, con la etiqueta «+0,70 s · 0:12,70»); el izquierdo no (el cursor no cambia); Duración… pide los segundos («2,5»). Un clip importado muestra los cuadros de su archivo con una tira de película; sus dos bordes recortan el archivo y nunca pasan de su principio ni de su final.
+- Arrastrar un `.mov` (o `.mp4`, `.m4v`) desde Finder sobre la fila Video: una línea violeta marca el borde del clip más cercano; al soltar dice «Importando «nombre»…» abajo a la izquierda mientras lo copia (con un archivo de varios GB la línea de tiempo y la vista previa siguen respondiendo) y entra ahí, elegido, sin partir nada. Un `.png` o dos archivos a la vez no se aceptan; un `.mov` que no se reproduce dice «No se pudo abrir el archivo.».
+- VoiceOver lee «Placa «Intro», 3 s», «Cuadro congelado, 2 s» y «Clip importado, 4,5 s», con la acción Borrar.
+- Con el proyecto de la vitrina (`TOMA_SHOWCASE_P3_ANNOTATIONS=content scripts/ui-shots.sh build/shots/a15 editor <proyecto>`, en oscuro y en claro): «Intro» al principio, el congelado elegido a los 6 s y la toma importada como clip al final, los tres distintos de un tramo de la toma; ningún texto cortado en español. El agente no pudo capturar la pantalla (estaba bloqueada): vio la fila dibujada desde sus capas (`TOMA_SHOWCASE_P3_TIMELINE_PNG`).
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

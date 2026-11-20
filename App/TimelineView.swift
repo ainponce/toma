@@ -281,6 +281,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private(set) lazy var interaction = TimelineInteraction(view: self)
     /// What VoiceOver reads of it.
     private lazy var accessibility = TimelineAccessibility(view: self)
+    /// A video file dropped on the Video track (phase 3 design §5.4).
+    private lazy var mediaDrop = TimelineMediaDrop(view: self)
 
     let tracks = TimelineTracks()
     private(set) var content: TimelineContent?
@@ -367,6 +369,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         area.addSublayer(overlay)
         area.addSublayer(playheadLayer)
         tracks.thumbnailArrived = { [weak self] in self?.needsLayout = true }
+        registerForDraggedTypes([.fileURL])
         displayObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -387,6 +390,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         if let displayObserver { NSWorkspace.shared.notificationCenter.removeObserver(displayObserver) }
         displayObserver = nil
         tracks.clear()
+        mediaDrop.stop()
     }
 
     override var isFlipped: Bool { true }
@@ -849,6 +853,28 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         interaction.menu(for: event)
+    }
+
+    // A video file dragged from Finder onto the Video track goes into the sequence (phase 3, `TimelineMediaDrop`).
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        mediaDrop.update(sender)
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        mediaDrop.update(sender)
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        mediaDrop.hide()
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        mediaDrop.perform(sender)
+    }
+
+    override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) {
+        mediaDrop.hide()
     }
 
     override func updateTrackingAreas() {

@@ -12,11 +12,14 @@ extension EditorModel {
     /// - `TOMA_SHOWCASE_P3_ANNOTATIONS=track`: five annotations on the Annotations track (Task A12), a text and an arrow
     ///   that overlap, a step, a shape of the output and a speech bubble of the whole video; the arrow selected, with the
     ///   playhead on it.
+    /// - `TOMA_SHOWCASE_P3_ANNOTATIONS=content`: a title card, a frozen frame and an imported clip in the sequence (Task
+    ///   A15, `showcaseContentClips`).
     /// - `TOMA_SHOWCASE_P3_TIMELINE_PNG=<path>`: once that is drawn, a PNG of the editor's timeline at 2×, made from its
     ///   layers in the app (`CALayer.render(in:)`), for when the screen cannot be captured (it is locked).
     func showcaseAnnotations(_ environment: [String: String]) async {
         switch environment["TOMA_SHOWCASE_P3_ANNOTATIONS"] {
         case "track"?: showcaseAnnotationTrack()
+        case "content"?: await showcaseContentClips()
         default: break
         }
         if let path = environment["TOMA_SHOWCASE_P3_TIMELINE_PNG"] {

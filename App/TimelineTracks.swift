@@ -114,6 +114,8 @@ struct TimelineContent {
     let privacy: TimelinePrivacyItems
     /// The annotations, in their lanes (phase 3 design §5.6).
     let annotations: TimelineAnnotationItems
+    /// The clips with content of the Video track (phase 3 design §5.2–§5.4).
+    let contentClips: TimelineContentClipItems
     /// The captions (phase 2 design §5.2); none without a transcript.
     let captions: TrackItems<CaptionInfo>
     /// The layout blocks, where the preview shows them.
@@ -199,6 +201,7 @@ struct TimelineContent {
         })
         privacy = TimelinePrivacyItems(document: document)
         annotations = TimelineAnnotationItems(document: document, map: map)
+        contentClips = TimelineContentClipItems(document: document, map: map, take: take.id)
         let output = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080, contentRatio: contentRatio)
         captions = TimelineCaptionItems.items(document: document, map: map, outputSize: output)
         let orientation = CameraLayoutGeometry.orientation(output: SIMD2(Double(output.x), Double(output.y)))
@@ -467,6 +470,8 @@ final class TimelineTracks {
     private let privacyRow = TimelinePrivacyRow()
     /// The Annotations row's blocks (phase 3).
     private let annotationsRow = TimelineAnnotationsRow()
+    /// The clips with content of the Video row (phase 3), and the lengths and frames of the imported clips' files.
+    let contentClips = TimelineContentClipsRow()
     /// The Captions row's blocks (phase 2).
     private let captionsRow = CaptionTrackLayers()
     /// The output time under the playhead, for the caption it highlights (`moved(playhead:)` when it moves).
@@ -504,6 +509,7 @@ final class TimelineTracks {
         layer.addSublayer(rows)
         thumbnailStrip.mask = clipMask
         rows.addSublayer(thumbnailStrip)
+        thumbnailStrip.addSublayer(contentClips.layer)
         clipLayers = LayerPool(parent: rows) { ClipLayer() }
         hatches = LayerPool(parent: rows) {
             let hatch = CAShapeLayer()
@@ -539,6 +545,7 @@ final class TimelineTracks {
         rows.addSublayer(privacyRow.layer)
         rows.addSublayer(annotationsRow.layer)
         rows.addSublayer(captionsRow.layer)
+        contentClips.arrived = { [weak self] in self?.thumbnailArrived() }
         layer.addSublayer(separators)
         separators.lineWidth = 1
         separators.fillColor = nil
@@ -563,6 +570,7 @@ final class TimelineTracks {
         }
         privacyRow.begin()
         annotationsRow.begin()
+        contentClips.begin()
         captionsRow.begin()
         audioRows.begin()
         var wanted: Set<ThumbnailKey> = []
@@ -585,6 +593,7 @@ final class TimelineTracks {
         for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end] { pool() }
         privacyRow.end()
         annotationsRow.end()
+        contentClips.end()
         captionsRow.end()
         audioRows.end()
         // What is no longer in sight is not made.
@@ -605,6 +614,7 @@ final class TimelineTracks {
         layer.isHidden = true
         for task in loading.values { task.cancel() }
         loading = [:]
+        contentClips.stop()
     }
 
     /// Forgets the layers, so the next update makes them again with new colors.
@@ -617,6 +627,7 @@ final class TimelineTracks {
         }
         privacyRow.reset()
         annotationsRow.reset()
+        contentClips.reset()
         captionsRow.reset()
         audioRows.reset()
         tileKeys = [:]
@@ -630,12 +641,14 @@ final class TimelineTracks {
         thumbnailOrder = []
         tileKeys = [:]
         tiles.removeAll()
+        contentClips.forgetFrames()
     }
 
     /// How many layers the rows have in sight now, for the benchmark.
     var layerCount: Int {
         clipLayers.shownCount + tiles.shownCount + hatches.shownCount + blocks.shownCount + spans.shownCount
             + layouts.shownCount + diamonds.shownCount + audioRows.layerCount + captionsRow.layerCount
+            + contentClips.layerCount
     }
 
     // MARK: - Video
@@ -684,6 +697,9 @@ final class TimelineTracks {
         }
 
         layOutThumbnails(content, geometry, height: height, &wanted)
+        // A frozen frame, a title card and an imported clip (phase 3), over the strip.
+        contentClips.layOut(
+            content, geometry, palette, height: height, selected: selected, settling: settling, thumbnails: thumbnailCache)
 
         for (i, span) in content.missing.enumerated() where span.upperBound >= lower && span.lowerBound <= upper {
             guard let rect = geometry.itemRect(span, top: top, height: height, gap: 0) else { continue }
