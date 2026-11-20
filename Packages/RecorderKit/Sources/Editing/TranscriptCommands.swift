@@ -139,17 +139,19 @@ public enum TranscriptCommands {
         return cutRange(entry, words: words, clips: takeClips(entry.take, in: doc))
     }
 
-    /// Cuts the words `words` of take `take` (`transcript.cut`): `cutRange` out of the clips (`deleteSource`). `nil` if
-    /// every one of them is cut already.
+    /// Cuts the words `words` of take `take` (`transcript.cut`): `cutRange` out of the clips (`deleteSource`, the cuts of
+    /// the sound held to `takeBounds`, what each take has). `nil` if every one of them is cut already.
     public static func cut(
-        _ doc: EditDocument, take: Int, words: ClosedRange<Int>, makeID: (String) -> String
+        _ doc: EditDocument, take: Int, words: ClosedRange<Int>, takeBounds: [String: ClosedRange<HostTime>],
+        makeID: (String) -> String
     ) -> Result<EditStep, SequenceError>? {
         guard let entry = transcriptTake(doc, take, words) else { return nil }
         let clips = takeClips(entry.take, in: doc)
         guard entry.words[words].contains(where: { !TranscriptTiming.isCut($0, take: entry.take, in: clips) }),
             let range = cutRange(entry, words: words, clips: clips)
         else { return nil }
-        return SequenceCommands.deleteSource(doc, take: entry.take, ranges: [range], label: .transcriptCut, makeID: makeID)
+        return SequenceCommands.deleteSource(
+            doc, take: entry.take, ranges: [range], label: .transcriptCut, takeBounds: takeBounds, makeID: makeID)
     }
 
     /// Gives back the cut words among `words` of take `take`, in one step (`transcript.restore`, plan decision 6): for
@@ -235,8 +237,10 @@ public enum TranscriptCommands {
     }
 
     /// "Remove Filler Words" (`transcript.fillers`): the `cutRange` of each of `fillers(in:)`, worked out on the document
-    /// as it is, all in one step. `nil` without any.
-    public static func removeFillers(_ doc: EditDocument, makeID: (String) -> String) -> Result<EditStep, SequenceError>? {
+    /// as it is, all in one step, the cuts of the sound held to `takeBounds`. `nil` without any.
+    public static func removeFillers(
+        _ doc: EditDocument, takeBounds: [String: ClosedRange<HostTime>], makeID: (String) -> String
+    ) -> Result<EditStep, SequenceError>? {
         guard let transcript = doc.transcript else { return nil }
         var ranges: [String: [Range<HostTime>]] = [:]
         var clipsByTake: [String: [Clip]] = [:]
@@ -249,7 +253,7 @@ public enum TranscriptCommands {
             }
         }
         guard !ranges.isEmpty else { return nil }
-        return SequenceCommands.deleteSource(doc, ranges: ranges, label: .transcriptFillers, makeID: makeID)
+        return SequenceCommands.deleteSource(doc, ranges: ranges, label: .transcriptFillers, takeBounds: takeBounds, makeID: makeID)
     }
 
     // MARK: - Pauses
@@ -279,16 +283,17 @@ public enum TranscriptCommands {
         return pauses
     }
 
-    /// "Shorten Pauses" (`transcript.pauses`): every one of `pauses(in:threshold:)` cut, in one step. `nil` without any.
+    /// "Shorten Pauses" (`transcript.pauses`): every one of `pauses(in:threshold:)` cut, in one step, the cuts of the sound
+    /// held to `takeBounds`. `nil` without any.
     public static func shortenPauses(
-        _ doc: EditDocument, threshold: Int64, makeID: (String) -> String
+        _ doc: EditDocument, threshold: Int64, takeBounds: [String: ClosedRange<HostTime>], makeID: (String) -> String
     ) -> Result<EditStep, SequenceError>? {
         var ranges: [String: [Range<HostTime>]] = [:]
         for pause in pauses(in: doc, threshold: threshold) {
             ranges[pause.take, default: []].append(pause.start..<pause.end)
         }
         guard !ranges.isEmpty else { return nil }
-        return SequenceCommands.deleteSource(doc, ranges: ranges, label: .transcriptPauses, makeID: makeID)
+        return SequenceCommands.deleteSource(doc, ranges: ranges, label: .transcriptPauses, takeBounds: takeBounds, makeID: makeID)
     }
 
     // MARK: - Private

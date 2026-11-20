@@ -167,7 +167,7 @@ private typealias F = TwoTakes
     /// sequence there was, and the first take's words never touched.
     @Test func cutAndRestoreInTheSecondTake() throws {
         let document = F.document()
-        let cut = try #require(TranscriptCommands.cut(document, take: 1, words: 3...4, makeID: BySource.newIDs)).get()
+        let cut = try #require(TranscriptCommands.cut(document, take: 1, words: 3...4, takeBounds: [:], makeID: BySource.newIDs)).get()
         let edited = try F.applying(cut, to: document)
         #expect(F.cutWords(edited, take: 1) == [3, 4])
         #expect(F.cutWords(edited, take: 0) == [])

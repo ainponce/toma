@@ -129,7 +129,7 @@ enum BySource {
     // Two ranges given out of order and overlapping are their union, [9 s, 11 s).
     let ranges = [BySource.at(9.5)..<BySource.at(11), BySource.at(9)..<BySource.at(10)]
     let step = try SequenceCommands.deleteSource(
-        document, take: BySource.takeID, ranges: ranges, label: .transcriptCut, makeID: BySource.newIDs
+        document, take: BySource.takeID, ranges: ranges, label: .transcriptCut, takeBounds: [:], makeID: BySource.newIDs
     ).get()
     #expect(step.label == .transcriptCut)
     #expect(step.target == "c-00000001,c-00000002")
@@ -139,7 +139,7 @@ enum BySource {
     // Inside a clip, it is cut in two: the second piece is a new clip at the same speed.
     let ids = BySource.CountingIDs()
     let inside = try SequenceCommands.deleteSource(
-        document, take: BySource.takeID, ranges: [BySource.at(15)..<BySource.at(16)], label: .transcriptCut, makeID: ids.make
+        document, take: BySource.takeID, ranges: [BySource.at(15)..<BySource.at(16)], label: .transcriptCut, takeBounds: [:], makeID: ids.make
     ).get()
     #expect(inside.target == "c-00000002")
     #expect(
@@ -154,7 +154,7 @@ enum BySource {
     let document = BySource.document(frameRate: 30)
     func cut(_ ranges: [Range<HostTime>]) throws -> [Clip] {
         let step = try SequenceCommands.deleteSource(
-            document, take: BySource.takeID, ranges: ranges, label: .transcriptCut, makeID: BySource.newIDs
+            document, take: BySource.takeID, ranges: ranges, label: .transcriptCut, takeBounds: [:], makeID: BySource.newIDs
         ).get()
         return try BySource.applying(step, to: document).sequence
     }
@@ -167,7 +167,7 @@ enum BySource {
     let ids = BySource.CountingIDs()
     let between = try SequenceCommands.deleteSource(
         document, take: BySource.takeID, ranges: [BySource.at(2)..<BySource.at(3), BySource.at(3.02)..<BySource.at(4)],
-        label: .transcriptCut, makeID: ids.make
+        label: .transcriptCut, takeBounds: [:], makeID: ids.make
     ).get()
     #expect(
         try BySource.applying(between, to: document).sequence == [
@@ -181,7 +181,7 @@ enum BySource {
     let document = BySource.document([BySource.clip(1, 0, 10), other, BySource.clip(2, 10, 30, speed: 2)])
     let step = try SequenceCommands.deleteSource(
         document, take: BySource.takeID, ranges: [BySource.at(5)..<BySource.at(15)], label: .transcriptCut,
-        makeID: BySource.newIDs
+        takeBounds: [:], makeID: BySource.newIDs
     ).get()
     #expect(step.target == "c-00000001,c-00000002")
     #expect(
@@ -191,13 +191,37 @@ enum BySource {
     // A range of the other take over source it does not show: a step without changes.
     let nothing = try SequenceCommands.deleteSource(
         document, take: BySource.otherTakeID, ranges: [BySource.at(20)..<BySource.at(25)], label: .transcriptCut,
-        makeID: BySource.newIDs
+        takeBounds: [:], makeID: BySource.newIDs
     ).get()
     #expect(nothing == EditStep(label: .transcriptCut, target: "", changes: []))
     let empty = try SequenceCommands.deleteSource(
-        document, take: BySource.takeID, ranges: [], label: .transcriptPauses, makeID: BySource.newIDs
+        document, take: BySource.takeID, ranges: [], label: .transcriptPauses, takeBounds: [:], makeID: BySource.newIDs
     ).get()
     #expect(empty.changes.isEmpty)
+}
+
+/// A clip taken out can leave one of another take before a cut of the sound: the L cut that heard `c-00000001` 1 s past
+/// its end now hears `take-002`, which ends where its clip does, so it is held to 0, as the mix holds it; held to the
+/// clips alone (no bounds of the takes) it stays.
+@Test func deleteSourceHoldsTheCutsOfTheSoundToWhatTheTakesHave() throws {
+    let other = BySource.clip(3, 0, 5, take: BySource.otherTakeID)
+    var late = BySource.clip(2, 10, 30, speed: 2)
+    late.audioShift = 1_000_000_000
+    let document = BySource.document([other, BySource.clip(1, 0, 10), late])
+    let bounds = [BySource.takeID: BySource.bounds, BySource.otherTakeID: BySource.at(0)...BySource.at(5)]
+    #expect(SequenceRules.audioShift(of: document.sequence, at: 2, takeBounds: bounds) == 1_000_000_000)
+    func cut(_ takeBounds: [String: ClosedRange<HostTime>]) throws -> EditDocument {
+        let step = try SequenceCommands.deleteSource(
+            document, take: BySource.takeID, ranges: [BySource.at(0)..<BySource.at(10)], label: .transcriptCut,
+            takeBounds: takeBounds, makeID: BySource.newIDs
+        ).get()
+        return try BySource.applying(step, to: document)
+    }
+    let held = try cut(bounds)
+    #expect(held.sequence.map(\.id) == ["c-00000003", "c-00000002"])
+    #expect(held.sequence.map(\.audioShift) == [0, 0])
+    #expect(held.sequence[1].audioShift == SequenceRules.audioShift(of: held.sequence, at: 1, takeBounds: bounds))
+    #expect(try cut([:]).sequence.map(\.audioShift) == [0, 1_000_000_000])
 }
 
 @Test func deleteEverythingIsLastClip() {
@@ -205,14 +229,14 @@ enum BySource {
     for range in [BySource.at(0)..<BySource.at(30), HostTime(nanoseconds: 0)..<HostTime(nanoseconds: .max)] {
         #expect(
             SequenceCommands.deleteSource(
-                document, take: BySource.takeID, ranges: [range], label: .transcriptCut, makeID: BySource.newIDs)
+                document, take: BySource.takeID, ranges: [range], label: .transcriptCut, takeBounds: [:], makeID: BySource.newIDs)
                 == .failure(.lastClip))
     }
     // Less than a frame left is nothing left either.
     #expect(
         SequenceCommands.deleteSource(
             document, take: BySource.takeID, ranges: [BySource.at(0.01)..<BySource.at(30)], label: .transcriptCut,
-            makeID: BySource.newIDs) == .failure(.lastClip))
+            takeBounds: [:], makeID: BySource.newIDs) == .failure(.lastClip))
 }
 
 // MARK: - Restoring by source
@@ -221,7 +245,7 @@ enum BySource {
     let document = BySource.document()
     let range = BySource.at(12)..<BySource.at(14)
     let cut = try SequenceCommands.deleteSource(
-        document, take: BySource.takeID, ranges: [range], label: .transcriptCut, makeID: BySource.newIDs
+        document, take: BySource.takeID, ranges: [range], label: .transcriptCut, takeBounds: [:], makeID: BySource.newIDs
     ).get()
     let edited = try BySource.applying(cut, to: document)
     let step = try #require(

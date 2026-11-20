@@ -11,12 +11,14 @@ extension SequenceCommands {
     /// Takes out of the clips of `take` the source that falls in the union of `ranges`, in one step labelled `label`: a
     /// clip inside it is removed, one across an edge trimmed to it, and one with a range inside it cut in two, its second
     /// piece a new clip with the id `makeID("c-")`. A piece shorter than a frame goes with the cut, as with `deleteRange`.
-    /// `.failure(.lastClip)` if no clip of at least a frame would be left; nothing in the ranges gives a step without
-    /// changes.
+    /// The cuts of the sound are held to `takeBounds` too, what each take has (`EditedMix.takeBounds`): a clip taken out
+    /// can leave one of another take before a cut. `.failure(.lastClip)` if no clip of at least a frame would be left;
+    /// nothing in the ranges gives a step without changes.
     public static func deleteSource(
-        _ doc: EditDocument, take: String, ranges: [Range<HostTime>], label: EditLabel, makeID: (String) -> String
+        _ doc: EditDocument, take: String, ranges: [Range<HostTime>], label: EditLabel,
+        takeBounds: [String: ClosedRange<HostTime>], makeID: (String) -> String
     ) -> Result<EditStep, SequenceError> {
-        deleteSource(doc, ranges: [take: ranges], label: label, makeID: makeID)
+        deleteSource(doc, ranges: [take: ranges], label: label, takeBounds: takeBounds, makeID: makeID)
     }
 
     /// Gives back to the sequence the source of `take` in `range`, clamped to `bounds` (the take's
@@ -40,15 +42,16 @@ extension SequenceCommands {
     /// `deleteSource` over the ranges of several takes at once, by take: one pass over the sequence, so the step of
     /// several takes is one step.
     static func deleteSource(
-        _ doc: EditDocument, ranges: [String: [Range<HostTime>]], label: EditLabel, makeID: (String) -> String
+        _ doc: EditDocument, ranges: [String: [Range<HostTime>]], label: EditLabel,
+        takeBounds: [String: ClosedRange<HostTime>], makeID: (String) -> String
     ) -> Result<EditStep, SequenceError> {
         let cuts = ranges.mapValues(union)
         let frame = oneFrame(of: doc)
         var ids = Set(doc.sequence.map(\.id))
         // What is taken out only shortens the clips it touches or takes them out: in a sequence of one take, no cut gets
-        // a clip before it that ends later nor starts sooner itself, so the take holds none tighter. (Across takes, a
-        // clip of another take can come to be before a cut; the transcript's commands have no bounds of the takes.)
-        var changes = SequenceChanges(doc.sequence, takeBounds: nil)
+        // a clip before it that ends later nor starts sooner itself, so the take holds none tighter. Across takes, a clip
+        // of another take can come to be before a cut, and that take can end sooner: held to what each take has.
+        var changes = SequenceChanges(doc.sequence, takeBounds: takeBounds)
         var touched: [String] = []
         // Removed and inserted so far, for the index of the next change.
         var (removed, inserted) = (0, 0)

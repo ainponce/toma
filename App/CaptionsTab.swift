@@ -641,7 +641,9 @@ extension EditorModel {
         guard canEdit, !isGesturing else { return .nothing }
         var outcome = TextEdit.nothing
         for run in text.takeRuns(words) {
-            guard let document, let result = TranscriptCommands.cut(document, take: run.take, words: run.words, makeID: Self.newID)
+            guard let document,
+                let result = TranscriptCommands.cut(
+                    document, take: run.take, words: run.words, takeBounds: takeBounds, makeID: Self.newID)
             else { continue }
             switch result {
             case .success(let step):
@@ -722,7 +724,8 @@ extension EditorModel {
 
     /// Remove Filler Words (`transcript.fillers`), in one step.
     func removeFillerWords() -> TextEdit {
-        guard canEdit, !isGesturing, let document, let result = TranscriptCommands.removeFillers(document, makeID: Self.newID)
+        guard canEdit, !isGesturing, let document,
+            let result = TranscriptCommands.removeFillers(document, takeBounds: takeBounds, makeID: Self.newID)
         else { return .nothing }
         return outcome(of: result)
     }
@@ -730,7 +733,7 @@ extension EditorModel {
     /// Shorten Pauses longer than `threshold` (`transcript.pauses`), in one step.
     func shortenPauses(threshold: Int64) -> TextEdit {
         guard canEdit, !isGesturing, let document,
-            let result = TranscriptCommands.shortenPauses(document, threshold: threshold, makeID: Self.newID)
+            let result = TranscriptCommands.shortenPauses(document, threshold: threshold, takeBounds: takeBounds, makeID: Self.newID)
         else { return .nothing }
         return outcome(of: result)
     }

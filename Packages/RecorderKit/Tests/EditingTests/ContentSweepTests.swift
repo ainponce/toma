@@ -110,7 +110,7 @@ import ProjectFormat
         let doc = F.document([F.clip(1, from: 1, to: 5), freeze, F.clip(2, from: 5, to: 9)])
         let ids = IDs()
         let cut = try F.applying(
-            try SequenceCommands.deleteSource(doc, take: F.takeID, ranges: [F.at(4)..<F.at(6)], label: .transcriptCut, makeID: ids.make)
+            try SequenceCommands.deleteSource(doc, take: F.takeID, ranges: [F.at(4)..<F.at(6)], label: .transcriptCut, takeBounds: [:], makeID: ids.make)
                 .get(), to: doc)
         #expect(cut.sequence.map(\.start) == [F.at(1), F.at(5), F.at(6)])
         #expect(cut.sequence.map(\.end) == [F.at(4), F.at(5), F.at(6 + 3)])
