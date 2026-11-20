@@ -281,6 +281,47 @@ extension ZoomFixtures {
             }
         }
 
+        @Test func aCalmBlockSoonAfterAnotherDoesNotJumpWhereItIsSeen() throws {
+            let screen = Rect(x: 0, y: 0, width: stageSize.x, height: 1)
+            func target(_ x: Double, _ y: Double) -> SIMD2<Double> {
+                StageCrop.clamp(center: SIMD2(x, y) * stageSize, depth: 2, stage: stageSize, screen: screen)
+            }
+            let a = target(0.25, 0.3), b = target(0.75, 0.7)
+            // Far apart: a jump from one to the other would be seen.
+            #expect(distance(a, b) > 0.5)
+            func regions(gap: Double) -> [ZoomRegion] {
+                [
+                    calmBlock(1, .highlight, from: 1, to: 3, focus: .fixed(x: 0.25, y: 0.3)),
+                    calmBlock(2, .loupe, from: 3 + gap, to: 5 + gap, focus: .fixed(x: 0.75, y: 0.7)),
+                ]
+            }
+            // 0.1 s apart: the first is still seen as the second starts, so its focus goes there with the spring.
+            let soon = try #require(Self.calmPaths(zoomDocument(regions: regions(gap: 0.1))).calmZoom)
+            let entry = step(3.1)
+            #expect(soon.amount(atStep: entry - 1) > 0.5)
+            #expect(soon.camera.blocks.map(\.focusJumpsIn) == [true, false])
+            var previous = try #require(soon.state(atOutput: StepGrid.outputTime(ofStep: step(1))))
+            #expect(previous.center == a)
+            var largest = 0.0
+            for s in (step(1) + 1)..<step(6) {
+                let state = try #require(soon.state(atOutput: StepGrid.outputTime(ofStep: s)), "step \(s)")
+                largest = max(largest, distance(state.center, previous.center))
+                previous = state
+            }
+            #expect(largest <= 0.01, "\(largest)")
+            #expect(distance(try #require(soon.state(atOutput: output(5))).center, b) < 1e-3)
+            // 1 s or more apart, nothing of the first is seen any more: the second's focus appears where it looks, as
+            // the first one's does.
+            for gap in [1.0, 1.5, 3.0] {
+                let later = try #require(Self.calmPaths(zoomDocument(regions: regions(gap: gap))).calmZoom)
+                let entry = step(3 + gap)
+                #expect(later.amount(atStep: entry - 1) < CalmAmount.unseen, "\(gap)")
+                #expect(later.camera.blocks.map(\.focusJumpsIn) == [true, true], "\(gap)")
+                let entered = try #require(later.state(atOutput: StepGrid.outputTime(ofStep: entry)))
+                #expect(entered.center == b && entered.center == later.camera.camera(atStep: entry).target, "\(gap)")
+            }
+        }
+
         @Test func classicToCalmHandsOver() throws {
             let events = Self.roaming
             let regions = [calmBlock(1, nil, from: 1, to: 3), calmBlock(2, .dim, from: 3, to: 5, focus: .fixed(x: 0.7, y: 0.3))]
@@ -481,6 +522,16 @@ extension ZoomFixtures {
             #expect(paths.calmZoom?.state(atOutput: output(12))?.loupe.radius == 0.3)
             edit("a calm block to classic") { $0.zoom.regions[1].mode = .classic }
             edit("trim one") { $0.zoom.regions[0].end = source(2.4) }
+            // A block 0.2 s after another: its focus goes there with the spring; the gap made long, it jumps in.
+            edit("a block soon after another") {
+                $0.zoom.regions.append(calmBlock(7, .dim, from: 2.6, to: 3.4, focus: .fixed(x: 0.2, y: 0.8)))
+            }
+            func jumpsIn(at seconds: Double) -> Bool? {
+                paths.calmZoom?.camera.blocks.first { $0.steps.lowerBound == step(seconds) }?.focusJumpsIn
+            }
+            #expect(jumpsIn(at: 2.6) == false)
+            edit("the gap made long") { $0.zoom.regions[0].end = source(1.5) }
+            #expect(jumpsIn(at: 2.6) == true)
             edit("add one") { $0.zoom.regions.append(calmBlock(6, .highlight, from: 15, to: 17, focus: .fixed(x: 0.2, y: 0.2))) }
             edit("the spring") { $0.zoom.spring = SpringSpec(damping: 0.8, response: 0.5) }
             edit("every calm block classic", everyFrame: false) { document in

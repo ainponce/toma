@@ -48,8 +48,10 @@ public struct CalmZoomState: Equatable, Sendable {
 ///   spring, dead zone, cursor, bubble, window of the reframe and instant jumps) simulated over the calm blocks alone
 ///   (`ZoomSelection.calm`), so it is what the classic zoom would show with that depth and focus, and changing between
 ///   calm modes does not move it. Two rules of its own keep the focus from appearing at the stage's centre and
-///   travelling: outside every block the centre stays where it is, and on entering a block from outside every one it
-///   jumps to its target (the depth goes on with the spring, but into an instant block). Its centre is placed with
+///   travelling, and from jumping where it is seen: outside every block the centre stays where it is, and on entering a
+///   block from outside every one it jumps to its target only when nothing of the blocks before is seen any more
+///   (`amount` on the step before below `CalmAmount.unseen`, 1/255), and otherwise goes there with the spring from where
+///   it stayed (the depth goes on with the spring, but into an instant block, where both jump). Its centre is placed with
 ///   `StageCrop` at the depth of the block (that of the last one left while it fades); its size is the stage over the
 ///   depth of the instant, so Highlight and Dim close on the focus from the whole stage and the loupe magnifies from 1×
 ///   to the block's depth, without moving.
@@ -71,19 +73,8 @@ public struct CalmZoomPath: Sendable {
     let camera: ZoomCameraPath
     /// The calm blocks, in output order: `camera`'s.
     private let blocks: [ZoomBlock]
-    /// The edges of the runs of calm blocks that touch, in output order (strictly: runs that do not touch have a step
-    /// between them).
-    private let edges: [Edge]
-    /// `stepResponse(of: zoom.spring)`.
-    private let response: [Double]
-
-    /// An edge of a run of calm blocks that touch: the first step of its first block, or the step after its last block.
-    private struct Edge: Sendable {
-        var step: Int
-        var entering: Bool
-        /// The block on its inner side is instant: the amount is set at once.
-        var instant: Bool
-    }
+    /// How much is seen on each step.
+    private let seen: CalmAmount
 
     /// `nil` without a calm block of the take or with `zoom.show` off. `cameraReadable` and `reframe`: as for
     /// `ZoomCameraPath`, the same camera.
@@ -110,8 +101,7 @@ public struct CalmZoomPath: Sendable {
             document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: old?.camera,
             changedFrom: changed, layouts: layouts, reframe: reframe, selecting: .calm)
         blocks = camera.blocks
-        edges = Self.edges(of: blocks)
-        response = Self.stepResponse(of: document.zoom.spring)
+        seen = CalmAmount(blocks: blocks, spring: document.zoom.spring)
     }
 
     /// Whether the take has a calm block on the grid, its overlaps settled, with `zoom.show` on.
@@ -146,7 +136,67 @@ public struct CalmZoomPath: Sendable {
     // MARK: - Internal
 
     /// How many steps the step response is read for before it is 1: 10 s.
+    static var responseSteps: Int { CalmAmount.responseSteps }
+
+    /// The response of `spring` to a step from 0 to 1 on the grid (`CalmAmount.stepResponse(of:)`).
+    static func stepResponse(of spring: SpringSpec) -> [Double] {
+        CalmAmount.stepResponse(of: spring)
+    }
+
+    /// How much is seen on step `s` (0 to 1), `CalmAmount.amount(atStep:)`.
+    func amount(atStep s: Int) -> Double {
+        seen.amount(atStep: s)
+    }
+
+    /// The block of step `s`: the one it is in, or the last one before it; `nil` before the first.
+    private func block(atStep s: Int) -> ZoomBlock? {
+        var low = 0, high = blocks.count
+        while low < high {
+            let mid = (low + high) / 2
+            if blocks[mid].steps.lowerBound <= s { low = mid + 1 } else { high = mid }
+        }
+        return low > 0 ? blocks[low - 1] : nil
+    }
+}
+
+/// How much of the calm zoom is seen on each step (plan 3b decision 5), from the calm blocks on the grid and
+/// `zoom.spring`: the step response of the spring (`stepResponse(of:)`) summed over the edges of each run of calm blocks
+/// that touch (+1 on entering, −1 on leaving), from the last edge settled (instant, which sets its value at once, or
+/// `responseSteps` or more before), held from 0 to 1. What `CalmZoomPath` draws, and what its simulation reads to tell
+/// whether the focus can jump into a block (`marked(_:spring:)`).
+struct CalmAmount: Sendable {
+    /// How many steps the step response is read for before it is 1: 10 s.
     static let responseSteps = 10 * StepGrid.rate
+    /// Below this much, nothing of the calm zoom is seen (less than one level of 8 bits): the focus can jump into a block
+    /// there (plan 3b decision 4, as the controller ruled on Z2).
+    static let unseen = 1.0 / 255
+
+    /// The edges of the runs, in output order (strictly: runs that do not touch have a step between them).
+    private let edges: [Edge]
+    /// `stepResponse(of: spring)`.
+    private let response: [Double]
+
+    /// An edge of a run of calm blocks that touch: the first step of its first block, or the step after its last block.
+    private struct Edge: Sendable {
+        var step: Int
+        var entering: Bool
+        /// The block on its inner side is instant: the amount is set at once.
+        var instant: Bool
+    }
+
+    /// `blocks`: the calm ones, in output order, never overlapping; a block that starts on the step the one before it
+    /// ends goes on its run.
+    init(blocks: [ZoomBlock], spring: SpringSpec) {
+        var edges: [Edge] = []
+        for (k, block) in blocks.enumerated() {
+            if k > 0, blocks[k - 1].steps.upperBound == block.steps.lowerBound { continue }
+            if k > 0 { edges.append(Edge(step: blocks[k - 1].steps.upperBound, entering: false, instant: blocks[k - 1].instant)) }
+            edges.append(Edge(step: block.steps.lowerBound, entering: true, instant: block.instant))
+        }
+        if let last = blocks.last { edges.append(Edge(step: last.steps.upperBound, entering: false, instant: last.instant)) }
+        self.edges = edges
+        response = Self.stepResponse(of: spring)
+    }
 
     /// The response of `spring` (through `StepGrid.stable(_:)`) to a step from 0 to 1 on the grid: the value `k` steps
     /// after the step of the edge, the spring having moved once on it (as a camera moves on the first step of its block),
@@ -180,26 +230,16 @@ public struct CalmZoomPath: Sendable {
         return min(max(value, 0), 1)
     }
 
-    /// The block of step `s`: the one it is in, or the last one before it; `nil` before the first.
-    private func block(atStep s: Int) -> ZoomBlock? {
-        var low = 0, high = blocks.count
-        while low < high {
-            let mid = (low + high) / 2
-            if blocks[mid].steps.lowerBound <= s { low = mid + 1 } else { high = mid }
+    /// `blocks` (the calm ones, as for `init(blocks:spring:)`) with `ZoomBlock.focusJumpsIn` set: on each that starts a
+    /// run, whether what is seen on the step before it is below `unseen`, so nothing of the blocks before shows the jump;
+    /// on the others, which are entered from the block before, `false`. Read from the blocks before each one alone.
+    static func marked(_ blocks: [ZoomBlock], spring: SpringSpec) -> [ZoomBlock] {
+        let seen = CalmAmount(blocks: blocks, spring: spring)
+        return blocks.enumerated().map { k, block in
+            var block = block
+            let startsARun = k == 0 || blocks[k - 1].steps.upperBound != block.steps.lowerBound
+            block.focusJumpsIn = startsARun && seen.amount(atStep: block.steps.lowerBound - 1) < unseen
+            return block
         }
-        return low > 0 ? blocks[low - 1] : nil
-    }
-
-    /// The edges of the runs of `blocks` (in output order, never overlapping) that touch: a block that starts on the step
-    /// the one before it ends goes on its run.
-    private static func edges(of blocks: [ZoomBlock]) -> [Edge] {
-        var edges: [Edge] = []
-        for (k, block) in blocks.enumerated() {
-            if k > 0, blocks[k - 1].steps.upperBound == block.steps.lowerBound { continue }
-            if k > 0 { edges.append(Edge(step: blocks[k - 1].steps.upperBound, entering: false, instant: blocks[k - 1].instant)) }
-            edges.append(Edge(step: block.steps.lowerBound, entering: true, instant: block.instant))
-        }
-        if let last = blocks.last { edges.append(Edge(step: last.steps.upperBound, entering: false, instant: last.instant)) }
-        return edges
     }
 }

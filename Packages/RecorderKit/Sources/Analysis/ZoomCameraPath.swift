@@ -455,6 +455,10 @@ struct ZoomBlock: Equatable, Sendable {
     var mode: ZoomMode
     /// Its lens in `loupe` mode (`ZoomRegion.resolvedLoupe`).
     var loupe: LoupeStyle
+    /// Of a calm block that starts a run (`CalmAmount.marked(_:spring:)`): on entering it from outside every block, the
+    /// calm focus's centre jumps to its target, as nothing of the blocks before is seen any more. `false` for the
+    /// others, and for every classic block.
+    var focusJumpsIn = false
 
     /// Two blocks at most this far apart in output time touch.
     private static let touching: Int64 = 1
@@ -563,10 +567,12 @@ enum ZoomSelection: Sendable {
 ///   heads to, steps of `followStep` of it) and what the viewport clears (`ZoomViewport.cleared`).
 /// - The motion: `zoom.spring` (`StepGrid.spring`, through `StepGrid.stable(_:)`) for `u` and each axis of the centre;
 ///   on entering or leaving an `instant` block, a jump to the target with velocity 0.
-/// - Of the calm blocks (`ZoomSelection.calm`, plan decision 4), so the focus never appears at the centre and travels:
-///   outside every block the centre stays where it is (its target, with velocity 0) while `u` heads to 0; on entering a
-///   block from outside every one, the centre jumps to its target with velocity 0 and `u` goes on with the spring (both
-///   jump into an `instant` one, as above). From one block into the next one touching it, as the classic camera.
+/// - Of the calm blocks (`ZoomSelection.calm`, plan decision 4), so the focus never appears at the centre and travels,
+///   nor jumps where it is seen: outside every block the centre stays where it is (its target, with velocity 0) while
+///   `u` heads to 0; on entering a block from outside every one, the centre jumps to its target with velocity 0 when
+///   nothing of the blocks before is seen any more (`ZoomBlock.focusJumpsIn`), and `u` goes on with the spring; when
+///   something is, both go on with the spring from where they are (into an `instant` block both jump, as above). From one
+///   block into the next one touching it, as the classic camera.
 /// - Drawn: `u` at least 0 and the centre placed with `StageCrop` over the viewport's screen of the instant.
 ///
 /// The whole state is kept every `StepGrid.checkpointEvery` steps, and every query reads a step from its checkpoint (or
@@ -619,8 +625,9 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         lastStep = StepGrid.firstStep(atOrAfter: timeMap.duration)
         self.viewport = viewport
         spring = StepGrid.stable(document.zoom.spring)
-        blocks = document.zoom.show
+        let selected = document.zoom.show
             ? ZoomBlock.blocks(of: document.zoom, take: take.id, timeMap: timeMap).filter(selection.selects) : []
+        blocks = selection == .calm ? CalmAmount.marked(selected, spring: spring) : selected
         self.selection = selection
         jumps = ZoomBlock.jumps(of: blocks, lastStep: lastStep)
         takeID = take.id
@@ -872,7 +879,7 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
 
     /// Takes `run` to the next step: reads the block and, in a following one, the cursor, places the target, and moves
     /// the camera one step of 1/600 s toward it (or jumps, at an instant block's edge; of the calm blocks, with the
-    /// centre held outside every block and jumping into one from there).
+    /// centre held outside every block and jumping into one from there when nothing before is seen).
     private func advance(_ run: inout Run) {
         run.step += 1
         let step = run.step
@@ -914,8 +921,9 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
             camera.logDepthVelocity = 0
             camera.center = target
             camera.centerVelocity = .zero
-        } else if selection == .calm, index == nil || camera.block == nil {
-            // The calm focus: outside every block the centre stays; into a block from there, it is at its target at once.
+        } else if selection == .calm, index.map({ camera.block == nil && blocks[$0].focusJumpsIn }) ?? true {
+            // The calm focus: outside every block the centre stays; into a block from there, with nothing of the blocks
+            // before seen, it is at its target at once.
             StepGrid.spring(&camera.logDepth, &camera.logDepthVelocity, target: logTarget, spring)
             camera.center = target
             camera.centerVelocity = .zero
