@@ -215,8 +215,12 @@ struct TitleCardLayout {
 /// display: the preview and the export draw the same. The system font itself changes from one macOS to another, and its
 /// bytes with it.
 ///
-/// Drawn the first time a card's texts are asked for at an output size, and kept while the frames ask for them: the last
-/// two (the export's size and the preview's while it plays, or two cards next to each other), under a lock.
+/// Drawn the first time a card's texts are asked for at an output size, or ahead of it (`prepare`, with the frames' cards
+/// ahead, `RenderFrame.titleCardsAhead`, on a queue of their own in the background: the same function, so the same
+/// pixels), and kept while the frames ask for them: the last two (the export's size and the preview's while it plays, or
+/// two cards next to each other), under a lock. A card's first frame finds its texture made already; one asked for while
+/// it is being drawn ahead waits for it rather than drawing it again. What cannot be made (out of memory) is kept as none
+/// too, so the frames that follow draw the card without its texts rather than try again each one.
 final class TitleCardTextures: Sendable {
     /// What a texture depends on: the texts, the style, the colour and the output's size.
     struct Key: Equatable {
@@ -232,50 +236,108 @@ final class TitleCardTextures: Sendable {
         }
     }
 
+    /// A texture of a card's texts and the whole pixels of the output it covers.
+    typealias Made = (texture: any MTLTexture, origin: SIMD2<Int>, size: SIMD2<Int>)
+
     private struct State {
-        /// The textures last asked for, the latest last (`nil`: nothing to draw).
-        var drawn: [(key: Key, region: (origin: SIMD2<Int>, size: SIMD2<Int>)?, texture: (any MTLTexture)?)] = []
+        /// The textures last asked for or drawn ahead, the latest last (`nil`: nothing to draw, or it could not be made).
+        var drawn: [(key: Key, made: Made?)] = []
+        /// The cards being drawn ahead, with what tells they are done.
+        var pending: [(key: Key, done: DispatchGroup)] = []
         var drawCount = 0
+        var inlineDrawCount = 0
     }
 
     private let state = Mutex(State())
+    /// Where the cards ahead are drawn, one at a time.
+    private let queue = DispatchQueue(label: "dev.toma.TitleCardTextures", qos: .userInitiated)
     /// How many textures are kept.
     static let kept = 2
+    /// The most cards being drawn ahead at once.
+    static let maxPending = 2
     /// How far past the block a texture reaches, of the largest size of its texts, besides two pixels: glyphs past their
     /// line (an accent over a capital, a long tail).
     static let marginEm = 0.3
 
     init() {}
 
-    /// How many textures have been drawn, for tests.
+    /// How many textures have been drawn (or failed to be), ahead or in a frame, for tests.
     var drawCount: Int { state.withLock { $0.drawCount } }
+    /// How many of them were drawn in a frame's encoding (`texture(for:outputSize:device:)` found neither the texture nor
+    /// its drawing ahead), for tests.
+    var inlineDrawCount: Int { state.withLock { $0.inlineDrawCount } }
 
     /// The texture of `layer`'s texts in an output of `outputSize` and the whole pixels of the output it covers, from the
-    /// top left; `nil` when it has nothing to draw. Kept, it is there; otherwise it is drawn now and kept.
-    /// - Throws: `RenderError.metalResourceUnavailable` if CoreGraphics or Metal cannot make what it needs.
-    func texture(
-        for layer: TitleCardLayer, outputSize: SIMD2<Int>, device: any MTLDevice
-    ) throws -> (texture: any MTLTexture, origin: SIMD2<Int>, size: SIMD2<Int>)? {
+    /// top left; `nil` when it has nothing to draw, or could not be made before. Kept or drawn ahead, it is there; being
+    /// drawn ahead, this waits for it; otherwise it is drawn now and kept.
+    /// - Throws: `RenderError.metalResourceUnavailable` if CoreGraphics or Metal cannot make what it needs, the first time.
+    func texture(for layer: TitleCardLayer, outputSize: SIMD2<Int>, device: any MTLDevice) throws -> Made? {
         let key = Key(layer, outputSize: outputSize)
-        return try state.withLock { state in
-            if let index = state.drawn.firstIndex(where: { $0.key == key }) {
-                let found = state.drawn.remove(at: index)
-                state.drawn.append(found)
-                guard let region = found.region, let texture = found.texture else { return nil }
-                return (texture, region.origin, region.size)
+        while true {
+            let found: Result<Made?, any Error>? = state.withLock { state in
+                if let index = state.drawn.firstIndex(where: { $0.key == key }) {
+                    let found = state.drawn.remove(at: index)
+                    state.drawn.append(found)
+                    return .success(found.made)
+                }
+                guard !state.pending.contains(where: { $0.key == key }) else { return nil }
+                let result = Result { try Self.makeTexture(for: layer, outputSize: outputSize, device: device) }
+                Self.keep(key, (try? result.get()) ?? nil, in: &state)
+                state.inlineDrawCount += 1
+                return result
             }
-            let made = try Self.makeTexture(for: layer, outputSize: outputSize, device: device)
-            if state.drawn.count >= Self.kept { state.drawn.removeFirst() }
-            state.drawn.append((key, made.map { ($0.origin, $0.size) }, made?.texture))
-            state.drawCount += 1
-            return made
+            if let found { return try found.get() }
+            // Being drawn ahead: done, it is kept.
+            state.withLock { state in state.pending.first { $0.key == key }?.done }?.wait()
         }
     }
 
+    /// Draws ahead, in the background, the textures of `layers` in an output of `outputSize` that are neither kept nor
+    /// being drawn (`RenderFrame.titleCardsAhead`), up to `maxPending` at once; each is kept once drawn. Returns at once;
+    /// nothing without layers.
+    func prepare(_ layers: [TitleCardLayer], outputSize: SIMD2<Int>, device: any MTLDevice) {
+        guard !layers.isEmpty else { return }
+        let device = AheadDevice(device)
+        let scheduled: [(TitleCardLayer, Key, DispatchGroup)] = state.withLock { state in
+            var scheduled: [(TitleCardLayer, Key, DispatchGroup)] = []
+            for layer in layers where state.pending.count < Self.maxPending {
+                let key = Key(layer, outputSize: outputSize)
+                guard !state.pending.contains(where: { $0.key == key }), !state.drawn.contains(where: { $0.key == key }) else {
+                    continue
+                }
+                let done = DispatchGroup()
+                done.enter()
+                state.pending.append((key, done))
+                scheduled.append((layer, key, done))
+            }
+            return scheduled
+        }
+        for (layer, key, done) in scheduled {
+            queue.async { [self] in
+                let made = AheadTexture((try? Self.makeTexture(for: layer, outputSize: outputSize, device: device.device)) ?? nil)
+                state.withLock { state in
+                    state.pending.removeAll { $0.key == key }
+                    if !state.drawn.contains(where: { $0.key == key }) { Self.keep(key, made.made, in: &state) }
+                }
+                done.leave()
+            }
+        }
+    }
+
+    /// Waits until nothing is being drawn ahead, for tests.
+    func waitUntilDrawnAhead() {
+        while let done = state.withLock({ $0.pending.first?.done }) { done.wait() }
+    }
+
+    /// Keeps `made` of `key`, just drawn (or failed), as the latest: the oldest one's memory goes first when `kept` are.
+    private static func keep(_ key: Key, _ made: Made?, in state: inout State) {
+        if state.drawn.count >= kept { state.drawn.removeFirst() }
+        state.drawn.append((key, made))
+        state.drawCount += 1
+    }
+
     /// `layer`'s texts drawn into a new texture; `nil` when it has nothing to draw.
-    private static func makeTexture(
-        for layer: TitleCardLayer, outputSize: SIMD2<Int>, device: any MTLDevice
-    ) throws -> (texture: any MTLTexture, origin: SIMD2<Int>, size: SIMD2<Int>)? {
+    private static func makeTexture(for layer: TitleCardLayer, outputSize: SIMD2<Int>, device: any MTLDevice) throws -> Made? {
         guard let (bytes, origin, size) = try bitmap(of: layer, outputSize: outputSize) else { return nil }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: size.x, height: size.y, mipmapped: false)
@@ -313,5 +375,24 @@ final class TitleCardTextures: Sendable {
             }
         }
         return (bytes, layout.origin, layout.size)
+    }
+}
+
+/// A Metal device handed to the queue that draws the cards' textures ahead: `MTLDevice` is safe to use from any thread.
+private struct AheadDevice: @unchecked Sendable {
+    let device: any MTLDevice
+
+    init(_ device: any MTLDevice) {
+        self.device = device
+    }
+}
+
+/// A texture drawn ahead, handed from the queue that drew it to the textures kept, under their lock: nothing else holds
+/// it, and it is only read once kept.
+private struct AheadTexture: @unchecked Sendable {
+    let made: TitleCardTextures.Made?
+
+    init(_ made: TitleCardTextures.Made?) {
+        self.made = made
     }
 }

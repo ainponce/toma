@@ -49,23 +49,30 @@ public struct TitleCardLayer: Equatable, Sendable {
 /// frame is never worked out again inside itself. With `p` that, what is under the card's texts:
 ///
 /// - `.stage`: the neighbor's frame with the screen's group (`RenderFrame.screenOpacity`: the screens, the window frame,
-///   the shadow, the device, the cursor and the click effects) and the camera at `1 − p`, without keys or captions; at
-///   `p = 1`, the background alone.
-/// - `.color`: the neighbor's frame held, without keys or captions, under the colour at `p` (`TitleCardLayer.fill`); the
-///   background alone where the colour is opaque at `p = 1`, or without any neighbor.
-/// - `.blurredFrame`: the neighbor's frame held, without cursor, camera, click effects, keys or captions, its screen
-///   under it sharp (`RenderFrame.previousScreen`, with its own privacy) and over it the same screen with a blur over all
-///   of its crop at full strength (`PrivacyRegion`) at `p` times its opacity, and the black veil at 35 % × `p`
-///   (`TitleCardLayer.scrim`). In the first half of the card the clip before's frame is held, in the second the clip
-///   after's (either side's when the other has none). Without a screen in that frame (the camera full screen, no
-///   neighbor), as `.stage`.
+///   the shadow, the device, the cursor and the click effects), what goes over the stage (the calm zoom, the annotations
+///   stuck to the recording) and the camera at `1 − p`, without keys or captions; at `p = 1`, the background alone.
+/// - `.color`: `.stage`'s frame under the colour at `p` (`TitleCardLayer.fill`): a colour that lets the frame through
+///   shows the background alone under it once the card is in, never the neighbor's cursor, camera or clicks.
+/// - `.blurredFrame`: the neighbor's frame held, without cursor, camera, click effects, calm zoom, annotations stuck to
+///   the recording, keys or captions, its screen under it sharp (`RenderFrame.previousScreen`, with its own privacy) and
+///   over it the same screen with a blur over all of its crop at full strength (`PrivacyRegion`) at `p` times its
+///   opacity, and the black veil at 35 % × `p` (`TitleCardLayer.scrim`). In the first half of the card the clip before's
+///   frame is held, in the second the clip after's (either side's when the other has none). Without a screen in that
+///   frame (the camera full screen, an imported clip, no neighbor), as `.stage`.
 ///
-/// The texts at `p` over all of it. The output's annotations go over the card (`FrameEvaluator.frame(at:)`).
+/// The neighbor's frame is the frame the output shows at its instant drawn still, without the motion blur, as a frozen
+/// frame is (`FrameEvaluator.clipFrame(atOutput:cursorImageIsReadable:blurs:)`), and keeps its own take: a card of one
+/// take next to a clip of another reads that clip's videos and masks as that clip does. The texts at `p` over all of it.
+/// The output's annotations go over the card (`FrameEvaluator.frame(at:)`). The frames up to `aheadWindow` before a card
+/// hand its texts over to be drawn ahead (`ahead(atOutput:)`, `RenderFrame.titleCardsAhead`).
 struct TitleCardScene: Sendable {
     /// The longest fade of a card, in ns of output: 0.3 s.
     static let fade: Int64 = 300_000_000
     /// The black veil of a `.blurredFrame` card at `p = 1`.
     static let scrim = 0.35
+    /// How long before a card starts its texts are drawn ahead, in ns of output: 1 s, as a track that comes back is
+    /// decoded ahead (`FramePrefetcher.borderLookahead`).
+    static let aheadWindow: Int64 = 1_000_000_000
 
     /// One card of the sequence as its frames read it.
     private struct Card: Sendable {
@@ -96,12 +103,15 @@ struct TitleCardScene: Sendable {
 
     /// The cards, by their index in the sequence.
     private let cards: [Int: Card]
+    /// Where each card starts in the output and its texts (at opacity 1), in output order.
+    private let starts: [(start: Int64, layer: TitleCardLayer)]
 
     init(document: EditDocument, timeMap: TimeMap, outputSize: SIMD2<Int>) {
         let sequence = document.sequence
         var cards: [Int: Card] = [:]
         guard sequence.count == timeMap.clipOutputStarts.count else {
             self.cards = cards
+            starts = []
             return
         }
         /// `output` when the output shows a clip there that is no title card; `nil` outside the output and on a card.
@@ -120,6 +130,20 @@ struct TitleCardScene: Sendable {
                 after: neighbor(at: end))
         }
         self.cards = cards
+        starts = cards.sorted { $0.key < $1.key }.map { k, card in (timeMap.clipOutputStarts[k], Self.layer(of: card.card)) }
+    }
+
+    /// `card`'s texts as its layer draws them at opacity `p`.
+    private static func layer(of card: TitleCard, opacity p: Double = 1) -> TitleCardLayer {
+        TitleCardLayer(title: card.title, subtitle: card.subtitle, style: card.style, textColor: card.textColor, opacity: p)
+    }
+
+    /// The texts of the cards that start after output time `τ` and within `aheadWindow` of it, in output order: what a
+    /// frame at `τ` hands over to be drawn ahead (`RenderFrame.titleCardsAhead`). None without cards.
+    func ahead(atOutput τ: Int64) -> [TitleCardLayer] {
+        guard !starts.isEmpty else { return [] }
+        let (end, overflow) = τ.addingReportingOverflow(Self.aheadWindow)
+        return starts.filter { $0.start > τ && (overflow || $0.start <= end) }.map(\.layer)
     }
 
     /// The frame at `offset` ns into clip `k` of the sequence, a title card (`TimeMap.contentOffset(atOutput:)`), over
@@ -131,8 +155,7 @@ struct TitleCardScene: Sendable {
     ) rethrows -> RenderFrame {
         guard let card = cards[k] else { return background }
         let p = card.progress(at: offset)
-        var layer = TitleCardLayer(
-            title: card.card.title, subtitle: card.card.subtitle, style: card.card.style, textColor: card.card.textColor, opacity: p)
+        var layer = Self.layer(of: card.card, opacity: p)
         let held = card.held(at: offset)
         var frame: RenderFrame
         switch card.card.background {
@@ -140,11 +163,7 @@ struct TitleCardScene: Sendable {
             frame = try Self.stage(p, held: held, background: background, neighbor: neighbor)
         case let .color(color):
             layer.fill = color
-            if let held, p < 1 || !(color.a >= 1) {
-                frame = Self.withoutOverlays(try neighbor(held))
-            } else {
-                frame = background
-            }
+            frame = try Self.stage(p, held: held, background: background, neighbor: neighbor)
         case .blurredFrame:
             if let held, let blurred = Self.blurred(try neighbor(held), p) {
                 frame = blurred
@@ -176,11 +195,16 @@ struct TitleCardScene: Sendable {
         return frame
     }
 
-    /// `frame` without keys or captions, with the screen's group and the camera faded to `f` (0 to 1) of what they are, as
-    /// the camera layouts fade the group (`RenderFrame.screenOpacity`): the group's opacity times `f`, the screen's too,
-    /// and the screen being left under it so that the two together are the change at that, `f·q·(1 − s) / (1 − f·s)`
-    /// with `s` and `q` their opacities; the cursors, the click effects, the device and the camera times `f`. A camera
-    /// that covered every pixel no longer does below 1. `frame` as it is (without keys or captions) at `f = 1`.
+    /// `frame` without keys or captions, with the screen's group, what goes over the stage and the camera faded to `f` (0
+    /// to 1) of what they are, as the camera layouts fade the group (`RenderFrame.screenOpacity`): the group's opacity
+    /// times `f`, the screen's too, and the screen being left under it so that the two together are the change at that,
+    /// `f·q·(1 − s) / (1 − f·s)` with `s` and `q` their opacities; the cursors, the click effects, the device, the calm
+    /// zoom's amount, the annotations stuck to the recording and the camera times `f`. A camera that covered every pixel
+    /// no longer does below 1. `frame` as it is (without keys or captions) at `f = 1`.
+    ///
+    /// Every layer of steps 1 to 6 of phase 3 design §12 a frame can hold fades here: one that gains an opacity (the
+    /// imported clip of the sequence, `RenderFrame.media`, still without one, plan 3a task A9) multiplies it by `f` here,
+    /// and `blurred` drops it, or a card shows it whole until `p = 1` and then not at all.
     static func faded(_ frame: RenderFrame, keeping f: Double) -> RenderFrame {
         var faded = withoutOverlays(frame)
         let f = f.isNaN ? 0 : min(max(f, 0), 1)
@@ -209,12 +233,20 @@ struct TitleCardScene: Sendable {
             return faded
         }
         faded.deviceFrame?.opacity *= f
+        faded.calmZoom?.amount *= f
+        faded.contentAnnotations = frame.contentAnnotations.map { annotation in
+            var faded = annotation
+            faded.opacity = annotation.opacity * f
+            return faded
+        }
+        // A9: the imported clip of the sequence (`faded.media`) fades here once its layer has an opacity.
         faded.camera?.opacity *= f
         faded.coveredByCamera = false
         return faded
     }
 
-    /// `.blurredFrame`'s frame at `p` over the neighbor's `frame` (see the type's notes); `nil` when it shows no screen.
+    /// `.blurredFrame`'s frame at `p` over the neighbor's `frame` (see the type's notes); `nil` when it shows no screen
+    /// (an imported clip of the sequence shows none: A9's `media` is never under a blurred frame).
     static func blurred(_ frame: RenderFrame, _ p: Double) -> RenderFrame? {
         guard let screen = frame.screen else { return nil }
         let p = p.isNaN ? 0 : min(max(p, 0), 1)
@@ -223,6 +255,8 @@ struct TitleCardScene: Sendable {
         blurred.cursorSamples = []
         blurred.subframes = frame.subframes.map { StageSubframe(stage: $0.stage, cursor: nil) }
         blurred.clickEffects = []
+        blurred.calmZoom = nil
+        blurred.contentAnnotations = []
         blurred.camera = nil
         var over = screen
         over.privacy = [PrivacyRegion(rect: Rect(x: 0, y: 0, width: 1, height: 1), effect: .blur, strength: 1, color: SIMD4(0, 0, 0, 1))]

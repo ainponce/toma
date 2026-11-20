@@ -107,6 +107,10 @@ public struct RenderFrame: Equatable, Sendable {
     /// the id of another take for a frame of a clip of it, whose tracks the renderer reads apart from the take's own
     /// (`FrameRenderer`'s `TrackKey`), however alike their ids.
     public var take: String?
+    /// The title cards the frames start next, within `TitleCardScene.aheadWindow` after this one (`TitleCardScene.ahead`):
+    /// not drawn in this frame, but their texts' textures are drawn ahead, off the frame (`TitleCardTextures.prepare`), so
+    /// a card's first frame binds a texture made already. Empty without title cards, as every document of phases 1 and 2.
+    public var titleCardsAhead: [TitleCardLayer]
 
     /// Whether the frame is drawn in a card's mode (`card`, `backgroundTransform`).
     var isCardMode: Bool { card != nil || backgroundTransform != nil }
@@ -141,7 +145,8 @@ public struct RenderFrame: Equatable, Sendable {
         contentAnnotations: [AnnotationLayer] = [],
         outputAnnotations: [AnnotationLayer] = [],
         titleCard: TitleCardLayer? = nil,
-        take: String? = nil
+        take: String? = nil,
+        titleCardsAhead: [TitleCardLayer] = []
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -173,6 +178,7 @@ public struct RenderFrame: Equatable, Sendable {
         self.outputAnnotations = outputAnnotations
         self.titleCard = titleCard
         self.take = take
+        self.titleCardsAhead = titleCardsAhead
     }
 }
 

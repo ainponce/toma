@@ -372,6 +372,110 @@ private func zoomBlock(
             }
         }
     }
+
+    /// A title card next to a clip of another take (A8, plan 3a decision 10): `[A][B][card of B][A]`,
+    /// `[B][A][card of A][B]` and, with a third take, `[A][card of B][C]`. The frames it fades against, and the one a blurred
+    /// frame holds in each half, keep the take of the clip they are of (`RenderFrame.take`) and its camera's person's mask
+    /// read by that take's id (`personMask:<take>/<file>`, phase 2's id for the project's own), never the card's take or
+    /// two takes' ids; and each is that clip's frame drawn still.
+    @Test func aCardNextToAnotherTakeKeepsTheNeighborsTake() throws {
+        let (project, analysis) = threeTakesWithCameras()
+        let (a, b, c) = ("take-001", "take-002", "take-003")
+        func mask(of take: String) -> String {
+            take == a ? "personMask:seg-0001-personMask-1.mov" : "personMask:\(take)/seg-0001-personMask-1.mov"
+        }
+        /// `(take, from, to)` seconds of each take from its start, with a card of `(take, at)` where `nil`.
+        typealias Piece = (take: String, from: Double, to: Double, card: Bool)
+        func document(_ pieces: [Piece], background: TitleCardBackground) -> EditDocument {
+            var document = EditDocument.legacy(take: project.take, events: [])
+            for other in [b, c] {
+                guard let focused = project.focused(on: other) else { continue }
+                let legacy = EditDocument.legacy(take: focused.take, events: [])
+                document.screens.initial.merge(legacy.screens.initial) { own, _ in own }
+                document.camera.initial.merge(legacy.camera.initial) { own, _ in own }
+            }
+            document.camera.background = .blurred
+            let card = TitleCard(title: "Toma", subtitle: "Dos", style: .centered, background: background)
+            document.sequence = pieces.enumerated().map { index, piece in
+                let start = takeStart(piece.take).adding(seconds: piece.from)
+                return Clip(
+                    id: "c-" + String(format: "%08x", index + 1), take: piece.take, start: start,
+                    end: piece.card ? start : takeStart(piece.take).adding(seconds: piece.to), speed: 1,
+                    content: piece.card ? .card(card, duration: 3_000_000_000) : nil)
+            }
+            return document
+        }
+        let cases: [(name: String, pieces: [Piece], before: String, after: String)] = [
+            ("card of B next to A", [(a, 0, 2, false), (b, 0, 2, false), (b, 2, 2, true), (a, 2, 4, false)], b, a),
+            ("card of A next to B", [(b, 0, 2, false), (a, 0, 2, false), (a, 2, 2, true), (b, 2, 4, false)], a, b),
+            ("a third take", [(a, 0, 2, false), (b, 1, 1, true), (c, 0, 2, false)], a, c),
+        ]
+        for (name, pieces, before, after) in cases {
+            for background in [TitleCardBackground.stage, .blurredFrame] {
+                let doc = document(pieces, background: background)
+                let scene = FrameEvaluator(project: project, document: doc, outputSize: [640, 360], frameRate: rate, analysis: analysis)
+                let k = try #require(doc.sequence.firstIndex { $0.content != nil })
+                let start = scene.timeMap.clipOutputStarts[k], end = start + 3_000_000_000
+                let at = "\(name), \(background)"
+                // The clips next to the card, as the output shows them still.
+                for (output, take) in [(start - 1, before), (end, after)] {
+                    let neighbor = scene.clipFrame(atOutput: output, cursorImageIsReadable: { _, _ in true }, blurs: false)
+                    #expect(neighbor.take == (take == a ? nil : take), "\(at): \(take)'s own frame")
+                    #expect(neighbor.camera?.background?.mask.readerID == mask(of: take), "\(at): \(take)'s own mask")
+                }
+                // Stage fades the camera with its mask; the blurred frame holds the screen of the clip of its half.
+                for (seconds, take) in [(Double(start) / 1e9 + 0.15, before), (Double(end) / 1e9 - 0.15, after)] {
+                    let frame = scene.frame(at: seconds)
+                    #expect(frame.titleCard?.opacity == 0.5, "\(at) at \(seconds) s")
+                    #expect(frame.take == (take == a ? nil : take), "\(at) at \(seconds) s: \(frame.take ?? "own")")
+                    if background == .stage {
+                        #expect(frame.camera?.background?.mask.readerID == mask(of: take), "\(at) at \(seconds) s")
+                        #expect(frame.camera?.opacity == 0.5, "\(at) at \(seconds) s")
+                    } else {
+                        #expect(frame.camera == nil && frame.previousScreen?.trackID == "display-1", "\(at) at \(seconds) s")
+                        #expect(frame.previousScreen?.sourceTime == frame.screen?.sourceTime, "\(at) at \(seconds) s")
+                    }
+                }
+                if background == .blurredFrame {
+                    // Each half of a blurred card is its own side's take.
+                    #expect(scene.frame(at: Double(start) / 1e9 + 1).take == (before == a ? nil : before), "\(at)")
+                    #expect(scene.frame(at: Double(start) / 1e9 + 2).take == (after == a ? nil : after), "\(at)")
+                }
+            }
+        }
+    }
+}
+
+/// Three takes of 4 s, 60 s apart, each with the display `display-1` and the camera `camera` (records without files: the
+/// scene works them out, nothing reads them), and the person's mask of each one's camera, its first segment, named alike
+/// in the caches as every take's is; focused on take-001.
+private func threeTakesWithCameras() -> (project: LoadedProject, analysis: AnalysisInputs) {
+    var analysis = AnalysisInputs()
+    let takes = ["take-001", "take-002", "take-003"].enumerated().map { k, id in
+        let start = takeStart(id)
+        analysis.personMasks[CameraSegment(take: id, track: cameraID, segment: 1)] =
+            URL(fileURLWithPath: "/caches/masks/\(id)/\(cameraID)/seg-0001-personMask-1.mov")
+        return TakeRecord(
+            id: id, status: .complete, startedAt: Date(timeIntervalSince1970: 1_800_000_000 + 60 * Double(k)), tracks: [
+                displayTrack(globalFrame: Rect(x: 0, y: 0, width: 640, height: 360), segments: [segment(start: start, end: start.adding(seconds: 4))]),
+                displayTrack(
+                    id: cameraID, kind: .camera, globalFrame: nil,
+                    segments: [segment(track: cameraID, start: start, end: start.adding(seconds: 4))]),
+            ])
+    }
+    let manifest = Manifest(
+        formatVersion: Manifest.currentFormatVersion, app: AppInfo(name: "Tests", version: "0"),
+        createdAt: Date(timeIntervalSince1970: 1_800_000_000), takes: takes)
+    let project = LoadedProject(
+        package: ProjectPackage(url: URL(fileURLWithPath: "/nowhere/Cards.toma", isDirectory: true)), manifest: manifest, take: takes[0],
+        events: [])
+    return (project, analysis)
+}
+
+/// Where take `take` of `threeTakesWithCameras()` starts: take-001 at `base`, the next ones 60 s apart.
+private func takeStart(_ take: String) -> HostTime {
+    let k = ["take-001", "take-002", "take-003"].firstIndex(of: take) ?? 0
+    return base.adding(seconds: 60 * Double(k))
 }
 
 /// Draws frames `0..<count` of `renderer`'s scene as the export does (`render(at:into:completion:)`: queued one after the
