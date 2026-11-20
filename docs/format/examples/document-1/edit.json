@@ -1,0 +1,109 @@
+{
+  "aspect" : "16:9",
+  "audio" : {
+    "limiter" : false,
+    "tracks" : {
+      "take-001/mic" : {
+        "gain" : 1,
+        "muted" : false
+      }
+    }
+  },
+  "camera" : {
+    "changes" : [
+
+    ],
+    "initial" : {
+      "take-001" : {
+        "anchor" : "bottomTrailing",
+        "shape" : "circle",
+        "size" : 0.24
+      }
+    },
+    "show" : true
+  },
+  "cursor" : {
+    "clickEffect" : "none",
+    "clickSound" : "none",
+    "clickSoundGain" : 0.5,
+    "hideWhenIdle" : false,
+    "idleDelay" : 2,
+    "motionBlur" : 0,
+    "scale" : 1,
+    "show" : true,
+    "smoothing" : "off",
+    "style" : "toma"
+  },
+  "documentVersion" : 1,
+  "frameRate" : 60,
+  "logSequence" : 1,
+  "screens" : {
+    "changes" : [
+
+    ],
+    "initial" : {
+      "take-001" : "display-1"
+    }
+  },
+  "sequence" : [
+    {
+      "end" : 81246567000000,
+      "id" : "c-00000001",
+      "speed" : 1,
+      "start" : 81234567000000,
+      "take" : "take-001"
+    }
+  ],
+  "style" : {
+    "background" : {
+      "angle" : 135,
+      "end" : [
+        0.17254901960784313,
+        0.6941176470588235,
+        0.7372549019607844,
+        1
+      ],
+      "start" : [
+        0.4980392156862745,
+        0.35294117647058826,
+        0.9411764705882353,
+        1
+      ],
+      "type" : "gradient"
+    },
+    "backgroundBlur" : 0,
+    "cornerRadius" : 0.012,
+    "frame" : {
+      "type" : "none"
+    },
+    "geometryTransition" : "none",
+    "padding" : 0.08,
+    "screenSampling" : "bilinear",
+    "shadow" : 0
+  },
+  "zoom" : {
+    "auto" : {
+      "depth" : 2,
+      "enabled" : false,
+      "follow" : true,
+      "groupGap" : 2.5,
+      "holdWhileTyping" : true,
+      "leadIn" : 0.5,
+      "leadOut" : 1,
+      "planner" : "autoZoom-1",
+      "triggers" : "clicks"
+    },
+    "motionBlur" : 0,
+    "regions" : [
+
+    ],
+    "show" : true,
+    "spring" : {
+      "damping" : 1,
+      "response" : 0.7
+    },
+    "suppressed" : [
+
+    ]
+  }
+}

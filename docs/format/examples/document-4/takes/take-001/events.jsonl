@@ -1,0 +1,10 @@
+{"displayID":1,"frame":{"height":982,"width":1512,"x":0,"y":0},"scale":2,"t":81234566000000,"type":"displayGeometry"}
+{"index":1,"t":81234567000000,"track":"display-1","type":"segmentStarted"}
+{"index":1,"t":81234569000000,"track":"mic","type":"segmentStarted"}
+{"t":81235067000000,"type":"cursor","x":640.5,"y":402}
+{"t":81235075000000,"type":"cursor","x":642.25,"y":401}
+{"t":81237567000000,"type":"keyActivity"}
+{"t":81237817000000,"type":"keyActivity"}
+{"frame":239904,"t":81239567000000,"track":"mic","type":"audioClock"}
+{"t":81240567000000,"type":"marker"}
+{"t":81243567000000,"type":"cursor","x":700,"y":512.75}

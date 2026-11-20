@@ -1,0 +1,989 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Toma edit document",
+  "description": "edit.json at the root of a Toma package, documentVersion 5 (format 1.0): what the output is made of and how it looks. A reader of version 5 reads versions 1 to 4 migrated and refuses a newer one; this schema is the shape of version 5. Written with its keys in alphabetical order, indented, optional fields left out (never null). Source times are HostTime of the take in ns; output times, ns of output. A reader ignores keys it does not know, but an unknown value of a closed list makes the document invalid. See docs/format/README.md, from \"Cambios de la versión 3\" to \"Cambios del documento 5\".",
+  "type": "object",
+  "properties": {
+    "documentVersion": {"description": "The document's version.", "const": 5},
+    "logSequence": {
+      "description": "The seq of the last line of edit-log.jsonl this document includes.",
+      "type": "integer"
+    },
+    "aspect": {
+      "description": "The output's shape; auto, like the recording (version 3).",
+      "type": "string",
+      "enum": ["16:9", "9:16", "1:1", "4:5", "4:3", "3:4", "auto"]
+    },
+    "frameRate": {
+      "description": "24, 25, 30, 50 or 60: the editor's frame grid and the export's default.",
+      "type": "integer"
+    },
+    "sequence": {
+      "description": "The clips in output order, never overlapping.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/clip"}
+    },
+    "screens": {"$ref": "#/$defs/screenPlan"},
+    "style": {"$ref": "#/$defs/stageStyle"},
+    "cursor": {"$ref": "#/$defs/cursorStyle"},
+    "zoom": {"$ref": "#/$defs/zoomPlan"},
+    "camera": {"$ref": "#/$defs/cameraPlan"},
+    "audio": {"$ref": "#/$defs/audioPlan"},
+    "transcript": {"description": "Version 3: missing until the first transcription.", "$ref": "#/$defs/transcript"},
+    "captions": {"description": "Version 3.", "$ref": "#/$defs/captionPlan"},
+    "privacy": {"description": "Version 3.", "$ref": "#/$defs/privacyPlan"},
+    "keys": {"description": "Version 3.", "$ref": "#/$defs/keyOverlayPlan"},
+    "annotations": {"description": "Version 4.", "$ref": "#/$defs/annotationPlan"},
+    "music": {"description": "Version 4.", "$ref": "#/$defs/musicPlan"},
+    "markers": {"description": "Version 4.", "$ref": "#/$defs/markerPlan"},
+    "info": {
+      "description": "Version 5: missing until the project has a title or a summary.",
+      "$ref": "#/$defs/projectInfo"
+    }
+  },
+  "required": [
+    "documentVersion", "logSequence", "aspect", "frameRate", "sequence", "screens", "style", "cursor", "zoom",
+    "camera", "audio", "captions", "privacy", "keys", "annotations", "music", "markers"
+  ],
+  "$defs": {
+    "sourceTime": {
+      "description": "Source time: a HostTime of the take, in nanoseconds.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "outputTime": {"description": "Nanoseconds of output (a signed 64-bit integer).", "type": "integer"},
+    "rgba": {
+      "description": "A colour [r, g, b, a]: sRGB values from 0 to 1, written as they are to the output.",
+      "type": "array",
+      "items": {"type": "number"},
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "spring": {
+      "description": "A spring: its damping ratio and its response in seconds.",
+      "type": "object",
+      "properties": {"damping": {"type": "number"}, "response": {"type": "number"}},
+      "required": ["damping", "response"]
+    },
+    "point": {
+      "description": "A point in fractions of its space, from the top left.",
+      "type": "object",
+      "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+      "required": ["x", "y"]
+    },
+    "rect": {
+      "description": "A rectangle in fractions of its space, from the top left.",
+      "type": "object",
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "width": {"type": "number"},
+        "height": {"type": "number"}
+      },
+      "required": ["x", "y", "width", "height"]
+    },
+    "cameraStyle": {
+      "description": "How the camera looks: its shape, its size and where it is anchored.",
+      "type": "object",
+      "properties": {
+        "shape": {
+          "description": "circle, roundedSquare, portrait (3:4) or landscape (16:9).",
+          "type": "string",
+          "enum": ["circle", "roundedSquare", "portrait", "landscape"]
+        },
+        "size": {
+          "description": "The camera's side as a fraction of the output's height: 0.17 small, 0.24 medium, 0.33 large.",
+          "type": "number"
+        },
+        "anchor": {
+          "description": "One of the 8 places at the corners and the middle of the edges; leading is always the left.",
+          "type": "string",
+          "enum": [
+            "topLeading", "top", "topTrailing", "leading", "trailing", "bottomLeading", "bottom", "bottomTrailing"
+          ]
+        }
+      },
+      "required": ["shape", "size", "anchor"]
+    },
+    "clip": {
+      "description": "A stretch of a take in the output, [start, end) of its source at speed; with content, what it shows instead at the point start == end of its take.",
+      "type": "object",
+      "properties": {
+        "id": {"description": "c- and 8 hexadecimal digits.", "type": "string"},
+        "take": {"description": "The take's id.", "type": "string"},
+        "start": {"$ref": "#/$defs/sourceTime"},
+        "end": {"description": "Excluded.", "$ref": "#/$defs/sourceTime"},
+        "speed": {
+          "description": "0.25 to 16; a value out of them is read clamped, 1 if it is not a number.",
+          "type": "number"
+        },
+        "content": {
+          "description": "Version 4: a frozen frame, a title card or an imported clip; missing, a stretch of the take.",
+          "$ref": "#/$defs/clipContent"
+        },
+        "audioShift": {
+          "description": "Version 4: where the sound cuts against the picture at the clip's start, in ns of output: negative sooner (a J cut), positive later (an L cut).",
+          "type": "integer"
+        }
+      },
+      "required": ["id", "take", "start", "end", "speed", "audioShift"]
+    },
+    "clipContent": {
+      "description": "What a clip shows instead of a stretch of its take, flat with its type.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "freeze (with duration), card (with card and duration) or media (with media).",
+          "type": "string",
+          "enum": ["freeze", "card", "media"]
+        },
+        "duration": {"description": "freeze, card: its length in ns of output, 0.1 to 60 s.", "type": "integer"},
+        "card": {"$ref": "#/$defs/titleCard"},
+        "media": {"$ref": "#/$defs/mediaClip"}
+      },
+      "required": ["type"],
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"const": "freeze"}}, "required": ["type"]},
+          "then": {"required": ["duration"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "card"}}, "required": ["type"]},
+          "then": {"required": ["card", "duration"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "media"}}, "required": ["type"]},
+          "then": {"required": ["media"]}
+        }
+      ]
+    },
+    "titleCard": {
+      "description": "A title card (titleCard-1).",
+      "type": "object",
+      "properties": {
+        "title": {"type": "string"},
+        "subtitle": {"description": "\"\" for none.", "type": "string"},
+        "style": {
+          "description": "centered, leading, large or minimal.",
+          "type": "string",
+          "enum": ["centered", "leading", "large", "minimal"]
+        },
+        "background": {
+          "description": "Flat with its type: stage, color (with color) or blurredFrame.",
+          "type": "object",
+          "properties": {
+            "type": {"type": "string", "enum": ["stage", "color", "blurredFrame"]},
+            "color": {"$ref": "#/$defs/rgba"}
+          },
+          "required": ["type"],
+          "allOf": [
+            {
+              "if": {"properties": {"type": {"const": "color"}}, "required": ["type"]},
+              "then": {"required": ["color"]}
+            }
+          ]
+        },
+        "textColor": {"$ref": "#/$defs/rgba"}
+      },
+      "required": ["title", "subtitle", "style", "background", "textColor"]
+    },
+    "mediaClip": {
+      "description": "An imported clip.",
+      "type": "object",
+      "properties": {
+        "asset": {"description": "assets/<32 hexadecimal digits>.<mov|mp4|m4v> of the package.", "type": "string"},
+        "start": {"description": "ns of the file.", "type": "integer"},
+        "end": {"description": "ns of the file, excluded.", "type": "integer"},
+        "speed": {"description": "1 plays it as it is.", "type": "number"},
+        "volume": {"description": "dB; 0 as it is.", "type": "number"}
+      },
+      "required": ["asset", "start", "end", "speed", "volume"]
+    },
+    "screenPlan": {
+      "description": "Which recorded screen is shown: initial for each take, then from each change on, its track.",
+      "type": "object",
+      "properties": {
+        "initial": {
+          "description": "The screen track of each take at its start, by take id.",
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "changes": {"type": "array", "items": {"$ref": "#/$defs/screenChange"}},
+        "planner": {
+          "description": "The planner that made the changes, with its version (screenFollow-1).",
+          "type": "string"
+        }
+      },
+      "required": ["initial", "changes"]
+    },
+    "screenChange": {
+      "description": "From source time t of take on, screen track track is shown.",
+      "type": "object",
+      "properties": {
+        "id": {"description": "p- and 8 hexadecimal digits.", "type": "string"},
+        "take": {"type": "string"},
+        "t": {"$ref": "#/$defs/sourceTime"},
+        "track": {"type": "string"},
+        "origin": {"description": "auto (a planner) or user.", "type": "string", "enum": ["auto", "user"]}
+      },
+      "required": ["id", "take", "t", "track", "origin"]
+    },
+    "stageStyle": {
+      "description": "The stage: what is behind the screen and how the screen sits on it.",
+      "type": "object",
+      "properties": {
+        "background": {"$ref": "#/$defs/background"},
+        "backgroundBlur": {"description": "0 to 1: sigma = value x 0.04 x the output's width.", "type": "number"},
+        "padding": {
+          "description": "Space around the screen on each side, a fraction of the output's width.",
+          "type": "number"
+        },
+        "cornerRadius": {
+          "description": "The radius of the screen's corners, a fraction of the output's width.",
+          "type": "number"
+        },
+        "shadow": {"description": "0 to 1.", "type": "number"},
+        "frame": {"$ref": "#/$defs/windowFrame"},
+        "screenSampling": {
+          "description": "bilinear or mipmapped.",
+          "type": "string",
+          "enum": ["bilinear", "mipmapped"]
+        },
+        "geometryTransition": {
+          "description": "none (it jumps) or spring.",
+          "type": "string",
+          "enum": ["none", "spring"]
+        },
+        "reframe": {
+          "description": "Version 3: fit, or followCursor (reframe-1); missing is fit.",
+          "type": "string",
+          "enum": ["fit", "followCursor"]
+        }
+      },
+      "required": [
+        "background", "backgroundBlur", "padding", "cornerRadius", "shadow", "frame", "screenSampling",
+        "geometryTransition"
+      ]
+    },
+    "background": {
+      "description": "What is behind the screen, flat with its type.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "gradient (start, end, angle), color (color), wallpaper (wallpaper), image (file) or desktop (the desktop picture of the first screen shown).",
+          "type": "string",
+          "enum": ["gradient", "color", "wallpaper", "image", "desktop"]
+        },
+        "start": {"$ref": "#/$defs/rgba"},
+        "end": {"$ref": "#/$defs/rgba"},
+        "angle": {"description": "Degrees, as in CSS: 0 goes up, 90 to the right.", "type": "number"},
+        "color": {"$ref": "#/$defs/rgba"},
+        "wallpaper": {
+          "description": "The versioned id of one of Toma's wallpapers, such as aurora-1.",
+          "type": "string"
+        },
+        "file": {"description": "assets/<sha>.<ext> of the package.", "type": "string"}
+      },
+      "required": ["type"],
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"const": "gradient"}}, "required": ["type"]},
+          "then": {"required": ["start", "end", "angle"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "color"}}, "required": ["type"]},
+          "then": {"required": ["color"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "wallpaper"}}, "required": ["type"]},
+          "then": {"required": ["wallpaper"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "image"}}, "required": ["type"]},
+          "then": {"required": ["file"]}
+        }
+      ]
+    },
+    "windowFrame": {
+      "description": "The frame around the screen, flat with its type.",
+      "type": "object",
+      "properties": {
+        "type": {
+          "description": "none, macWindow (appearance, title, buttons) or device (model, finish; version 3).",
+          "type": "string",
+          "enum": ["none", "macWindow", "device"]
+        },
+        "appearance": {"description": "light or dark.", "type": "string", "enum": ["light", "dark"]},
+        "title": {"type": "string"},
+        "buttons": {"type": "boolean"},
+        "model": {
+          "description": "iPhone, iPad or macBook (deviceFrame-1).",
+          "type": "string",
+          "enum": ["iPhone", "iPad", "macBook"]
+        },
+        "finish": {"description": "light or dark.", "type": "string", "enum": ["light", "dark"]}
+      },
+      "required": ["type"],
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"const": "macWindow"}}, "required": ["type"]},
+          "then": {"required": ["appearance", "title", "buttons"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "device"}}, "required": ["type"]},
+          "then": {"required": ["model", "finish"]}
+        }
+      ]
+    },
+    "cursorStyle": {
+      "description": "How the cursor is drawn.",
+      "type": "object",
+      "properties": {
+        "show": {"type": "boolean"},
+        "style": {
+          "description": "toma (Toma's arrow) or system (the recorded images).",
+          "type": "string",
+          "enum": ["toma", "system"]
+        },
+        "scale": {"description": "Multiplies its real size; in toma, 1 is 24 pt tall.", "type": "number"},
+        "smoothing": {
+          "description": "\"off\", or a spring {damping, response}.",
+          "type": ["string", "object"],
+          "properties": {"damping": {"type": "number"}, "response": {"type": "number"}},
+          "required": ["damping", "response"],
+          "if": {"type": "string"},
+          "then": {"const": "off"}
+        },
+        "hideWhenIdle": {"type": "boolean"},
+        "idleDelay": {"description": "Seconds.", "type": "number"},
+        "clickEffect": {"description": "none, ripple-1 or circle-1.", "type": "string"},
+        "clickSound": {"description": "none, soft-1 or mechanical-1.", "type": "string"},
+        "clickSoundGain": {"description": "0 to 1.", "type": "number"},
+        "motionBlur": {"description": "0 to 1, the fraction of a frame the shutter lasts.", "type": "number"}
+      },
+      "required": [
+        "show", "style", "scale", "smoothing", "hideWhenIdle", "idleDelay", "clickEffect", "clickSound",
+        "clickSoundGain", "motionBlur"
+      ]
+    },
+    "zoomPlan": {
+      "description": "The zoom: the automatic planner's settings and the blocks.",
+      "type": "object",
+      "properties": {
+        "show": {"type": "boolean"},
+        "auto": {"$ref": "#/$defs/autoZoom"},
+        "spring": {"description": "The zoom camera's spring.", "$ref": "#/$defs/spring"},
+        "motionBlur": {"description": "0 to 1.", "type": "number"},
+        "regions": {"type": "array", "items": {"$ref": "#/$defs/zoomRegion"}},
+        "suppressed": {
+          "description": "Where the user deleted an automatic block: the planner puts none there again.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/sourceRange"}
+        }
+      },
+      "required": ["show", "auto", "spring", "motionBlur", "regions", "suppressed"]
+    },
+    "autoZoom": {
+      "description": "The automatic zoom's settings.",
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "triggers": {
+          "description": "clicks or clicksAndPauses.",
+          "type": "string",
+          "enum": ["clicks", "clicksAndPauses"]
+        },
+        "holdWhileTyping": {"type": "boolean"},
+        "depth": {"description": "1.25 to 4.", "type": "number"},
+        "groupGap": {"description": "Seconds.", "type": "number"},
+        "leadIn": {"description": "Seconds.", "type": "number"},
+        "leadOut": {"description": "Seconds.", "type": "number"},
+        "follow": {"type": "boolean"},
+        "planner": {"description": "The planner and its version, autoZoom-1.", "type": "string"},
+        "mode": {
+          "description": "Version 4: the mode of the automatic blocks; missing is classic.",
+          "type": "string",
+          "enum": ["classic", "highlight", "dim", "loupe"]
+        },
+        "followsFocus": {
+          "description": "Version 5: whether the automatic blocks follow the keyboard's focus where the take recorded focus events. Always written in a document 5; missing is false.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled", "triggers", "holdWhileTyping", "depth", "groupGap", "leadIn", "leadOut", "follow", "planner"
+      ]
+    },
+    "zoomRegion": {
+      "description": "A zoom block over [start, end) of a take.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "z- and 8 hexadecimal digits, or the planner's hash in an automatic one.",
+          "type": "string"
+        },
+        "take": {"type": "string"},
+        "start": {"$ref": "#/$defs/sourceTime"},
+        "end": {"$ref": "#/$defs/sourceTime"},
+        "origin": {"description": "auto (the planner) or user.", "type": "string", "enum": ["auto", "user"]},
+        "depth": {"description": "How far it zooms; missing in an automatic block, auto.depth.", "type": "number"},
+        "focus": {
+          "description": "Flat with its type: follow (the cursor), or fixed with x and y, fractions of what the screen shows.",
+          "type": "object",
+          "properties": {
+            "type": {"type": "string", "enum": ["follow", "fixed"]},
+            "x": {"type": "number"},
+            "y": {"type": "number"}
+          },
+          "required": ["type"],
+          "allOf": [
+            {
+              "if": {"properties": {"type": {"const": "fixed"}}, "required": ["type"]},
+              "then": {"required": ["x", "y"]}
+            }
+          ]
+        },
+        "instant": {"type": "boolean"},
+        "mode": {
+          "description": "Version 4: the block's mode; missing, classic in a manual block and auto.mode in an automatic one.",
+          "type": "string",
+          "enum": ["classic", "highlight", "dim", "loupe"]
+        },
+        "loupe": {
+          "description": "Version 4: the lens of a loupe block; missing, 0.16 and circle.",
+          "type": "object",
+          "properties": {
+            "radius": {"description": "A fraction of the output's short side, 0.06 to 0.4.", "type": "number"},
+            "shape": {"type": "string", "enum": ["circle", "roundedRect"]}
+          },
+          "required": ["radius", "shape"]
+        }
+      },
+      "required": ["id", "take", "start", "end", "origin", "focus", "instant"]
+    },
+    "sourceRange": {
+      "description": "A stretch of a take.",
+      "type": "object",
+      "properties": {
+        "take": {"type": "string"},
+        "start": {"$ref": "#/$defs/sourceTime"},
+        "end": {"$ref": "#/$defs/sourceTime"}
+      },
+      "required": ["take", "start", "end"]
+    },
+    "cameraPlan": {
+      "description": "The camera: its styles over time, its layouts and its look.",
+      "type": "object",
+      "properties": {
+        "show": {"type": "boolean"},
+        "initial": {
+          "description": "The camera's style at the start of each take, by take id.",
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/cameraStyle"}
+        },
+        "changes": {"type": "array", "items": {"$ref": "#/$defs/cameraChange"}},
+        "layout": {"description": "Version 2: the project's layout.", "$ref": "#/$defs/cameraLayout"},
+        "layouts": {
+          "description": "Version 2: the blocks of another layout over a stretch.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/layoutBlock"}
+        },
+        "mirror": {"description": "Version 2.", "type": "boolean"},
+        "border": {
+          "description": "Version 2: the camera's border.",
+          "type": "object",
+          "properties": {"width": {"type": "number"}, "color": {"$ref": "#/$defs/rgba"}},
+          "required": ["width", "color"]
+        },
+        "shadow": {"description": "Version 2: 0 to 1.", "type": "number"},
+        "sizeReference": {
+          "description": "Version 2: what the style's size is a fraction of: height or shortSide.",
+          "type": "string",
+          "enum": ["height", "shortSide"]
+        },
+        "spring": {"description": "Version 2: the spring of the layouts' transitions.", "$ref": "#/$defs/spring"},
+        "layoutRules": {
+          "description": "Version 2: the version of the layouts' rules, cameraLayout-1.",
+          "type": "string"
+        },
+        "background": {
+          "description": "Version 3: original, blurred or removed (personMask-1).",
+          "type": "string",
+          "enum": ["original", "blurred", "removed"]
+        },
+        "framing": {
+          "description": "Version 3: what part of the camera's picture is shown.",
+          "type": "object",
+          "properties": {
+            "mode": {"type": "string", "enum": ["center", "face", "manual"]},
+            "center": {"description": "Fractions of the camera's picture.", "$ref": "#/$defs/point"},
+            "zoom": {"description": "1 to 2.5.", "type": "number"}
+          },
+          "required": ["mode", "center", "zoom"]
+        },
+        "look": {
+          "description": "Version 3: the camera's colour (cameraLook-1).",
+          "type": "object",
+          "properties": {
+            "preset": {"type": "string", "enum": ["natural", "warm", "cool", "vivid", "soft", "mono", "custom"]},
+            "lut": {"description": "custom: the .cube, assets/<sha256>.cube.", "type": "string"},
+            "intensity": {"description": "0 to 1.", "type": "number"}
+          },
+          "required": ["preset", "intensity"]
+        },
+        "syncOffset": {
+          "description": "Version 3: how much later the camera is drawn against the sound, in ns.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "show", "initial", "changes", "layout", "layouts", "mirror", "border", "shadow", "sizeReference", "spring",
+        "layoutRules", "background", "framing", "look", "syncOffset"
+      ]
+    },
+    "cameraChange": {
+      "description": "From source time t of take on, the camera looks like style.",
+      "type": "object",
+      "properties": {
+        "id": {"description": "k- and 8 hexadecimal digits.", "type": "string"},
+        "take": {"type": "string"},
+        "t": {"$ref": "#/$defs/sourceTime"},
+        "style": {"$ref": "#/$defs/cameraStyle"},
+        "origin": {"description": "recorded (the take's) or user.", "type": "string", "enum": ["recorded", "user"]}
+      },
+      "required": ["id", "take", "t", "style", "origin"]
+    },
+    "splitLayout": {
+      "description": "Split's settings.",
+      "type": "object",
+      "properties": {
+        "side": {
+          "description": "Where the camera goes: start (left or above) or end.",
+          "type": "string",
+          "enum": ["start", "end"]
+        },
+        "share": {"description": "0.25 to 0.60 of the output; missing, the automatic one.", "type": "number"}
+      },
+      "required": ["side"]
+    },
+    "cameraLayout": {
+      "description": "The project's layout.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "bubble, screenOnly, split, cameraOnly or cameraFull.",
+          "type": "string",
+          "enum": ["bubble", "screenOnly", "split", "cameraOnly", "cameraFull"]
+        },
+        "split": {"$ref": "#/$defs/splitLayout"}
+      },
+      "required": ["kind"]
+    },
+    "layoutBlock": {
+      "description": "Another layout over [start, end) of a take.",
+      "type": "object",
+      "properties": {
+        "id": {"description": "l- and 8 hexadecimal digits.", "type": "string"},
+        "take": {"type": "string"},
+        "start": {"$ref": "#/$defs/sourceTime"},
+        "end": {"$ref": "#/$defs/sourceTime"},
+        "kind": {
+          "description": "bubble, screenOnly, split, cameraOnly or cameraFull.",
+          "type": "string",
+          "enum": ["bubble", "screenOnly", "split", "cameraOnly", "cameraFull"]
+        },
+        "instant": {"type": "boolean"},
+        "bubble": {
+          "description": "A bubble block's own style.",
+          "type": "object",
+          "properties": {"style": {"$ref": "#/$defs/cameraStyle"}},
+          "required": ["style"]
+        },
+        "split": {"$ref": "#/$defs/splitLayout"}
+      },
+      "required": ["id", "take", "start", "end", "kind", "instant"],
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "bubble"}}, "required": ["kind"]},
+          "then": {"required": ["bubble"]}
+        }
+      ]
+    },
+    "audioPlan": {
+      "description": "The sound.",
+      "type": "object",
+      "properties": {
+        "limiter": {"type": "boolean"},
+        "tracks": {
+          "description": "Each audio track's settings, by <take>/<track>.",
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/trackGain"}
+        },
+        "normalize": {"description": "Version 3: normalize the loudness (loudness-1).", "type": "boolean"}
+      },
+      "required": ["limiter", "tracks", "normalize"]
+    },
+    "trackGain": {
+      "description": "An audio track's settings.",
+      "type": "object",
+      "properties": {
+        "gain": {"description": "0 to 2, a factor.", "type": "number"},
+        "muted": {"type": "boolean"},
+        "cleanup": {"description": "Version 3: the noise cleanup, 0 to 1.", "type": "number"},
+        "ranges": {
+          "description": "Version 4: stretches at another volume.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/gainRange"}
+        }
+      },
+      "required": ["gain", "muted", "cleanup", "ranges"]
+    },
+    "gainRange": {
+      "description": "A stretch of a track at another volume.",
+      "type": "object",
+      "properties": {
+        "id": {"description": "g- and 8 hexadecimal digits.", "type": "string"},
+        "take": {"type": "string"},
+        "start": {"$ref": "#/$defs/sourceTime"},
+        "end": {"$ref": "#/$defs/sourceTime"},
+        "gain": {"description": "dB; -120 is silence.", "type": "number"}
+      },
+      "required": ["id", "take", "start", "end", "gain"]
+    },
+    "transcript": {
+      "description": "The words spoken.",
+      "type": "object",
+      "properties": {
+        "language": {"description": "BCP 47.", "type": "string"},
+        "engine": {"description": "speechTranscriber-1.", "type": "string"},
+        "takes": {
+          "type": "array",
+          "items": {
+            "description": "The words of a track of a take.",
+            "type": "object",
+            "properties": {
+              "take": {"type": "string"},
+              "track": {"type": "string"},
+              "words": {
+                "type": "array",
+                "items": {
+                  "description": "A word, its punctuation attached.",
+                  "type": "object",
+                  "properties": {
+                    "start": {"$ref": "#/$defs/sourceTime"},
+                    "end": {"description": "Excluded.", "$ref": "#/$defs/sourceTime"},
+                    "text": {"type": "string"},
+                    "breakBefore": {
+                      "description": "A caption starts at this word; missing is false.",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["start", "end", "text"]
+                }
+              }
+            },
+            "required": ["take", "track", "words"]
+          }
+        }
+      },
+      "required": ["language", "engine", "takes"]
+    },
+    "captionPlan": {
+      "description": "The captions (captionLines-1, captionStyle-1).",
+      "type": "object",
+      "properties": {
+        "show": {"type": "boolean"},
+        "style": {
+          "type": "object",
+          "properties": {
+            "preset": {
+              "description": "classic, bold or minimal.",
+              "type": "string",
+              "enum": ["classic", "bold", "minimal"]
+            },
+            "size": {
+              "description": "small, medium or large.",
+              "type": "string",
+              "enum": ["small", "medium", "large"]
+            },
+            "position": {"type": "string", "enum": ["bottom", "top"]},
+            "uppercase": {"type": "boolean"},
+            "highlight": {"type": "boolean"},
+            "highlightColor": {"$ref": "#/$defs/rgba"}
+          },
+          "required": ["preset", "size", "position", "uppercase", "highlight", "highlightColor"]
+        }
+      },
+      "required": ["show", "style"]
+    },
+    "privacyPlan": {
+      "description": "The privacy blocks (privacy-1).",
+      "type": "object",
+      "properties": {
+        "blocks": {
+          "type": "array",
+          "items": {
+            "description": "A block that hides a rectangle of the screen over [start, end) of a take.",
+            "type": "object",
+            "properties": {
+              "id": {"description": "p- and 8 hexadecimal digits.", "type": "string"},
+              "take": {"type": "string"},
+              "start": {"$ref": "#/$defs/sourceTime"},
+              "end": {"$ref": "#/$defs/sourceTime"},
+              "effect": {"type": "string", "enum": ["blur", "pixelate", "fill"]},
+              "strength": {"description": "0 to 1.", "type": "number"},
+              "color": {"description": "The fill's colour.", "$ref": "#/$defs/rgba"},
+              "rect": {"description": "Fractions of the recording.", "$ref": "#/$defs/rect"},
+              "keys": {
+                "description": "In order of t.",
+                "type": "array",
+                "items": {
+                  "description": "Where the rectangle is from t.",
+                  "type": "object",
+                  "properties": {"t": {"$ref": "#/$defs/sourceTime"}, "rect": {"$ref": "#/$defs/rect"}},
+                  "required": ["t", "rect"]
+                }
+              },
+              "origin": {"type": "string", "enum": ["manual", "email", "phone", "card", "secret", "face"]}
+            },
+            "required": ["id", "take", "start", "end", "effect", "strength", "color", "rect", "keys", "origin"]
+          }
+        }
+      },
+      "required": ["blocks"]
+    },
+    "keyOverlayPlan": {
+      "description": "The keys on screen (keyOverlay-1).",
+      "type": "object",
+      "properties": {
+        "mode": {"type": "string", "enum": ["off", "shortcuts", "all"]},
+        "position": {"type": "string", "enum": ["bottomCenter", "bottomLeading", "bottomTrailing", "top"]},
+        "size": {"description": "small, medium or large.", "type": "string", "enum": ["small", "medium", "large"]}
+      },
+      "required": ["mode", "position", "size"]
+    },
+    "annotationPlan": {
+      "description": "The annotations (annotation-1).",
+      "type": "object",
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/$defs/annotation"}}
+      },
+      "required": ["items"]
+    },
+    "annotation": {
+      "description": "A layer drawn over the video.",
+      "type": "object",
+      "properties": {
+        "id": {"description": "a- and 8 hexadecimal digits.", "type": "string"},
+        "anchor": {
+          "description": "Flat with its type: content (take, start, end: stuck to the recording), output (start, end, ns of output) or whole (the whole video).",
+          "type": "object",
+          "properties": {
+            "type": {"type": "string", "enum": ["content", "output", "whole"]},
+            "take": {"type": "string"},
+            "start": {"type": "integer"},
+            "end": {"type": "integer"}
+          },
+          "required": ["type"],
+          "allOf": [
+            {
+              "if": {"properties": {"type": {"const": "content"}}, "required": ["type"]},
+              "then": {
+                "required": ["take", "start", "end"],
+                "properties": {"start": {"minimum": 0}, "end": {"minimum": 0}}
+              }
+            },
+            {
+              "if": {"properties": {"type": {"const": "output"}}, "required": ["type"]},
+              "then": {"required": ["start", "end"]}
+            }
+          ]
+        },
+        "layer": {"description": "Higher is above.", "type": "integer"},
+        "kind": {
+          "description": "What it is, flat: its fields beside its type.",
+          "type": "object",
+          "properties": {
+            "type": {"type": "string", "enum": ["text", "arrow", "shape", "callout", "step", "image", "clip"]}
+          },
+          "required": ["type"],
+          "allOf": [
+            {
+              "if": {"properties": {"type": {"const": "text"}}, "required": ["type"]},
+              "then": {"$ref": "#/$defs/textAnnotation"}
+            },
+            {
+              "if": {"properties": {"type": {"const": "arrow"}}, "required": ["type"]},
+              "then": {"$ref": "#/$defs/arrowAnnotation"}
+            },
+            {
+              "if": {"properties": {"type": {"const": "shape"}}, "required": ["type"]},
+              "then": {"$ref": "#/$defs/shapeAnnotation"}
+            },
+            {
+              "if": {"properties": {"type": {"const": "callout"}}, "required": ["type"]},
+              "then": {
+                "required": ["text", "target"],
+                "properties": {"text": {"$ref": "#/$defs/textAnnotation"}, "target": {"$ref": "#/$defs/point"}}
+              }
+            },
+            {
+              "if": {"properties": {"type": {"const": "step"}}, "required": ["type"]},
+              "then": {"required": ["color"], "properties": {"color": {"$ref": "#/$defs/rgba"}}}
+            },
+            {
+              "if": {"properties": {"type": {"const": "image"}}, "required": ["type"]},
+              "then": {"$ref": "#/$defs/imageAnnotation"}
+            },
+            {
+              "if": {"properties": {"type": {"const": "clip"}}, "required": ["type"]},
+              "then": {"$ref": "#/$defs/clipAnnotation"}
+            }
+          ]
+        },
+        "rect": {
+          "description": "Stuck to the take, fractions of the stage's content; otherwise of the output frame.",
+          "$ref": "#/$defs/rect"
+        },
+        "rotation": {"description": "Degrees.", "type": "number"},
+        "opacity": {"description": "0 to 1.", "type": "number"},
+        "enter": {"type": "string", "enum": ["none", "fade", "pop", "draw"]},
+        "exit": {"type": "string", "enum": ["none", "fade"]}
+      },
+      "required": ["id", "anchor", "layer", "kind", "rect", "rotation", "opacity", "enter", "exit"]
+    },
+    "textAnnotation": {
+      "description": "A text.",
+      "type": "object",
+      "properties": {
+        "string": {"type": "string"},
+        "preset": {"type": "string", "enum": ["plain", "label", "lowerThird", "title"]},
+        "font": {"type": "string", "enum": ["system", "rounded", "serif", "mono"]},
+        "weight": {"type": "string", "enum": ["regular", "semibold", "bold", "heavy"]},
+        "size": {"description": "A fraction of its space's height.", "type": "number"},
+        "color": {"$ref": "#/$defs/rgba"},
+        "fill": {"$ref": "#/$defs/rgba"},
+        "align": {"type": "string", "enum": ["leading", "center", "trailing"]}
+      },
+      "required": ["string", "preset", "font", "weight", "size", "color", "align"]
+    },
+    "arrowAnnotation": {
+      "description": "An arrow.",
+      "type": "object",
+      "properties": {
+        "from": {"$ref": "#/$defs/point"},
+        "to": {"$ref": "#/$defs/point"},
+        "curve": {"description": "-1 to 1.", "type": "number"},
+        "color": {"$ref": "#/$defs/rgba"},
+        "width": {"type": "number"},
+        "head": {"type": "string", "enum": ["filled", "open", "none"]}
+      },
+      "required": ["from", "to", "curve", "color", "width", "head"]
+    },
+    "shapeAnnotation": {
+      "description": "A shape.",
+      "type": "object",
+      "properties": {
+        "shape": {"type": "string", "enum": ["rect", "roundedRect", "ellipse"]},
+        "stroke": {"$ref": "#/$defs/rgba"},
+        "width": {"type": "number"},
+        "fill": {"$ref": "#/$defs/rgba"}
+      },
+      "required": ["shape", "stroke", "width"]
+    },
+    "imageAnnotation": {
+      "description": "An image of the package.",
+      "type": "object",
+      "properties": {
+        "asset": {"description": "assets/<sha>.<ext>.", "type": "string"},
+        "fit": {"type": "string", "enum": ["fit", "fill"]},
+        "corner": {"type": "number"},
+        "shadow": {"type": "boolean"}
+      },
+      "required": ["asset", "fit", "corner", "shadow"]
+    },
+    "clipAnnotation": {
+      "description": "A clip of the package over the video (anchored to the output or the whole video).",
+      "type": "object",
+      "properties": {
+        "asset": {"description": "assets/<sha>.<ext>.", "type": "string"},
+        "start": {"description": "ns of the file.", "type": "integer"},
+        "end": {"description": "ns of the file.", "type": "integer"},
+        "volume": {"description": "dB.", "type": "number"},
+        "muted": {"type": "boolean"},
+        "corner": {"type": "number"},
+        "shadow": {"type": "boolean"}
+      },
+      "required": ["asset", "start", "end", "volume", "muted", "corner", "shadow"]
+    },
+    "musicPlan": {
+      "description": "The music (music-1, ducking-1).",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "description": "A piece of music over [start, end) of the output.",
+            "type": "object",
+            "properties": {
+              "id": {"description": "mu- and 8 hexadecimal digits.", "type": "string"},
+              "source": {"description": "library:music-1/<id>, or its path assets/…", "type": "string"},
+              "start": {"$ref": "#/$defs/outputTime"},
+              "end": {"$ref": "#/$defs/outputTime"},
+              "offset": {"description": "ns into the piece.", "type": "integer"},
+              "gain": {"description": "dB.", "type": "number"},
+              "fadeIn": {"description": "ns.", "type": "integer"},
+              "fadeOut": {"description": "ns.", "type": "integer"},
+              "loop": {"type": "boolean"}
+            },
+            "required": ["id", "source", "start", "end", "offset", "gain", "fadeIn", "fadeOut", "loop"]
+          }
+        },
+        "ducking": {
+          "description": "How the music gets quieter under a voice.",
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "amount": {"description": "dB.", "type": "number"},
+            "attack": {"description": "Seconds.", "type": "number"},
+            "release": {"description": "Seconds.", "type": "number"}
+          },
+          "required": ["enabled", "amount", "attack", "release"]
+        }
+      },
+      "required": ["items", "ducking"]
+    },
+    "markerPlan": {
+      "description": "The markers; a named one is a chapter (chapters-1).",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "description": "A marker at source time t of a take.",
+            "type": "object",
+            "properties": {
+              "id": {"description": "m- and 8 hexadecimal digits.", "type": "string"},
+              "take": {"type": "string"},
+              "t": {"$ref": "#/$defs/sourceTime"},
+              "name": {"description": "\"\" for none.", "type": "string"},
+              "origin": {"type": "string", "enum": ["recorded", "added"]},
+              "hidden": {"type": "boolean"}
+            },
+            "required": ["id", "take", "t", "name", "origin", "hidden"]
+          }
+        }
+      },
+      "required": ["items"]
+    },
+    "projectInfo": {
+      "description": "The project's title and summary. Their limits count characters as a person sees them (grapheme clusters, Swift's String.count), which JSON Schema's maxLength (code points) cannot say: a longer text is a problem of the document, not of its shape.",
+      "type": "object",
+      "properties": {
+        "title": {"description": "Up to 200 characters; \"\" for none.", "type": "string"},
+        "summary": {"description": "Up to 2000 characters, line breaks included; \"\" for none.", "type": "string"}
+      },
+      "required": ["title", "summary"]
+    }
+  }
+}

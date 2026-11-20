@@ -1,8 +1,128 @@
 # Formato de proyecto de Toma
 
-**Versión 5 (`formatVersion` hasta 5, los paquetes nuevos en 3; documento de edición 5), inestable hasta la fase 4.** Los nombres y campos todavía pueden cambiar. A partir del primer release público, cada cambio de formato viene con su migración y sus pruebas de compatibilidad. Los lectores de esta versión leen también los paquetes de las versiones 1 a 4 y los documentos 1 a 4, que se quedan en su versión hasta que el usuario los edita (ver [Cambios de la versión 3](#cambios-de-la-versión-3) y [Cambios del documento 5](#cambios-del-documento-5)).
+**Formato 1.0** (manifiesto 1–5, documento 1–5): estable. Este documento es la referencia del formato: qué guarda un paquete `.toma`, cómo se escribe y cómo se lee, con sus [esquemas JSON y sus ejemplos](#esquemas-y-ejemplos). Los paquetes nuevos se crean con `formatVersion: 3` y suben a 4 o a 5 solo cuando usan lo que esas versiones agregan; el documento de edición que se escribe hoy es el 5. Los lectores de esta versión leen también los paquetes de las versiones 1 a 4 y los documentos 1 a 4, que se quedan en su versión hasta que el usuario los edita (ver [Cambios de la versión 3](#cambios-de-la-versión-3) y [Cambios del documento 5](#cambios-del-documento-5)).
 
-El formato es público para que cualquier herramienta pueda leer, verificar o recuperar una grabación sin la app. Las reglas de este documento son las que sigue el código de `Packages/RecorderKit/Sources/ProjectFormat`.
+El formato es público para que cualquier herramienta pueda leer, verificar o recuperar una grabación sin la app. Las reglas de este documento son las que sigue el código de `Packages/RecorderKit/Sources/ProjectFormat`, y la API de proyectos (`ProjectAPI`, la línea de comandos `toma` y su servidor MCP) edita con ellas y con los mismos comandos que la app (ver [La API y sus errores](#la-api-y-sus-errores)).
+
+## Estabilidad
+
+Desde el formato 1.0, el formato cambia solo de estas maneras:
+
+- **Los cambios son aditivos y suben un número.** Lo nuevo del documento de edición es una versión nueva de `documentVersion`, con su migración desde la anterior (`DocumentMigration`) y su sección en este documento. Lo nuevo del paquete que una app anterior no sabría leer sube `formatVersion`. Un proyecto viejo se queda en su versión hasta que el usuario lo edita (en el manifiesto, hasta que se graba en él algo que su versión no define), y abrirlo, reproducirlo o exportarlo no escribe nada.
+- **Un lector ignora las claves y los eventos que no conoce.** Una clave nueva de un objeto, una línea de `events.jsonl` de un `type` nuevo o un archivo nuevo del paquete no rompen a un lector viejo, así que pueden llegar sin subir ninguna versión (como el evento `focus` en las fases 4 y 5). Un **valor** nuevo de una lista cerrada (un `type`, un `kind`, cualquier `enum` de los esquemas) sí sube la versión del archivo que lo lleva, porque un lector lo rechaza: el documento lo trata como dañado (ver [Cambios del documento 3](#cambios-del-documento-3)). La única excepción es el motivo de cierre `rotated`, que nunca está en un paquete de la biblioteca (ver [Cambios del documento 5](#cambios-del-documento-5)).
+- **Nada se borra ni se renombra dentro de una versión mayor**: ni una clave, ni un valor, ni un tipo de evento, ni un comando o un código de error de la API. Hacerlo es el formato 2.0, que un lector de 1.x rechaza como más nuevo (`newerVersion`), nunca como dañado.
+- **Los ids de algoritmo son contratos.** Lo que tiene un aspecto definido en código se guarda con su versión en el id (`autoZoom-1`, `ripple-1`, `aurora-1`, `captionStyle-1`, `cameraLayout-1`, `music-1`…): un id da siempre el mismo resultado, cuadro por cuadro y muestra por muestra. Otro resultado es otro id, y el código conserva los de antes. Los resortes y las medidas se guardan como números por lo mismo: una versión nueva de la app no cambia lo que un proyecto ya guardó.
+- **Las reglas de escritura no cambian**: JSON UTF-8 con las claves en orden alfabético y sin escapar `/`; los campos opcionales se omiten, nunca se escriben como `null`; los números enteros, sin decimales; las fechas, en ISO 8601 en segundos enteros; los tiempos de la fuente, en `HostTime` (ns, enteros), y los de salida, en ns enteros.
+- **Un texto con límite se cuenta en caracteres como los ve una persona** (grupos de grafemas, `String.count` en Swift): un emoji de varios escalares o una letra con su acento combinado son un carácter. Así se cuentan el título (200) y el resumen (2000) del proyecto y el nombre de un marcador (100). Por eso los esquemas no usan `maxLength`, que cuenta puntos de código y rechazaría un título que la app acepta: el límite va en la descripción del campo y lo comprueban las reglas del documento (`DocumentRules`); los comandos de la API recortan un texto más largo.
+- **Qué cubre el formato 1.0**: `manifest.json`, `events.jsonl`, `edit.json` y `edit-log.jsonl`, los demás archivos del paquete que describe este documento, y los comandos y los códigos de error de la API. Lo que vive fuera del paquete (las cachés, la biblioteca, los estilos guardados) y las interfaces del código no son parte del formato.
+
+## Versiones
+
+El manifiesto (`formatVersion`):
+
+| Versión | Desde | Qué agrega | Dónde |
+|---|---|---|---|
+| 1 | fase 0 | Las pistas de pantalla (`display`) y de micrófono (`microphone`) en segmentos; `events.jsonl` con el cursor, los clics, la geometría de las pantallas y el ciclo de la grabación; `recording.lock` y `.reserve` | [`manifest.json`](#manifestjson), [`events.jsonl`](#eventsjsonl) |
+| 2 | fase 1a | Las pistas `window`, `camera` y `systemAudio`; los campos nuevos de `source`; el `cameraStyle` de la toma; `wallpapers/`; los eventos `windowGeometry` y `cameraStyle` | [Cambios de la versión 2](#cambios-de-la-versión-2) |
+| 3 | hito 1b | `projectID` y `upgradedFrom`; los archivos del editor (`edit.json`, `edit-log.jsonl`, `edit.lock`, `assets/`); `cursors/` y los eventos `cursorImage`, `scroll` y `keyActivity`. Los paquetes nuevos se crean en esta versión | [Cambios de la versión 3](#cambios-de-la-versión-3) |
+| 4 | fase 2 | Las pistas `device` y `deviceAudio` (un iPhone o un iPad por cable) y el evento `keyPress`; solo en los paquetes que los usan | [Cambios de la versión 4](#cambios-de-la-versión-4) |
+| 5 | fase 3 | Dos tomas o más en un paquete; solo en los paquetes que las tienen | [Cambios de la versión 5](#cambios-de-la-versión-5) |
+
+Sin subir el manifiesto llegaron las pistas de audio de una app (`appBundleID`, `appName`), los clips, el audio y el guion (`script.txt`) de la fase 3, y el evento `focus` y el motivo de cierre `rotated` de las fases 4 y 5.
+
+El documento de edición (`documentVersion`), que no cambia la versión del paquete:
+
+| Versión | Desde | Qué agrega | Dónde |
+|---|---|---|---|
+| 1 | hito 1b | La secuencia de tramos con su velocidad, las pantallas, el escenario (fondo, margen, esquinas, sombra, marco), el cursor, el zoom con sus bloques, los estilos de la cámara y el volumen de cada pista | [El documento de edición: `edit.json`](#el-documento-de-edición-editjson) |
+| 2 | hito 1c | Los layouts de la cámara (sus bloques y Dividida) y su aspecto: espejo, borde, sombra y `sizeReference` | [Cambios del documento 2](#cambios-del-documento-2) |
+| 3 | fase 2 | La transcripción, los subtítulos, los bloques de privacidad, las teclas en pantalla, el formato como la grabación, el marco de dispositivo, Seguir el cursor, el fondo, el encuadre, el color y la sincronía de la cámara, la limpieza de las pistas y Normalizar | [Cambios del documento 3](#cambios-del-documento-3) |
+| 4 | fase 3 | Las anotaciones, la música, los marcadores, los clips con contenido (cuadro congelado, placa, clip importado), el corte J o L del audio, los modos del zoom con su lupa y los tramos de volumen | [Cambios del documento 4](#cambios-del-documento-4) |
+| 5 | fases 4 y 5 | El título y el resumen del proyecto (`info`) y el zoom automático que sigue el foco del teclado (`zoom.auto.followsFocus`) | [Cambios del documento 5](#cambios-del-documento-5) |
+
+## Esquemas y ejemplos
+
+Los esquemas JSON (draft 2020-12) de [`schema/`](schema/) describen la forma de cada archivo; este documento, lo que significa cada campo y las reglas que un esquema no puede decir (el orden de la secuencia, los rangos de cada toma, los ids que no se repiten, las rutas del paquete).
+
+| Esquema | Qué valida |
+|---|---|
+| [`schema/manifest.schema.json`](schema/manifest.schema.json) | `manifest.json`, de las versiones 1 a 5 |
+| [`schema/events.schema.json`](schema/events.schema.json) | Una línea de `events.jsonl` |
+| [`schema/edit-document.schema.json`](schema/edit-document.schema.json) | `edit.json` en el documento 5, y el documento del `create` de `edit-log.jsonl`. Uno más viejo se valida migrado, como lo lee la app |
+| [`schema/edit-command.schema.json`](schema/edit-command.schema.json) | Un comando de la API (ver [Los comandos](#los-comandos)). Se escribe desde el código (`CommandSchema.document`), y el servidor MCP da la misma forma sin `$ref` (`CommandSchema.inline`) |
+
+- **Qué usan.** `$defs` y `$ref`; `type`, `enum`, `const`, `properties`, `required` e `items`; `minimum`, `maximum`, `minItems` y `maxItems`; `additionalProperties` solo como el esquema de los valores de un mapa (`audio.tracks`, `camera.initial`); `allOf` con `if` y `then` para los objetos con `type`, que dicen qué campos lleva cada uno, y `oneOf` en los comandos. Nunca `additionalProperties: false`: un lector ignora las claves que no conoce.
+- **`required` es lo que exige el lector de Toma.** Un campo que la app escribe siempre pero lee con un valor por defecto (`style.reframe`, `zoom.auto.followsFocus`) no es obligatorio. Las listas cerradas son las de esta versión. Un `type` de evento que el esquema no nombra pasa, porque es de una versión posterior y un lector lo salta.
+- **Lo que un esquema no dice**: que una fecha es ISO 8601, la forma de un id (`c-` y 8 hexadecimales…) o de una ruta, y los límites de los textos (ver [Estabilidad](#estabilidad)).
+- **Cómo se comprueban** (`FormatSchemaTests`, en `ProjectAPITests`): los esquemas aceptan lo que escribe Toma (los documentos de la dorada 4 con sus manifiestos y eventos, el documento que deja cada comando de la API, una línea de cada evento y las de este documento) y describen cada clave que escribe; y cada cambio chico de esos archivos (sacar un campo, otro texto, un entero con decimales o negativo, otro tipo, una lista más corta) lo acepta el esquema exactamente cuando lo lee Toma. Un validador mínimo, escrito en las pruebas (`SchemaValidator`), hace las dos cosas.
+
+Los ejemplos de [`examples/`](examples/) son un paquete mínimo por versión del documento, de un proyecto que creó Toma 0.2.0 (hito 1b) con una toma de una pantalla y un micrófono: `manifest.json` (versión 3), `takes/take-001/events.jsonl` y `edit.json` en esa versión del documento. No tienen video ni registro (`edit-log.jsonl`): se leen como archivos, nunca se abren como proyectos.
+
+| Ejemplo | Su `edit.json` |
+|---|---|
+| [`examples/document-1/`](examples/document-1/) | El documento legado de la toma, como lo escribe el hito 1b |
+| [`examples/document-2/`](examples/document-2/) | El mismo, con los campos de la cámara del hito 1c en sus valores legados |
+| [`examples/document-3/`](examples/document-3/) | Más una transcripción y sus subtítulos |
+| [`examples/document-4/`](examples/document-4/) | Más el marcador grabado, con nombre |
+| [`examples/document-5/`](examples/document-5/) | Más el título, el resumen y el zoom automático que sigue el foco, con los eventos `focus` de la toma |
+
+El 5 es lo que escribe el código de hoy (`version5ExampleIsWhatTheCodeWrites`; con `TOMA_RECORD_FORMAT_EXAMPLES=1` se vuelve a escribir). Los de antes son lo que escribieron las apps de su versión y no cambian.
+
+## La API y sus errores
+
+`ProjectAPI` abre un proyecto para leerlo (sin escribir nada) o para editarlo (con `edit.lock`, como la app), lo cambia con los mismos comandos que los gestos de la app, cada uno un paso que se deshace, y lo exporta como la app. La usan la línea de comandos `toma`, su servidor MCP (`toma mcp`) y la app misma a través de su socket de control, cuando la línea de comandos le pide un cambio de un proyecto que la app tiene abierto. Cómo usarlos: [`docs/automation.md`](../automation.md).
+
+### Los comandos
+
+Un comando es un objeto JSON con su nombre en `command` (su esquema: [`schema/edit-command.schema.json`](schema/edit-command.schema.json)). Los tiempos son segundos de la salida tal como se reproduce ahora (`from` < `to`, dentro de `[0, duración]`). Una clave que el comando no conoce, o que le falta, es `invalidCommand`; una clave con `null` cuenta como ausente. Un comando que no cambia nada (un ajuste que ya tiene ese valor) no es un error: responde `changed: false`. Una lista de comandos se aplica en orden, cada uno su paso, y para en el primer error; lo hecho antes queda.
+
+| Comando | Claves | Qué hace |
+|---|---|---|
+| `cut` | `from`, `to` | Borra ese tramo de la salida |
+| `trimStart`, `trimEnd` | `to`; `from` | Borra desde el comienzo hasta `to`; desde `from` hasta el final |
+| `setSpeed` | `from`, `to`, `speed` | Ese tramo a `speed` (de 0,25 a 16), cortado en sus dos bordes |
+| `removeFillers` | — | Corta las muletillas de la transcripción |
+| `shortenPauses` | `longerThan` | Acorta las pausas entre palabras de más de `longerThan` s |
+| `addZoom` | `from`, `to`, `depth`?, `focus`? | Un bloque de zoom; `depth` de 1,25 a 4; `focus` `"follow"` o `{"x", "y"}` en fracciones de la pantalla |
+| `removeZoom` | `id` | Borra un bloque de zoom |
+| `setAutoZoom` | `enabled`, `followsFocus`? | Prende o apaga el zoom automático y si sigue el foco; vuelve a planear |
+| `addMarker` | `at`, `name` | Un marcador; uno con nombre es un capítulo |
+| `renameMarker`, `removeMarker` | `id`, `name`; `id` | Nombra o borra un marcador (uno grabado se esconde) |
+| `setAspect` | `aspect` | La forma de la salida (`16:9`, `9:16`, `1:1`, `4:5`, `4:3`, `3:4`, `auto`) |
+| `setBackground` | `background` | El fondo, como el `style.background` del documento; un `image` con la ruta absoluta de una imagen de afuera la copia antes a `assets/` |
+| `applyStyle` | `id` | Un estilo: `toma`, el de Toma, o el id de uno guardado en la app |
+| `setCameraLayout` | `layout`, `side`? | El layout de la cámara del proyecto, y el lado de Dividida (`start`, `end`) |
+| `addTitleCard` | `at`, `title`, `subtitle`? | Una placa en `"start"`, en `"end"` o en esos segundos |
+| `addText` | `from`, `to`, `text`, `x`, `y` | Un texto sobre el video, centrado en (`x`, `y`), fracciones del cuadro |
+| `addMusic`, `removeMusic` | `theme`, `volume`?; — | Un tema de la biblioteca de Toma desde el comienzo de la salida (`volume` en dB, de −120 a 6; −14 sin él); saca toda la música |
+| `setTitle`, `setSummary` | `title`; `summary` | El título o el resumen del proyecto; `""` lo saca |
+| `transcribe` | `language`?, `replace`? | Transcribe las tomas en la Mac, sin bajar ningún modelo; `replace` acepta perder las correcciones |
+
+### Los códigos de error
+
+Lo que la API rechaza tiene un código estable y un mensaje en inglés para leer: en JSON, `{"error": {"code": "…", "message": "…"}}`. Un código nunca se renombra ni se borra.
+
+| Código | Cuándo |
+|---|---|
+| `notAProject` | La ruta no es un paquete: no es una carpeta `.toma` con su `manifest.json`, el paquete o su manifiesto son un enlace, tiene `..`, o el manifiesto no se puede leer |
+| `newerVersion` | El paquete o su documento de edición son de una versión más nueva que la que lee esta versión |
+| `locked` | Otro proceso (la app) edita el proyecto: tiene su `edit.lock`, o reabrió el paquete y descartó el paso |
+| `invalidCommand` | El comando no es de la API, tiene una clave que no conoce o le falta una que necesita (el mensaje la nombra) |
+| `outOfRange` | Un tiempo, una velocidad, una profundidad o un punto fuera de lo que toma el comando: fuera de `[0, duración]`, `from` no menor que `to`, un número no finito |
+| `refused` | El comando no se puede hacer en el proyecto como está, y el mensaje dice por qué (un marcador o un bloque que no existe, un proyecto sin transcripción, un estilo que no está); también un comando a un proyecto abierto para leer, deshacer sin nada que deshacer, o un cambio que no se pudo guardar |
+| `exportFailed` | El export no terminó |
+| `notAvailable` | Lo que el comando necesita no está en esta Mac (el motor o el modelo de la transcripción) o no se puede hacer por ese camino |
+
+Los códigos de salida de `toma`:
+
+| Código | Cuándo |
+|---|---|
+| 0 | Bien |
+| 1 | Cualquier otro error |
+| 2 | Uso: argumentos que no son los del subcomando, o `invalidCommand` |
+| 3 | `locked`: otro proceso edita el proyecto y el cambio no se pudo hacer a través de la app |
+
+Con `--json`, la salida estándar tiene exactamente un documento JSON, el resultado o el error; el progreso va siempre a la salida de errores.
 
 ## El paquete
 
