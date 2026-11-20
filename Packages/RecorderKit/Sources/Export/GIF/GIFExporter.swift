@@ -41,11 +41,13 @@ public struct GIFSettings: Equatable, Sendable {
     /// rounded to an even number of pixels (1080 in 9:16 is 608 × 1080); a square's sides are both `longSide`.
     ///
     /// The other aspects: 4:5, 4:3 and 3:4 have `longSide` on the longer side and the other in proportion; `auto` is the
-    /// same from `contentRatio` (16:9 without it).
+    /// same from `contentRatio` (16:9 without it), of the take of the document's first clip (phase 3 design §9: the
+    /// project's own without clips; none for a take the package does not have).
     public func outputSize(project: LoadedProject, document: EditDocument) -> SIMD2<Int> {
-        outputSize(
+        let first: LoadedProject? = if let clip = document.sequence.first { project.focused(on: clip.take) } else { project }
+        return outputSize(
             aspect: document.aspect,
-            contentRatio: StageLayout.contentRatio(take: project.take, document: document, events: project.events))
+            contentRatio: first.flatMap { StageLayout.contentRatio(take: $0.take, document: document, events: $0.events) })
     }
 
     public func outputSize(aspect: Aspect, contentRatio: Double? = nil) -> SIMD2<Int> {

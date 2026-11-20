@@ -358,8 +358,9 @@ struct DecodeAhead {
     /// The videos of the frames looked at and not drawn yet, by frame, in order.
     private var looked: [(index: Int, videos: [DecodedKey])] = []
     private var lookedThrough: Int?
-    /// The last frame of each track scheduled, as it came or early.
-    private var latest: [String: Int] = [:]
+    /// The last frame of each track scheduled, as it came or early, by take and track (`DecodedKey.track`): another take's
+    /// track of the same id is another track, which comes at the border between the takes.
+    private var latest: [TrackKey: Int] = [:]
     /// The videos scheduled before their turn, with their frame: not scheduled again when it comes.
     private var early: [(index: Int, key: DecodedKey)] = []
 
@@ -407,7 +408,7 @@ struct DecodeAhead {
                 } else {
                     scheduled.append(key)
                 }
-                latest[key.trackID] = max(latest[key.trackID] ?? frame, frame)
+                latest[key.track] = max(latest[key.track] ?? frame, frame)
             }
             scheduledThrough = frame
             next += 1
@@ -415,10 +416,10 @@ struct DecodeAhead {
         // A track with nothing scheduled from `index` on that a frame ahead shows: that frame, now.
         let from = scheduledThrough ?? index + first - 1
         for entry in looked where entry.index > from {
-            for key in entry.videos where (latest[key.trackID] ?? .min) < index {
+            for key in entry.videos where (latest[key.track] ?? .min) < index {
                 scheduled.append(key)
                 early.append((entry.index, key))
-                latest[key.trackID] = entry.index
+                latest[key.track] = entry.index
             }
         }
         return scheduled

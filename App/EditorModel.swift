@@ -531,7 +531,7 @@ final class EditorModel {
         engine.onPresented = { _, _ in check.run() }
         // With the paths the renderer's scene was made with: the first edit that keeps them builds none.
         builder = RevisionBuilder(
-            renderer: renderer, take: project.take, events: project.events, paths: renderer.scene.paths
+            renderer: renderer, project: project, paths: renderer.scene.sequencePaths
         ) { [weak self] built in
             self?.revisionBuilt(built)
         }
