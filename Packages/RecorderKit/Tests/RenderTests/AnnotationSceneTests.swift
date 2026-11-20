@@ -265,6 +265,13 @@ private func onTheLayer(_ rect: Rect, _ layer: ScreenLayer) -> Rect {
     let layers = [2.0, 2.6, 3.3, 3.99].map { still.frame(at: $0).contentAnnotations }
     #expect(layers[0].map(\.id) == ["a-00000001"] && layers[0].first?.opacity == 1)
     #expect(layers.allSatisfy { $0 == layers[0] }, "\(layers)")
+
+    // A frozen frame put at the end of a run of the take, its point the run's end: past the annotation's output range,
+    // but its point inside its source range, so it is on it (plan 3a decision 3).
+    var atTheEnd = document(take, [], [annotation(1, stuck(1, 3), square)])
+    atTheEnd.sequence = [clip(1, 0, 2.5), clip(2, 2.5, 2.5, content: .freeze(duration: 2_000_000_000))]
+    let end = FrameEvaluator(take: take, events: [], document: atTheEnd, outputSize: [1280, 720])
+    #expect([2.5, 3.5, 4.4].allSatisfy { end.frame(at: $0).contentAnnotations.map(\.id) == ["a-00000001"] })
 }
 
 @Test func outputAndWholeAnchors() throws {

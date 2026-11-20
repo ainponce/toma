@@ -72,10 +72,11 @@ public struct AnnotationLayer: Equatable, Sendable {
 /// - Two groups: those stuck to the take's recording (anchored to `take`), and those of the output and of the whole video
 ///   (of any take's scene). Each in its layers' order: by `layer`, then by the order of `document.annotations.items`.
 /// - When: `AnnotationTiming.state` at the output time, so one stuck to the recording only where the output shows its
-///   source range of the take (never in a cut, another take's clip, a title card or an imported clip; in a frozen frame of
-///   that range, as at the frame's point), with its entrance and its exit. A clip is shown in its anchor cut to the length
-///   of its file (`end − start`), and its file's time is `start + (τ −` where its anchor so cut starts`)`; anchored to the
-///   take, it is never shown.
+///   source range of the take (never in a cut, another take's clip, a title card or an imported clip; in a frozen frame
+///   whose point is in that range, also one at an edge of its output range, as at the frame's point), with its entrance
+///   and its exit. A clip is shown in its anchor cut to the length of its file (`end − start`), and its file's time at
+///   output time `τ` is `start + (τ − c)`, with `c` where its anchor so cut starts; anchored to the take, it is never
+///   shown.
 /// - Where: stuck to the recording, in the space where the whole content of the frame's screen would be drawn
 ///   (`AnnotationGeometry.contentSpace`: what the screen shows at that instant, `ScreenGeometry.shown(at:)`, the Area in
 ///   Area mode, carried through the crop the layer draws onto its rect), so it stays on the same pixel of the content with
@@ -133,7 +134,9 @@ struct AnnotationScene: Sendable {
                 timed.anchor = anchor
             }
             if case let .content(anchorTake, _, _) = annotation.anchor, anchorTake != take.id { continue }
-            guard let range = AnnotationTiming.outputRange(of: timed, document: document, timeMap: timeMap), !range.isEmpty
+            // One of the take with an empty range can still be on a frozen frame of its source range.
+            guard let range = AnnotationTiming.outputRange(of: timed, document: document, timeMap: timeMap),
+                !range.isEmpty || annotation.anchor.isContent
             else { continue }
             var number: Int?
             if case .step = annotation.kind {
@@ -173,8 +176,10 @@ struct AnnotationScene: Sendable {
         let shown = geometry.shown(at: t)?.crop ?? screen.crop
         guard let space = AnnotationGeometry.contentSpace(contentCrop: shown, layerCrop: screen.crop, drawnRect: screen.rect)
         else { return [] }
+        // A frozen frame of the take can show one at an edge of its range, or past it (`AnnotationTiming.state`).
+        let frozen = timeMap.contentOffset(atOutput: output) != nil
         return contentItems.compactMap { item in
-            guard item.range.contains(output),
+            guard frozen || item.range.contains(output),
                 let state = AnnotationTiming.state(of: item.timed, atOutput: output, document: document, timeMap: timeMap),
                 let placed = Self.placed(item.annotation, number: item.number, fileTime: 0, space: space)
             else { return nil }
@@ -261,5 +266,13 @@ struct AnnotationScene: Sendable {
         case .whole:
             return .output(start: 0, end: min(duration, length))
         }
+    }
+}
+
+extension AnnotationAnchor {
+    /// Stuck to a take's recording.
+    fileprivate var isContent: Bool {
+        if case .content = self { return true }
+        return false
     }
 }
