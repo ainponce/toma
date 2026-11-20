@@ -167,8 +167,9 @@ public final class FrameRenderer: @unchecked Sendable {
     /// are listed before a frame is drawn. After drawing every frame of the timeline in order (an export), it lists every
     /// such span of the output. A scene of several takes lists those of each take's tracks in that take's clips.
     public var missingVideo: [MissingVideo] {
-        let timeMap = scene.timeMap
-        return scene.takeScenesInOrder.flatMap { take, scene -> [MissingVideo] in
+        // One scene for all of it: `setScene(_:)` from another thread meanwhile never mixes two revisions.
+        let current = scene, timeMap = current.timeMap
+        return current.takeScenesInOrder.flatMap { take, scene -> [MissingVideo] in
             let takeID = scene.takeID, shown = scene.screenRanges
             return scene.videoTrackIDs
                 .compactMap { reader(for: TrackKey(take: take, track: $0)) }
