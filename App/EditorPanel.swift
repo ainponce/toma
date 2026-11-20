@@ -43,6 +43,7 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
         case .zooms?: .zoom
         case .cameraChange?, .layoutBlock?: .camera
         case .privacyBlocks?: .privacy
+        case .gainRange?: .audio
         case .clips?, .screenChange?, nil: nil
         }
     }

@@ -100,8 +100,86 @@ final class TimelineAccessibility {
                 Self.time(change.output.lowerBound))
             add(change.id, .camera, change.output, label: label, actions: [Action(.delete)])
         }
+        // The stretches at another volume of each audio row and the cuts of the sound moved off the picture's (3c): a
+        // stretch reads its volume and its times, and is selected and deleted; a cut says where the sound went, on the
+        // first audio row, and is put back.
+        func addAudio(
+            _ key: String, frame drawn: CGRect?, label: String, selected: Bool, press: @escaping @MainActor @Sendable () -> Bool,
+            actions: [(name: String, run: @MainActor @Sendable () -> Void)]
+        ) {
+            guard let drawn else { return }
+            let frame = drawn.offsetBy(dx: TimelineLayout.headerWidth, dy: 0).intersection(area)
+            guard !frame.isNull, !frame.isEmpty else { return }
+            let element = elements[key] ?? TimelineItemElement(parent: view)
+            element.setAccessibilityFrameInParentSpace(frame)
+            element.setAccessibilityLabel(label)
+            element.setAccessibilitySelected(selected)
+            element.press = press
+            element.setAccessibilityCustomActions(model?.canEdit == true ? actions.map { action in
+                NSAccessibilityCustomAction(name: action.name) {
+                    MainActor.assumeIsolated { action.run() }
+                    return true
+                }
+            } : [])
+            kept[key] = element
+            children.append(element)
+        }
+        let audioRows = geometry.rows.filter { if case .audio = $0.track { true } else { false } }
+        for row in audioRows {
+            guard case let .audio(track) = row.track else { continue }
+            let top = TimelineLayout.rulerHeight + row.top - geometry.verticalOffset + 2
+            for range in content.audioRanges[track] ?? [] {
+                let label = String(
+                    format: String(
+                        localized: "Range Volume, %1$@, from %2$@ to %3$@",
+                        comment: "VoiceOver: a stretch at another volume of an audio row of the timeline, its volume, start and end"),
+                    TimelineAudioItems.gainText(range.gain), Self.time(range.output.lowerBound), Self.time(range.output.upperBound))
+                let id = range.id
+                addAudio(
+                    "range \(track) \(id) \(range.output.lowerBound)", frame: geometry.itemRect(range.output, top: top, height: row.height - 4, gap: 0),
+                    label: label, selected: view.selected.contains(id),
+                    press: { [weak self] in
+                        self?.model?.selection = .gainRange(id)
+                        return self != nil
+                    },
+                    actions: [(String(localized: "Delete Range", comment: "The menu of a stretch at another volume of an audio row"), { @MainActor @Sendable [weak self] in
+                        self?.model?.deleteGainRange(track: track, id: id)
+                    })])
+            }
+        }
+        if let row = audioRows.first {
+            let top = TimelineLayout.rulerHeight + row.top - geometry.verticalOffset + 2
+            for cut in content.audioCuts {
+                guard let label = Self.cutLabel(cut.audio - cut.picture) else { continue }
+                let x = geometry.x(cut.audio), clip = cut.clip
+                addAudio(
+                    "cut \(clip)", frame: CGRect(x: x - 6, y: top, width: 12, height: row.height - 4), label: label, selected: false,
+                    press: { false },
+                    actions: [(String(localized: "Reset Audio Cut", comment: "The menu of an audio row: the cut of the sound back to the picture's"), { @MainActor @Sendable [weak self] in
+                        self?.model?.setAudioShift(clip: clip, to: 0)
+                    })])
+            }
+        }
         elements = kept
         return children
+    }
+
+    /// What VoiceOver says of a cut of the sound moved `shift` ns of output off the picture's: "Audio cut moved 0,30 s
+    /// earlier" (a J cut) or "… later" (an L cut); `nil` at the picture's.
+    static func cutLabel(_ shift: Int64) -> String? {
+        let amount = AudioRowText.shift(shift, locale: .current)
+        switch AudioRowText.cut(shift) {
+        case .j?:
+            return String(
+                format: String(localized: "Audio cut moved %@ earlier", comment: "VoiceOver: a J cut of the timeline, how much sooner the next clip is heard"),
+                amount)
+        case .l?:
+            return String(
+                format: String(localized: "Audio cut moved %@ later", comment: "VoiceOver: an L cut of the timeline, how much longer the clip before is heard"),
+                amount)
+        case nil:
+            return nil
+        }
     }
 
     /// An output time as VoiceOver reads it: whole seconds, `0:42`.

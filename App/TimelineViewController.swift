@@ -48,6 +48,7 @@ final class TimelineViewController: NSViewController {
         timeline.onScrub = { [weak model] τ in model?.scrub(toSeconds: Double(τ) / 1e9) }
         timeline.onScrubEnd = { [weak model] in model?.endScrub() }
         timeline.onMute = { [weak self] track, muted in self?.setMuted(track, muted) }
+        timeline.onSolo = { [weak model] row in model?.toggleSolo(row) }
         timeline.restoredScaleAndScroll = { [weak model] in (model?.timelineScale, model?.timelineOffset ?? 0) }
         timeline.onScaleAndScrollChange = { [weak model] scale, offset in
             model?.timelineScale = scale
@@ -126,6 +127,7 @@ final class TimelineViewController: NSViewController {
         timeline.canEdit = model.canEdit
         timeline.marks = model.timelineMarks
         timeline.selected = Self.selectedIDs(model.selection)
+        timeline.audioSolo = model.audioSolo
         guard model.state == .ready, let document = model.document, let project = model.overlayProject else {
             timeline.showNothing()
             return
@@ -136,6 +138,8 @@ final class TimelineViewController: NSViewController {
         }
         timeline.show(take: project.take, takes: project.takeRecords(shownBy: document), markers: model.markerTimes,
             document: document, missing: missing, contentRatio: model.contentRatio(of: document))
+        // What the cut of the sound is held to in each take the sequence shows (3c), read before a drag needs it.
+        model.warmAudioTakeBounds()
     }
 
     /// The thumbnails' cache, and the waveform of each audio track worked out off the main thread (decoded by the cache on
@@ -174,6 +178,7 @@ final class TimelineViewController: NSViewController {
         case let .clips(ids)?, let .zooms(ids)?: ids
         case let .cameraChange(id)?, let .screenChange(id)?, let .layoutBlock(id)?: [id]
         case let .privacyBlocks(ids)?: ids
+        case let .gainRange(id)?: [id]
         case nil: []
         }
     }

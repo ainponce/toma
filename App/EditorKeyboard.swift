@@ -248,6 +248,8 @@ extension EditorModel {
             selection = .privacyBlocks(Set(shown.map(\.id)))
         case .cameraChange?, .layoutBlock?, .screenChange?:
             return false
+        case .gainRange?:
+            return false
         }
         return true
     }
@@ -317,6 +319,8 @@ extension EditorModel {
             guard let id = ids.first, let range = TimelinePrivacyItems.range(of: id, in: document) else { return false }
             step = PrivacyCommands.move(document, id: id, toOutputStart: range.lowerBound + delta)
         case .privacyBlocks?:
+            step = nil
+        case .gainRange?:
             step = nil
         case .zooms?, .clips?, nil:
             step = nil
