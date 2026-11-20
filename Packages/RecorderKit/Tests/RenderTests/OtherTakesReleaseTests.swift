@@ -66,6 +66,15 @@ private func export(_ renderer: FrameRenderer, frames: ClosedRange<Int>) async t
     }
 }
 
+/// The blue of the pixel at the centre of a BGRA frame.
+private func centreBlue(of pixelBuffer: CVPixelBuffer) -> UInt8 {
+    CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+    let x = CVPixelBufferGetWidth(pixelBuffer) / 2, y = CVPixelBufferGetHeight(pixelBuffer) / 2
+    return CVPixelBufferGetBaseAddress(pixelBuffer)!
+        .advanced(by: y * CVPixelBufferGetBytesPerRow(pixelBuffer) + x * 4).assumingMemoryBound(to: UInt8.self)[0]
+}
+
 private final class ReleasePixelBuffer: @unchecked Sendable {
     let pixelBuffer: CVPixelBuffer
     init(_ pixelBuffer: CVPixelBuffer) { self.pixelBuffer = pixelBuffer }
@@ -76,6 +85,7 @@ private final class ReleaseDrawnFrames: Sendable {
     private let frames = Mutex<[PreviewEngine.DrawnFrame]>([])
     func append(_ frame: PreviewEngine.DrawnFrame) { frames.withLock { $0.append(frame) } }
     var count: Int { frames.withLock { $0.count } }
+    var last: PreviewEngine.DrawnFrame? { frames.withLock { $0.last } }
 }
 
 @Suite struct OtherTakesReleaseTests {
@@ -152,6 +162,49 @@ private final class ReleaseDrawnFrames: Sendable {
                 let reader = try #require(renderer.reader(for: TrackKey(take: take, track: "display-1")))
                 #expect(await eventually { !reader.isOpen }, "\(take)")
             }
+        }
+    }
+
+    /// Playing that starts in a take the preview has not read yet, or jumps back into one it let go (A of A|B, the project
+    /// focused on B): the first frame drawn there shows that take's key frame at or before the instant, as scrubbing does,
+    /// not a frame without its screen, while its exact frames are decoded.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
+    func playingIntoATakeLetGoShowsItsKeyFrame() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await MultiTakeFixtures.twoTakes(in: dir)
+            #expect(project.take.id == "take-002")
+            let document = MultiTakeFixtures.sequence(of: project, [("take-001", 0, 2), ("take-002", 0.5, 2.5)])
+            let renderer = try FrameRenderer(project: project, document: document, outputSize: [320, 180], frameRate: rate)
+            let layer = CAMetalLayer()
+            CATransaction.begin()
+            layer.drawableSize = CGSize(width: 320, height: 180)
+            CATransaction.commit()
+            let engine = PreviewEngine(renderer: renderer, layer: layer)
+            let drawn = ReleaseDrawnFrames()
+            engine.hooks.onDrawn = { drawn.append($0) }
+            engine.hooks.playbackSize = [320, 180]
+            /// Plays at `seconds` and returns the frame drawn for it.
+            func play(_ seconds: Double) async throws -> PreviewEngine.DrawnFrame {
+                let before = drawn.count
+                engine.request(.playing(seconds: seconds))
+                #expect(await eventually(timeout: .seconds(30)) { drawn.count > before }, "\(seconds) s drawn")
+                return try #require(drawn.last)
+            }
+            /// Whether `frame` shows take-001's screen: its frames are blue (200), take-002's inverted (55).
+            func showsTheFirstTake(_ frame: PreviewEngine.DrawnFrame) -> Bool {
+                guard let video = frame.videos["display-1"] else { return false }
+                return frame.frame.take == "take-001" && centreBlue(of: video) > 128
+            }
+            // The first frame played, in A, never read: its key frame.
+            let first = try await play(0.5)
+            #expect(showsTheFirstTake(first), "\(first.videos)")
+            // Into B (the project's own) for a while: A, a second behind, is let go.
+            for n in 75...85 { _ = try await play(seconds(n)) }
+            let a = TrackKey(take: "take-001", track: "display-1")
+            #expect(!renderer.isAwake(a) && renderer.withAhead { $0.prefetchers[a] } == nil)
+            // Jumped back into A while playing: its key frame again, not nothing.
+            let back = try await play(1.2)
+            #expect(showsTheFirstTake(back), "\(back.videos)")
         }
     }
 
