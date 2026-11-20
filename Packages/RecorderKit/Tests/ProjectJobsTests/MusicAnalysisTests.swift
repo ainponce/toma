@@ -135,12 +135,15 @@ private struct Fixture {
 
     /// The analysis, with the decoding and the voice search counted and, with a gate, held (after the decoding wrote
     /// its file; after the voice was found).
-    func analysis(gate: Gate? = nil, themeMade: @escaping @Sendable (String) -> Void = { _ in }) -> MusicAnalysis {
+    func analysis(
+        gate: Gate? = nil, decode: MusicAnalysis.Decode? = nil, themeMade: @escaping @Sendable (String) -> Void = { _ in }
+    ) -> MusicAnalysis {
         let calls = calls
         return MusicAnalysis(
             project: project, caches: caches, library: library,
             decode: { source, destination, progress in
                 calls.decoded(source)
+                if let decode { return try await decode(source, destination, progress) }
                 try await ImportedAudio.decode(source, to: destination, progress: progress)
                 try await gate?.wait()
             },
@@ -193,6 +196,32 @@ private struct Fixture {
 
 private let assetA = "0123456789abcdef0123456789abcdef"
 private let assetB = "fedcba9876543210fedcba9876543210"
+
+/// The RMS level of the first audio track of the movie at `url` over each of `spans` (seconds), its channels averaged;
+/// `nil` when it has no audio track.
+private func levels(of url: URL, in spans: [Range<Double>]) async throws -> [Double]? {
+    let asset = AVURLAsset(url: url)
+    guard let track = try await asset.loadTracks(withMediaType: .audio).first else { return nil }
+    let reader = try AVAssetReader(asset: asset)
+    let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+        AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 32,
+        AVLinearPCMIsFloatKey: true, AVLinearPCMIsNonInterleaved: false, AVLinearPCMIsBigEndianKey: false,
+    ])
+    reader.add(output)
+    #expect(reader.startReading())
+    var samples: [Float] = []
+    while let sample = output.copyNextSampleBuffer() {
+        guard let block = CMSampleBufferGetDataBuffer(sample) else { continue }
+        var decoded = [Float](repeating: 0, count: CMBlockBufferGetDataLength(block) / 4)
+        _ = decoded.withUnsafeMutableBytes { CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: $0.count, destination: $0.baseAddress!) }
+        samples += decoded
+    }
+    return spans.map { span in
+        let frames = samples[min(Int(span.lowerBound * 48_000), samples.count)..<min(Int(span.upperBound * 48_000), samples.count)]
+        guard !frames.isEmpty else { return 0 }
+        return (frames.reduce(0) { $0 + Double($1) * Double($1) } / Double(frames.count)).squareRoot()
+    }
+}
 
 /// The voice's file, as written.
 private struct VoiceFile: Decodable {
@@ -439,6 +468,128 @@ private struct VoiceFile: Decodable {
         }
     }
 
+    /// A sound whose reading stopped partway (`ImportedAudioError.readingStopped`) stops `prepare` with a `JobError`
+    /// `.failed` saying so, and leaves nothing; one that is no sound (`.notAudio`) is left out, silent.
+    @Test func aSoundCutShortIsAnError() async throws {
+        try await withTemporaryDirectory { dir in
+            let fixture = try await Fixture(in: dir)
+            let source = try fixture.addAsset(assetA)
+            let cut = fixture.analysis(decode: { _, destination, _ in
+                try Data(repeating: 1, count: 100).write(to: destination)
+                throw ImportedAudioError.readingStopped("the file ends early")
+            })
+            do {
+                _ = try await cut.prepare(fixture.document([calm, source], ducking: false)) { _ in }
+                Issue.record("prepare gave its pieces")
+            } catch let error as JobError {
+                if case .failed(let reason) = error.problem {
+                    #expect(reason.contains("\(assetA).m4a") && reason.contains("the file ends early"))
+                } else {
+                    Issue.record("\(error)")
+                }
+            }
+            #expect(tree(fixture.caches.folder(.music)) == [])
+            let none = fixture.analysis(decode: { _, _, _ in throw ImportedAudioError.notAudio })
+            #expect(try await none.prepare(fixture.document([calm, source], ducking: false)) { _ in }.musicFiles.keys.sorted() == [calm])
+        }
+    }
+
+    /// `prepareExport` puts the music's files and voice into the inputs it is given; `remake` makes again only the
+    /// sources it is asked for (no voice), as the exporter asks when the mix finds one gone.
+    @Test func prepareExportAndRemake() async throws {
+        try await withTemporaryDirectory { dir in
+            let fixture = try await Fixture(in: dir)
+            let source = try fixture.addAsset(assetA)
+            let analysis = fixture.analysis()
+            let document = fixture.document([calm, source])
+            var given = AnalysisInputs.none
+            given.loudness["x/y"] = TrackLoudness(channels: 1, dry: [], wet: nil, cross: nil)
+            let inputs = try await analysis.prepareExport(document, onto: given) { _ in }
+            #expect(inputs.loudness == given.loudness)
+            #expect(inputs.musicFiles.keys.sorted() == [source, calm].sorted())
+            #expect(inputs.voiceActivity.keys.sorted() == ["\(takeID)/device-audio", "\(takeID)/mic"])
+
+            try FileManager.default.removeItem(at: fixture.libraryRoot)
+            try FileManager.default.removeItem(at: fixture.decoded(source))
+            let voices = fixture.calls.voices.count
+            #expect(try await analysis.remake([calm], of: document) == [calm: fixture.library.url(for: "calm")])
+            #expect(!FileManager.default.fileExists(atPath: fixture.decoded(source).path))
+            #expect(try await analysis.remaking(for: document)([source, "assets/nothing.m4a"]) == [source: fixture.decoded(source)])
+            #expect(fixture.calls.voices.count == voices && fixture.calls.decodes.count == 2)
+        }
+    }
+
+    /// The gap between the export's preparation and its mix: a theme and an imported sound `prepareExport` made, removed
+    /// before the export opens them (macOS emptying the caches), are made again by the export (`remaking(for:)`) before
+    /// it writes: its music is the one of an export with them there. Without, the export has no music.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func anExportRemakesWhatTheCacheLostAfterItsPreparation() async throws {
+        try await withTemporaryDirectory { dir in
+            let builder = try TakeBuilder(in: dir, name: "Silent")
+            try await builder.addVideoTrack(
+                id: "display-1",
+                source: TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: Rect(x: 0, y: 0, width: 320, height: 180), pixelScale: 1),
+                segments: [VideoSegmentSpec(start: base, seconds: 2, framesPerSecond: 10, width: 320, height: 180)])
+            let fixture = try await Fixture(in: dir, project: try builder.write())
+            let source = try fixture.addAsset(assetA, seconds: 1)
+            let analysis = fixture.analysis()
+            var document = fixture.document([calm, source], ducking: false)
+            for k in document.music.items.indices {
+                document.music.items[k].gain = 0
+                document.music.items[k].fadeIn = 0
+                document.music.items[k].fadeOut = 0
+            }
+            let inputs = try await analysis.prepareExport(document, onto: .none) { _ in }
+            let settings = ExportSettings(outputSize: [320, 180], framesPerSecond: 30)
+            func export(_ name: String, remake: Bool) async throws -> [Double]? {
+                let destination = dir.appending(path: "\(name).mp4")
+                try await MP4Exporter(
+                    project: fixture.project, document: document, settings: settings, analysis: inputs,
+                    remakeMusic: remake ? analysis.remaking(for: document) : nil
+                ).export(to: destination) { _ in }
+                return try await levels(of: destination, in: [0.2..<0.8, 1.2..<1.8])
+            }
+            let whole = try #require(try await export("whole", remake: false))
+            #expect(whole.allSatisfy { $0 > 0.01 }, "\(whole)")
+
+            func lose() throws {
+                try FileManager.default.removeItem(at: fixture.libraryRoot)
+                try FileManager.default.removeItem(at: fixture.decoded(source))
+            }
+            try lose()
+            #expect(try await export("without", remake: false) == nil)
+            let remade = try #require(try await export("remade", remake: true))
+            #expect(zip(remade, whole).allSatisfy { abs($0 - $1) <= 0.02 * $1 }, "\(remade) vs \(whole)")
+            #expect(fixture.library.cachedFile(for: "calm") != nil)
+            #expect(FileManager.default.fileExists(atPath: fixture.decoded(source).path))
+        }
+    }
+
+    /// The progress of `prepare` is reported in order and never with a lock held: from many threads at once, each
+    /// report going through it again, what the closure sees always rises and ends at the highest.
+    @Test func progressIsReportedInOrderOutsideItsLock() async throws {
+        let seen = Mutex<[Double]>([])
+        let box = Mutex<OrderedProgress?>(nil)
+        let progress = OrderedProgress { value in
+            seen.withLock { $0.append(value) }
+            // Through it again, from inside: a lock held here would never be let go.
+            if let again = box.withLock({ $0 }) { again(value / 2) }
+        }
+        box.withLock { $0 = progress }
+        await withTaskGroup { group in
+            for thread in 0..<8 {
+                group.addTask {
+                    for step in 0..<500 { progress(Double(step * 8 + thread) / 4_000) }
+                }
+            }
+        }
+        progress(1)
+        let values = seen.withLock { $0 }
+        #expect(!values.isEmpty && values == values.sorted() && Set(values).count == values.count)
+        #expect(values.last == 1)
+        box.withLock { $0 = nil }
+    }
+
     /// Cancelled partway (a theme being made, an asset decoded, a voice found), `prepare` throws `CancellationError`
     /// and leaves no file: no theme, no CAF, no JSON, no temporary.
     @Test func cancellingLeavesNoFile() async throws {
@@ -463,8 +614,8 @@ private struct VoiceFile: Decodable {
     }
 
     /// The goal of "Preparing…" for a theme of the library (plan 3c decision 16, under 3 s): each of the six themes made
-    /// from an empty cache, on the library's own queue (`.utility`), as the list and the export ask for it; and a dense
-    /// stand-in for a composed theme (`denseTheme`), while the six are still placeholders.
+    /// from an empty cache, on the library's own queue (`.userInitiated`), as the list and the export ask for it; and a dense
+    /// stand-in for a busy composed theme (`denseTheme`).
     @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
     func preparingAThemeIsUnderThreeSeconds() async throws {
         try await withTemporaryDirectory { dir in

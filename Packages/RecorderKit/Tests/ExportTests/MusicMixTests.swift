@@ -3,6 +3,7 @@
 import Foundation
 import ProjectFormat
 import RecorderKitTestSupport
+import Synchronization
 import Testing
 
 /// The music in the mix (phase 3 design §7.4 to §7.6 and §13, step 3; plan 3c task U7, decisions 7 and 8): each piece of
@@ -327,6 +328,55 @@ import Testing
             #expect(bits(heard(music, 0..<192_000)) == bits(heard(alone, 0..<192_000)))
             let mix = try await EditedMix.make(project: project, document: all, framesPerSecond: 60, analysis: analysis(files))
             #expect(mix.music.hasSound)
+        }
+    }
+
+    /// A file the analysis named that is gone by the time the mix opens it (macOS emptied a cache after the export's
+    /// preparation) is listed (`unopenedMusic`, also in another revision); the export asks `remakeMusic` for it once and
+    /// plays the file it makes before anything is written: the samples of the export with the file there, bit for bit.
+    /// Without `remakeMusic`, or with one that cannot make it, that music is silent; a source with no file at all is
+    /// never asked for.
+    @Test func aFileGoneBeforeTheMixOpensItIsMadeAgain() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await voiceTake(in: dir, name: "remade", seconds: 4)
+            let theme: @Sendable (Int) -> (Float, Float) = { n in (Float(n % 977) / 2_000, -Float(n % 613) / 2_000) }
+            let url = try writeFile(dir, "theme", frames: 3 * 48_000, theme)
+            let focus = MusicThemes.source("focus")
+            let document = edited(project, [(0, 4)], items: [item(calm, 0, 3, gain: -6), item(focus, 3, 4, id: 2)])
+            let inputs = analysis([calm: url])
+            let reference = try await MP4Exporter.mixSamples(of: project, document: document, framesPerSecond: 60, analysis: inputs)
+            let silent = try await MP4Exporter.mixSamples(of: project, document: edited(project, [(0, 4)]), framesPerSecond: 60)
+            #expect(bits(reference) != bits(silent))
+
+            try FileManager.default.removeItem(at: url)
+            let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: 60, analysis: inputs)
+            #expect(mix.unopenedMusic == [calm] && !mix.music.hasSound)
+            #expect(mix.with(document: document, framesPerSecond: 60).unopenedMusic == [calm])
+            #expect(mix.with(document: edited(project, [(0, 4)]), framesPerSecond: 60).unopenedMusic == [])
+
+            let asked = Mutex<[[String]]>([])
+            let remade = dir.appendingPathComponent("remade", isDirectory: true)
+            try FileManager.default.createDirectory(at: remade, withIntermediateDirectories: true)
+            let exported = try await MP4Exporter.mixSamples(
+                of: project, document: document, framesPerSecond: 60, analysis: inputs,
+                remakeMusic: { sources in
+                    asked.withLock { $0.append(sources) }
+                    return [calm: try writeFile(remade, "theme", frames: 3 * 48_000, theme)]
+                })
+            #expect(asked.withLock { $0 } == [[calm]])
+            #expect(bits(exported) == bits(reference))
+
+            #expect(bits(try await MP4Exporter.mixSamples(of: project, document: document, framesPerSecond: 60, analysis: inputs))
+                == bits(silent))
+            try FileManager.default.removeItem(at: remade.appendingPathComponent("theme.caf"))
+            let unmade = try await MP4Exporter.mixSamples(
+                of: project, document: document, framesPerSecond: 60, analysis: inputs, remakeMusic: { _ in [:] })
+            #expect(bits(unmade) == bits(silent))
+            await #expect(throws: ExportError.cancelled) {
+                try await MP4Exporter.mixSamples(
+                    of: project, document: document, framesPerSecond: 60, analysis: inputs,
+                    remakeMusic: { _ in throw CancellationError() })
+            }
         }
     }
 
