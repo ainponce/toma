@@ -48,7 +48,8 @@ public struct TakeInfo: Equatable, Sendable {
 ///    `screenFollow-1` in the output the step leaves (and the planner's name, if the document had none); its camera as
 ///    it recorded it (`camera.initial`, and its `cameraStyle` events as changes `.recorded` with new `k-` ids, in time
 ///    order); with the automatic zoom on, its blocks of `autoZoom-1` (`ZoomCommands.replanned`); and, where it shows a
-///    window, corners that cover the window's black ones (`NewDocument.windowCornerCover`), if the document's do not.
+///    window, corners that cover the window's black ones (`NewDocument.windowCornerCover`), if the document's do not;
+///    both on the output's stage, that of the first clip's take (`StageLayout.contentRatio(project:document:)`).
 ///    No key of the volume is written for it: the mix finds each of its tracks by its id (`AudioPlan.trackGain`). A take
 ///    the document knows already gets its clips alone, so what the user changed of it stays.
 ///
@@ -215,8 +216,12 @@ public enum TakeCommands {
             next.camera.changes.append(change)
         }
 
+        // Its stage is the output's (phase 3 design §9): that of the first clip's take, when it is another one.
+        let ratio: Double?? = StageLayout.contentRatioTake(of: next, ownTake: take.id) == take.id
+            ? nil : .some(StageLayout.contentRatio(project: project, document: next))
+
         // The corners that cover its window's black ones, where the document's do not.
-        let cover = NewDocument.windowCornerCover(of: next, take: take, events: events)
+        let cover = NewDocument.windowCornerCover(of: next, take: take, events: events, contentRatio: ratio)
         if cover > next.style.cornerRadius {
             changes.set(["style", "cornerRadius"], from: next.style.cornerRadius, to: cover)
             next.style.cornerRadius = cover
@@ -224,7 +229,7 @@ public enum TakeCommands {
 
         // Its automatic zooms, planned in the document so far.
         if next.zoom.auto.enabled {
-            let regions = ZoomCommands.replanned(next, take: take, events: events)
+            let regions = ZoomCommands.replanned(next, take: take, events: events, contentRatio: ratio)
             changes.edit(.zoomRegions, from: doc.zoom.regions, to: regions, id: \.id)
         }
         // Never empty: the camera's start is always set. `nil` only for a value that cannot be encoded.

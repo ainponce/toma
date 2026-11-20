@@ -222,6 +222,9 @@ final class EditorModel {
     /// Where the take's screens are (`TakeScreens`), read once when the project opens, off the main thread: each
     /// revision's `StagePoints` for the overlays then reads only what its document names.
     @ObservationIgnored private(set) var takeScreens: TakeScreens?
+    /// The screens of every take of the package the same way, by take id (`takeScreens` too): "Like the Recording"
+    /// follows those of the take of the document's first clip (`contentRatio(of:)`).
+    @ObservationIgnored private(set) var screensByTake: [String: TakeScreens] = [:]
     /// The edit session, for what the panel does with it (`EditorModel+Panel`).
     var panelSession: EditSession? { session }
     /// The scene the preview draws now (the last revision built and shown): the overlays read the frame at the playhead
@@ -502,13 +505,18 @@ final class EditorModel {
         let project = currentProject(of: session)
         let size = previewSize(of: document)
         let renderer: FrameRenderer
-        let screens: TakeScreens, markers: [HostTime]
+        let screens: TakeScreens, markers: [HostTime], byTake: [String: TakeScreens]
         do {
-            // Builds the motion paths, and reads the take's events for what the overlays and the timeline read of them:
+            // Builds the motion paths, and reads the takes' events for what the overlays and the timeline read of them:
             // never on the main thread.
-            (renderer, screens, markers) = try await Task.detached {
+            (renderer, screens, markers, byTake) = try await Task.detached {
                 let renderer = try FrameRenderer(project: project, document: document, outputSize: size)
-                return (renderer, TakeScreens(take: project.take, events: project.events), TimelineContent.markerTimes(in: project.events))
+                let screens = TakeScreens(take: project.take, events: project.events)
+                var byTake = [project.take.id: screens]
+                for take in project.takes where byTake[take.id] == nil {
+                    byTake[take.id] = TakeScreens(take: take, events: project.events(ofTake: take.id))
+                }
+                return (renderer, screens, TimelineContent.markerTimes(in: project.events), byTake)
             }.value
         } catch {
             Self.logger.error("Cannot draw \(project.package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
@@ -520,6 +528,7 @@ final class EditorModel {
         guard !closed, self.session === session, state == .opening else { return }
         self.renderer = renderer
         takeScreens = screens
+        screensByTake = byTake
         markerTimes = markers
         let engine = PreviewEngine(renderer: renderer, layer: previewLayer)
         self.engine = engine
