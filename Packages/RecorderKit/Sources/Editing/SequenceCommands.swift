@@ -23,6 +23,14 @@ public enum SequenceError: Error, Equatable {
 ///   timeline (`TakeTimeline.editableBounds`: its screen's, or the audio and camera it recorded without a screen); a pause
 ///   is no limit, its frozen frame shows (plan decision 6).
 /// - Every clip a command writes has its speed in its range, as `ClipSpeed.clamped(_:)` reads it.
+/// - A clip with content (`Clip.content`, phase 3 base plan decision 7: a frozen frame, a title card, an imported clip) is
+///   a point of its take that lasts: a split never cuts it, its edges do not trim (its length is its content's) and no
+///   speed changes it; a deletion takes it whole, a range deletion only if the range covers it whole. The other commands
+///   edit the take's stretches and leave each point where it is, so every take stays in order (`SequenceRules`).
+/// - A clip a command makes (a piece of a split or of a deletion inside a clip) starts its sound with its picture
+///   (`audioShift` 0), and every cut of the sound a command leaves out of its limits, because the clips at its edge are
+///   shorter or other ones, is held to them in the same step (`SequenceRules.audioShift(of:at:)`): no step breaks a
+///   rule of the document (`DocumentRules`).
 /// - The changes are built from the clips they touch, never from the whole document encoded again for each one.
 /// - The `target` of a step, which joins a burst of steps into one undo group, is the id of the clip it acts on; for
 ///   several, their ids in the order of the sequence, joined by commas.
@@ -33,7 +41,8 @@ public enum SequenceCommands {
 
     /// Splits the clip shown at output instant `atOutput` there: the clip ends at the source instant shown there
     /// (`TimeMap.source(atOutput:)`) and a new clip, with the id `makeID("c-")`, goes on from it to the old end, at the same
-    /// speed. `nil` on an edge, out of the output, or if either piece would be shorter than a frame.
+    /// speed. `nil` on an edge, out of the output, in a clip with content, or if either piece would be shorter than a
+    /// frame.
     public static func split(_ doc: EditDocument, atOutput: Int64, makeID: (String) -> String) -> EditStep? {
         split(doc, at: [atOutput], makeID: makeID)
     }
@@ -48,7 +57,7 @@ public enum SequenceCommands {
     /// least a frame would be left; ids that are not in the sequence are left out, and with none the step has no changes.
     public static func delete(_ doc: EditDocument, clipIDs: Set<String>) -> Result<EditStep, SequenceError> {
         let frame = oneFrame(of: doc)
-        var changes = SequenceChanges()
+        var changes = SequenceChanges(doc.sequence)
         var removed: [String] = []
         var leavesAFrame = false
         for (k, clip) in doc.sequence.enumerated() {
@@ -66,8 +75,9 @@ public enum SequenceCommands {
     /// Deletes the output range `output` (clamped to the output) in one step: the clips inside it are removed, a clip
     /// across an edge is trimmed to that edge, and a clip with the whole range inside it is cut in two, its second piece a
     /// new clip with the id `makeID("c-")`. What is left of a clip at an edge that is shorter than a frame goes with the
-    /// range. `.failure(.lastClip)` if no clip of at least a frame would be left; a range with nothing of the output in
-    /// it gives a step without changes.
+    /// range. A clip with content goes only if the range covers it whole; one across an edge stays whole.
+    /// `.failure(.lastClip)` if no clip of at least a frame would be left; a range with nothing of the output in it gives a
+    /// step without changes.
     public static func deleteRange(
         _ doc: EditDocument, output: Range<Int64>, makeID: (String) -> String
     ) -> Result<EditStep, SequenceError> {
@@ -75,7 +85,7 @@ public enum SequenceCommands {
         let frame = oneFrame(of: doc)
         let (a, b) = (max(output.lowerBound, 0), min(output.upperBound, map.duration))
         var ids = Set(doc.sequence.map(\.id))
-        var changes = SequenceChanges()
+        var changes = SequenceChanges(doc.sequence)
         var touched: [String] = []
         // Removed and inserted so far, for the index of the next change.
         var (removed, inserted) = (0, 0)
@@ -83,11 +93,17 @@ public enum SequenceCommands {
         for (k, original) in doc.sequence.enumerated() {
             let start = map.clipOutputStarts[k]
             let end = k + 1 < doc.sequence.count ? map.clipOutputStarts[k + 1] : map.duration
-            guard a < b, start < b, end > a else {
+            // A clip with content is never cut: it goes only with the whole of it inside the range.
+            guard a < b, start < b, end > a, original.content == nil || (a <= start && end <= b) else {
                 leavesAFrame = leavesAFrame || lasts(original, frame)
                 continue
             }
             touched.append(original.id)
+            if original.content != nil {
+                changes.remove(original, at: k - removed + inserted)
+                removed += 1
+                continue
+            }
             let clip = written(original)
             // What is left of it before the range and after it, each where the output shows it.
             var pieces: [Clip] = []
@@ -112,6 +128,7 @@ public enum SequenceCommands {
             if pieces.count == 2 {
                 var tail = pieces[1]
                 tail.id = newID(makeID, avoiding: &ids)
+                tail.audioShift = 0
                 changes.insert(tail, at: index + 1)
                 inserted += 1
             }
@@ -123,27 +140,33 @@ public enum SequenceCommands {
 
     /// The source instants `edge` of clip `clipID` can go to (plan decisions 6 and 24): back to the edge of the clip of
     /// the same take before or after it in the source, or to the start or the end of `TakeTimeline.editableBounds` of
-    /// `take` (the clip's take: its screen's timeline, or what it recorded without a screen), pauses included; forward
+    /// `take` (the clip's take: its screen's timeline, or what it recorded without a screen), pauses included, and never
+    /// past the point of a clip with content of that take before or after it in the sequence (phase 3 design §9); forward
     /// while at least a frame of the clip is left. Always holds where the edge is now. Without a clip `clipID`, the take's
-    /// editable bounds.
+    /// editable bounds; for a clip with content, its point alone: its edges never move it in its take.
     public static func trimLimits(
         _ doc: EditDocument, clipID: String, edge: ClipEdge, take: TakeRecord, events: [InputEvent]
     ) -> ClosedRange<HostTime> {
         let bounds = TakeTimeline.editableBounds(take: take, events: events)
         guard let k = doc.sequence.firstIndex(where: { $0.id == clipID }) else { return bounds.start...bounds.end }
         let clip = doc.sequence[k]
+        guard clip.content == nil else { return clip.start...clip.start }
         // The other clips of the take that show anything.
         let others = doc.sequence.indices.lazy.filter { $0 != k }.map { doc.sequence[$0] }
-            .filter { $0.take == clip.take && $0.start < $0.end }
+            .filter { $0.take == clip.take && $0.start < $0.end && $0.content == nil }
+        // The points of the take's clips with content, which keep their places in the take's order.
+        func points(_ range: some Sequence<Clip>) -> [HostTime] {
+            range.filter { $0.take == clip.take && $0.content != nil }.map(\.start)
+        }
         let shortest = shortestSource(lasting: oneFrame(of: doc), speed: clip.speed)
         switch edge {
         case .start:
-            let before = others.filter { $0.start < clip.start }.map(\.end).max()
+            let before = (others.filter { $0.start < clip.start }.map(\.end) + points(doc.sequence[..<k])).max()
             let earliest = max(bounds.start, before ?? bounds.start)
             let latest = clip.end.nanoseconds >= shortest ? clip.end.nanoseconds - shortest : 0
             return min(earliest, clip.start)...max(HostTime(nanoseconds: latest), clip.start)
         case .end:
-            let after = others.filter { $0.start > clip.start }.map(\.start).min()
+            let after = (others.filter { $0.start > clip.start }.map(\.start) + points(doc.sequence[(k + 1)...])).min()
             let latest = min(bounds.end, after ?? bounds.end)
             let (sum, overflow) = clip.start.nanoseconds.addingReportingOverflow(shortest)
             return min(HostTime(nanoseconds: overflow ? .max : sum), clip.end)...max(latest, clip.end)
@@ -151,11 +174,11 @@ public enum SequenceCommands {
     }
 
     /// Moves `edge` of clip `clipID` to `toSource`, clamped to `limits` (`trimLimits`, worked out once for a drag). `nil`
-    /// if the edge stays where it is, there is no such clip, or the clip would be shorter than a frame.
+    /// if the edge stays where it is, there is no such clip, it has content, or the clip would be shorter than a frame.
     public static func trim(
         _ doc: EditDocument, clipID: String, edge: ClipEdge, toSource: HostTime, limits: ClosedRange<HostTime>
     ) -> EditStep? {
-        guard let original = doc.sequence.first(where: { $0.id == clipID }) else { return nil }
+        guard let original = doc.sequence.first(where: { $0.id == clipID }), original.content == nil else { return nil }
         let to = min(max(toSource, limits.lowerBound), limits.upperBound)
         var clip = written(original)
         switch edge {
@@ -167,7 +190,7 @@ public enum SequenceCommands {
             clip.end = to
         }
         guard lasts(clip, oneFrame(of: doc)) else { return nil }
-        var changes = SequenceChanges()
+        var changes = SequenceChanges(doc.sequence)
         changes.replace(original, with: clip)
         return EditStep(label: .trim, target: clipID, changes: changes.changes)
     }
@@ -187,13 +210,14 @@ public enum SequenceCommands {
     }
 
     /// Plays the clips with the ids `clipIDs` at `speed`, clamped to `speedRange` (`ClipSpeed.clamped(_:)`: one that is
-    /// not a number is 1). All or nothing: `nil` if any of them would be shorter than a frame, or if none changes.
+    /// not a number is 1); a clip with content is left as it is. All or nothing: `nil` if any of them would be shorter
+    /// than a frame, or if none changes.
     public static func setSpeed(_ doc: EditDocument, clipIDs: Set<String>, speed: Double) -> EditStep? {
         let speed = ClipSpeed.clamped(speed)
         let frame = oneFrame(of: doc)
-        var changes = SequenceChanges()
+        var changes = SequenceChanges(doc.sequence)
         var changed: [String] = []
-        for clip in doc.sequence where clipIDs.contains(clip.id) && clip.speed != speed {
+        for clip in doc.sequence where clipIDs.contains(clip.id) && clip.speed != speed && clip.content == nil {
             var faster = clip
             faster.speed = speed
             guard lasts(faster, frame) else { return nil }
@@ -213,11 +237,12 @@ public enum SequenceCommands {
         // The source instants to split each clip at, in order.
         var cuts: [Int: [HostTime]] = [:]
         for τ in Set(outputs).sorted() where τ > 0 && τ < map.duration {
-            guard let shown = map.source(atOutput: τ) else { continue }
+            // A clip with content is never cut.
+            guard let shown = map.source(atOutput: τ), doc.sequence[shown.clip].content == nil else { continue }
             cuts[shown.clip, default: []].append(shown.source)
         }
         var ids = Set(doc.sequence.map(\.id))
-        var changes = SequenceChanges()
+        var changes = SequenceChanges(doc.sequence)
         var inserted = 0
         var target: String?
         for (k, instants) in cuts.sorted(by: { $0.key < $1.key }) {
@@ -238,6 +263,7 @@ public enum SequenceCommands {
             changes.replace(original, with: first)
             for var piece in pieces.dropFirst() {
                 piece.id = newID(makeID, avoiding: &ids)
+                piece.audioShift = 0
                 inserted += 1
                 changes.insert(piece, at: k + inserted)
             }
@@ -294,25 +320,51 @@ public enum SequenceCommands {
     }
 }
 
-/// The changes of a command to `/sequence`, in order, each built from the clips it touches.
+/// The changes of a command to `/sequence`, in order, each built from the clips it touches, and the sequence as they
+/// leave it.
 struct SequenceChanges {
-    private(set) var changes: [EditChange] = []
+    /// The sequence as the changes so far leave it.
+    private(set) var sequence: [Clip]
+    private var made: [EditChange] = []
 
     /// `EditCollection.sequence`.
     private static let collection = EditCollection.sequence.pointer
 
+    /// The changes of a command to `sequence`.
+    init(_ sequence: [Clip]) {
+        self.sequence = sequence
+    }
+
+    /// The changes made, and after them, in the order of the sequence they leave, a `replace` of each clip whose cut of
+    /// the sound they leave out of its limits, with it held to them (`SequenceRules.audioShift(of:at:)`): none while no
+    /// cut of the sound is moved.
+    var changes: [EditChange] {
+        var changes = made
+        for k in sequence.indices where sequence[k].audioShift != 0 {
+            let shift = SequenceRules.audioShift(of: sequence, at: k)
+            guard shift != sequence[k].audioShift else { continue }
+            var held = sequence[k]
+            held.audioShift = shift
+            changes.append(.replace(collection: Self.collection, id: held.id, before: Self.encoded(sequence[k]), after: Self.encoded(held)))
+        }
+        return changes
+    }
+
     mutating func replace(_ clip: Clip, with new: Clip) {
-        changes.append(.replace(collection: Self.collection, id: clip.id, before: Self.encoded(clip), after: Self.encoded(new)))
+        made.append(.replace(collection: Self.collection, id: clip.id, before: Self.encoded(clip), after: Self.encoded(new)))
+        if let index = sequence.firstIndex(where: { $0.id == clip.id }) { sequence[index] = new }
     }
 
     /// Removes `clip`, at `index` of the sequence as the changes before this one leave it.
     mutating func remove(_ clip: Clip, at index: Int) {
-        changes.append(.remove(collection: Self.collection, index: index, value: Self.encoded(clip)))
+        made.append(.remove(collection: Self.collection, index: index, value: Self.encoded(clip)))
+        if sequence.indices.contains(index) { sequence.remove(at: index) }
     }
 
     /// Inserts `clip` at `index` of the sequence as the changes before this one leave it.
     mutating func insert(_ clip: Clip, at index: Int) {
-        changes.append(.insert(collection: Self.collection, index: index, value: Self.encoded(clip)))
+        made.append(.insert(collection: Self.collection, index: index, value: Self.encoded(clip)))
+        sequence.insert(clip, at: min(max(index, 0), sequence.count))
     }
 
     /// `clip` as it is in the document. One that cannot be encoded (a speed that is not a number) cannot be in an encoded

@@ -20,6 +20,22 @@ public enum ClipContent: Codable, Equatable, Sendable {
     /// The durations a frozen frame or a title card can have: 0.1 to 60 s.
     public static let durationRange: ClosedRange<Int64> = 100_000_000...60_000_000_000
 
+    /// What the clip lasts in the output, in ns (phase 3 base plan decision 7), as `TimeMap` reads it: a frozen frame's
+    /// or a title card's `duration` held to `durationRange`, so one edited by hand never stops the render; an imported
+    /// clip's `round((end − start) / v)` at its speed read by `ClipSpeed.clamped(_:)`, as a clip of the take is, and 0
+    /// (never shown) with its end at or before its start.
+    public var outputDuration: Int64 {
+        switch self {
+        case let .freeze(duration), let .card(_, duration):
+            min(max(duration, Self.durationRange.lowerBound), Self.durationRange.upperBound)
+        case let .media(media):
+            // `end − start` fits in a `UInt64` when it is positive, whatever the two are.
+            media.end > media.start
+                ? TimeMap.outputOffset(ofSource: UInt64(bitPattern: media.end &- media.start), speed: ClipSpeed.clamped(media.speed))
+                : 0
+        }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case type, duration, card, media
     }

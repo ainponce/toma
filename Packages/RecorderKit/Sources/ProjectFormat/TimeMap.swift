@@ -6,37 +6,55 @@
 ///
 /// - Clip `k` lasts `D_k = round((e_k − s_k) / v_k)` ns of output and starts at `O_k`, the sum of the durations before
 ///   it; the output lasts `D`, the sum of all of them. A clip whose `D_k` rounds to 0 is never shown.
-/// - Within each take, the clips are in source order and never overlap (as `EditDocument.sequence` is in 1b), so the
-///   mapping is monotonic and each source instant is shown at most once.
+/// - Within each take, the clips are in source order and never overlap (the invariant of phase 3 design §9,
+///   `SequenceRules.firstOutOfOrder(in:)`), so the mapping is monotonic and each source instant is shown at most once.
+/// - A clip with content (`Clip.content`, phase 3 base plan decision 7: a frozen frame, a title card, an imported clip) is a
+///   point of its take, `s_k`, that lasts `ClipContent.outputDuration`: no source instant falls in it (it is in no
+///   mapping from the source), and every output instant in it shows its point (`source(atOutput:)`) at an offset into
+///   its content (`contentOffset(atOutput:)`). Its end and its speed are not read.
 /// - A speed is read with `ClipSpeed.clamped(_:)`, in its range from 0.25 to 16 (a speed out of it is clamped, one that
 ///   is not a number is 1), so a document edited by hand never stops the render. Every mapping here reads it so, also
 ///   the one of the instants outside the clips (`output(ofSampleAt:take:)`, `output(ofChangeAt:take:)`): the render, the
 ///   motion paths and the sequence commands share this one rule.
+/// - The sound of clip `k` starts at `audioStarts[k]`, `O_k` moved by its cut of the sound (`Clip.audioShift`, phase 3
+///   design §7.3) as `SequenceRules.audioShift(of:at:)` reads it; without a cut moved it is `O_k`, and nothing else here
+///   reads it: the picture keeps to `O_k`.
 public struct TimeMap: Equatable, Sendable {
     /// `D`, in nanoseconds.
     public let duration: Int64
     /// `O_k` of each clip, in the order of the sequence.
     public let clipOutputStarts: [Int64]
+    /// Where the sound of each clip starts, in the order of the sequence: `O_k + SequenceRules.audioShift(of:at:)`,
+    /// saturating; `clipOutputStarts` itself where no cut of the sound is moved.
+    public let audioStarts: [Int64]
     /// The clips of the sequence, as the mapping reads them.
     private let clips: [Piece]
-    /// The indices of the clips of each take that have any source (`s_k < e_k`), in the order of the sequence.
+    /// The indices of the clips of each take that have any source (`s_k < e_k`, no content), in the order of the
+    /// sequence.
     private let clipsByTake: [String: [Int]]
 
     private struct Piece: Equatable, Sendable {
         var start: UInt64
-        /// Never before `start`.
+        /// Never before `start`; `start` with content.
         var end: UInt64
         /// `ClipSpeed.clamped`.
         var speed: Double
+        /// `D_k`: `round(length / speed)`, or the content's `outputDuration`.
+        var outputDuration: Int64
         var length: UInt64 { end - start }
-        /// `D_k`: `round(length / speed)`.
-        var outputDuration: Int64 { TimeMap.outputOffset(ofSource: length, speed: speed) }
 
-        /// `clip` as the mapping reads it: an end before the start is the start, and the speed is clamped.
+        /// `clip` as the mapping reads it: an end before the start is the start, the speed is clamped, and a clip with
+        /// content is its point.
         init(_ clip: Clip) {
             start = clip.start.nanoseconds
-            end = max(clip.end.nanoseconds, clip.start.nanoseconds)
             speed = ClipSpeed.clamped(clip.speed)
+            if let content = clip.content {
+                end = start
+                outputDuration = content.outputDuration
+            } else {
+                end = max(clip.end.nanoseconds, clip.start.nanoseconds)
+                outputDuration = TimeMap.outputOffset(ofSource: end - start, speed: speed)
+            }
         }
     }
 
@@ -50,6 +68,10 @@ public struct TimeMap: Equatable, Sendable {
         }
         duration = total
         clipOutputStarts = starts
+        audioStarts = sequence.indices.map { k in
+            let shift = SequenceRules.audioShift(of: sequence, at: k)
+            return shift == 0 ? starts[k] : Self.adding(starts[k], shift)
+        }
         var byTake: [String: [Int]] = [:]
         for (index, clip) in sequence.enumerated() where clips[index].length > 0 {
             byTake[clip.take, default: []].append(index)
@@ -61,22 +83,43 @@ public struct TimeMap: Equatable, Sendable {
     public var durationSeconds: Double { Double(duration) / 1e9 }
 
     /// `D_k` of `clip`, what it lasts in the output wherever it is in a sequence: `round((e − s) / v)` ns, with its speed
-    /// read by `ClipSpeed.clamped(_:)` and an end before its start read as no source.
+    /// read by `ClipSpeed.clamped(_:)` and an end before its start read as no source; with content, its
+    /// `ClipContent.outputDuration`.
     public static func outputDuration(of clip: Clip) -> Int64 {
         Piece(clip).outputDuration
     }
 
     /// The clip and the source instant shown at output time `τ`, clamped to `[0, D)`: in the clip `k` with
-    /// `O_k ≤ τ < O_k + D_k` (never one with `D_k == 0`), `s_k + round((τ − O_k) × v_k)` clamped to `[s_k, e_k − 1]`.
-    /// `nil` only for an output of 0 ns.
+    /// `O_k ≤ τ < O_k + D_k` (never one with `D_k == 0`), `s_k + round((τ − O_k) × v_k)` clamped to `[s_k, e_k − 1]`; in a
+    /// clip with content, its point `s_k`. `nil` only for an output of 0 ns.
     public func source(atOutput τ: Int64) -> (clip: Int, source: HostTime)? {
-        guard duration > 0 else { return nil }
-        let t = min(max(τ, 0), duration - 1)
-        // The last clip starting at or before `t`: since `t < D`, it ends after `t`, so it has output.
-        let k = Self.partitionPoint(clipOutputStarts.count) { clipOutputStarts[$0] <= t } - 1
+        guard let (k, t) = shown(atOutput: τ) else { return nil }
         let piece = clips[k]
+        // A clip with content is a point; any other one shown has source, since `D_k > 0`.
+        guard piece.length > 0 else { return (k, HostTime(nanoseconds: piece.start)) }
         let offset = Self.roundedNanoseconds(Double(t - clipOutputStarts[k]) * piece.speed)
         return (k, HostTime(nanoseconds: piece.start + min(UInt64(max(offset, 0)), piece.length - 1)))
+    }
+
+    /// The clip with content shown at output time `τ`, clamped to `[0, D)` as `source(atOutput:)` clamps it, and how far
+    /// into it `τ` is, from 0 to `D_k − 1`; `nil` in a stretch of a take, and for an output of 0 ns.
+    public func contentOffset(atOutput τ: Int64) -> (clip: Int, offset: Int64)? {
+        guard let (k, t) = shown(atOutput: τ), clips[k].length == 0 else { return nil }
+        return (k, t - clipOutputStarts[k])
+    }
+
+    /// The source instant of the take of clip `k` heard at output time `τ`, in signed nanoseconds of host time:
+    /// `s_k + round((τ − O_k) × v_k)`, saturating, before and after the clip too, where a cut of the sound moved
+    /// (`audioStarts`) hears it: a J cut before `s_k`, an L cut past `e_k`. Inside a clip of the take it is the instant
+    /// `source(atOutput:)` shows, but for that one's clamp to `e_k − 1`.
+    public func audioSource(ofClip k: Int, atOutput τ: Int64) -> Int64 {
+        let piece = clips[k]
+        let (into, overflow) = τ.subtractingReportingOverflow(clipOutputStarts[k])
+        let offset = overflow ? Int64.min : Self.roundedNanoseconds(Double(into) * piece.speed)
+        // An offset that saturates is past either end whatever the start is.
+        if offset == .min || offset == .max { return offset }
+        let (sum, sumOverflow) = Int64(clamping: piece.start).addingReportingOverflow(offset)
+        return sumOverflow ? (offset < 0 ? .min : .max) : sum
     }
 
     /// The output time of source instant `x` of `take`: `O_k + round((x − s_k) / v_k)` in the clip `k` of that take
@@ -178,7 +221,32 @@ public struct TimeMap: Equatable, Sendable {
         return overflow || product >= 1_000_000_000 - Int64(frameRate)
     }
 
+    // MARK: - Internal
+
+    /// `round(length / speed)`: the output nanoseconds that `length` nanoseconds of source last at `speed`.
+    static func outputOffset(ofSource length: UInt64, speed: Double) -> Int64 {
+        roundedNanoseconds(Double(length) / speed)
+    }
+
+    /// `x` rounded to the nearest integer (halves away from zero), saturating at the ends of `Int64`; 0 if not a number.
+    static func roundedNanoseconds(_ x: Double) -> Int64 {
+        let rounded = x.rounded()
+        if rounded.isNaN { return 0 }
+        // `Double(Int64.max)` is 2⁶³, one past it.
+        if rounded >= Double(Int64.max) { return .max }
+        if rounded <= Double(Int64.min) { return .min }
+        return Int64(rounded)
+    }
+
     // MARK: - Private
+
+    /// The clip shown at output time `τ`, clamped to `[0, D)`, and that time clamped: the last clip that starts at or
+    /// before it, which, since it is before `D`, ends after it and so has output. `nil` for an output of 0 ns.
+    private func shown(atOutput τ: Int64) -> (clip: Int, output: Int64)? {
+        guard duration > 0 else { return nil }
+        let t = min(max(τ, 0), duration - 1)
+        return (Self.partitionPoint(clipOutputStarts.count) { clipOutputStarts[$0] <= t } - 1, t)
+    }
 
     /// `O_k + round((x − s_k) / v_k)` for clip `k`, with `s_k ≤ x` (past `e_k` too); at `x == e_k` it is `O_k + D_k`.
     private func output(ofSource x: UInt64, inClip k: Int) -> Int64 {
@@ -200,25 +268,10 @@ public struct TimeMap: Equatable, Sendable {
         Self.partitionPoint(takeClips.count) { clips[takeClips[$0]].start <= x } - 1
     }
 
-    /// `round(length / speed)`: the output nanoseconds that `length` nanoseconds of source last at `speed`.
-    private static func outputOffset(ofSource length: UInt64, speed: Double) -> Int64 {
-        roundedNanoseconds(Double(length) / speed)
-    }
-
-    /// `x` rounded to the nearest integer (halves away from zero), saturating at the ends of `Int64`; 0 if not a number.
-    private static func roundedNanoseconds(_ x: Double) -> Int64 {
-        let rounded = x.rounded()
-        if rounded.isNaN { return 0 }
-        // `Double(Int64.max)` is 2⁶³, one past it.
-        if rounded >= Double(Int64.max) { return .max }
-        if rounded <= Double(Int64.min) { return .min }
-        return Int64(rounded)
-    }
-
-    /// `a + b`, saturating at `Int64.max` (both are never negative here).
+    /// `a + b`, saturating at the ends of `Int64` (`a` is never negative here).
     private static func adding(_ a: Int64, _ b: Int64) -> Int64 {
         let (sum, overflow) = a.addingReportingOverflow(b)
-        return overflow ? .max : sum
+        return overflow ? (b < 0 ? .min : .max) : sum
     }
 
     /// The first index in `0..<count` for which `isBefore` is false, given that it is true for a prefix and false after.

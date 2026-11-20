@@ -6,7 +6,8 @@ import ProjectFormat
 /// least 2 s (typing as `keyActivity` shows it, never the keys), shrunk 0.25 s on each side and taken to the source; the
 /// clips it falls in are split at its edges and the piece inside plays at the speed chosen. It is one step (`.speedTyping`).
 ///
-/// - A clip that does not play at 1× is left alone, whatever falls in it.
+/// - A clip that does not play at 1× is left alone, whatever falls in it, and so is a clip with content (a point of its
+///   take, which no stretch falls in).
 /// - A stretch across a cut gives one piece in each clip it covers.
 /// - No clip is left shorter than a frame (plan decision 24): an edge that would leave a piece shorter than that is not
 ///   made, and the sped piece goes on to the edge of the clip (or to the next sped piece) instead; a piece that would last
@@ -68,13 +69,17 @@ public enum TypingSpeed {
         let clips = plan(doc, take: take, events: events, speed: speed)
         guard !clips.isEmpty else { return nil }
         var ids = Set(doc.sequence.map(\.id))
-        var changes = SequenceChanges()
+        var changes = SequenceChanges(doc.sequence)
         var inserted = 0
         var touched: [String] = []
         for clip in clips {
             let original = doc.sequence[clip.index]
             touched.append(original.id)
-            changes.replace(original, with: clip.pieces[0].clip(id: original.id, take: original.take))
+            // The first piece starts where the clip did, its cut of the sound with it; the others start theirs with the
+            // picture.
+            var first = clip.pieces[0].clip(id: original.id, take: original.take)
+            first.audioShift = original.audioShift
+            changes.replace(original, with: first)
             for piece in clip.pieces.dropFirst() {
                 inserted += 1
                 let id = SequenceCommands.newID(makeID, avoiding: &ids)
@@ -127,7 +132,7 @@ public enum TypingSpeed {
         let map = TimeMap(sequence: doc.sequence)
         var result: [Candidate] = []
         for (k, clip) in doc.sequence.enumerated() where clip.take == take.id && ClipSpeed.clamped(clip.speed) == 1 {
-            guard clip.start < clip.end else { continue }
+            guard clip.content == nil, clip.start < clip.end else { continue }
             let start = map.clipOutputStarts[k]
             let end = start + TimeMap.outputDuration(of: clip)
             var ranges: [(start: HostTime, end: HostTime, stretch: Int)] = []
