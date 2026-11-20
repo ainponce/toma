@@ -1622,3 +1622,8 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-4-5`, en orden: l
 ### 0. Preparación
 
 ### 2. Detalle por área
+
+**La preparación de export compartida con la API (A2)**
+
+- Un proyecto con Limpieza de la voz, Normalizar, música con Bajar la música bajo la voz y el fondo de la cámara Quitado (o Borroso) exporta desde la app con todo eso, igual que antes de esta versión: la voz limpia y pareja, la música más baja donde se habla y la persona sin su cuarto. El anillo de la barra avanza primero por la preparación (si algo faltaba) y después por el export.
+- «Cancelar export» durante la preparación (con la máscara o la música todavía haciéndose) termina sin ningún aviso y sin dejar el archivo; un segundo export del mismo proyecto empieza y termina bien.

@@ -32,7 +32,8 @@ import ProjectFormat
     /// The `documentVersion` of the edit document on disk as the project opened; `nil` without one.
     private let openedDocumentVersion: Int?
     private var recorded: MarkerList.Recorded?
-    private var closed = false
+    /// Whether `close()` was called: nothing is done after it (the export checks it too).
+    private(set) var closed = false
 
     private init(url: URL, mode: Mode, environment: APIEnvironment, storage: Storage, openedDocumentVersion: Int?) {
         self.url = url
@@ -210,7 +211,7 @@ import ProjectFormat
     // MARK: - Private
 
     /// The session, if the project can be edited now.
-    private func editableSession() throws(APIError) -> EditSession {
+    func editableSession() throws(APIError) -> EditSession {
         guard !closed else { throw APIError(.refused, "the project is closed") }
         guard case let .edit(session) = storage else {
             throw APIError(.refused, "the project is open for reading: open it for editing to change it")
@@ -229,7 +230,7 @@ import ProjectFormat
     }
 
     /// `perform` of `step`, waited for on the disk.
-    private func perform(_ step: EditStep, command: String, created: String?, in session: EditSession) async throws -> CommandResult {
+    func perform(_ step: EditStep, command: String, created: String?, in session: EditSession) async throws -> CommandResult {
         let reopened = reopenings(of: session)
         guard session.perform(step) != .refused else {
             try checkEditable(session)
@@ -363,7 +364,7 @@ import ProjectFormat
         return read
     }
 
-    private func result(_ command: String, changed: Bool, label: String?, created: String?) -> CommandResult {
+    func result(_ command: String, changed: Bool, label: String?, created: String?) -> CommandResult {
         var undo: String?
         if case let .edit(session) = storage { undo = session.undoLabel?.rawValue }
         return CommandResult(
