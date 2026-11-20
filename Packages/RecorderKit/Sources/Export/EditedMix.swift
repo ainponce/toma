@@ -248,11 +248,13 @@ public final class EditedMix: Sendable {
     /// where each one's audio ends. Each take's events are read first, off that pool too (another take's event log is read
     /// from the disk the first time, `LoadedProject.events(ofTake:)`); a take whose event log cannot be read
     /// (`LoadedProject.readEvents()` throws) is silent: none of its tracks is read and none of its clicks sounds. Every file
-    /// of `assets/` the document's imported clips name is opened and decoded once too (`MediaAudio.make`).
+    /// of `assets/` the document's imported clips name is opened and decoded once too (`MediaAudio.make`), but for those
+    /// `previous` (a mix of the same project, the one this one replaces) holds all it reads of: taken from it as they are.
     /// - Precondition: `framesPerSecond` is positive.
     /// - Throws: `ExportError.cancelled` if the task is cancelled while reading.
     public static func make(
-        project: LoadedProject, document: EditDocument, framesPerSecond: Int, analysis: AnalysisInputs = .none
+        project: LoadedProject, document: EditDocument, framesPerSecond: Int, analysis: AnalysisInputs = .none,
+        reusing previous: EditedMix? = nil
     ) async throws -> EditedMix {
         let shown = project.takesShown(by: document)
         let takes = shown.isEmpty ? [project] : shown
@@ -270,7 +272,7 @@ public final class EditedMix: Sendable {
         }
         let prereadSegments = sources.reduce(0) { sum, source in source.tracks.reduce(sum) { $0 + $1.decodedSegments } }
         let timeMap = TimeMap(sequence: document.sequence)
-        let media = try await MediaAudio.make(project: project, document: document, timeMap: timeMap)
+        let media = try await MediaAudio.make(project: project, document: document, timeMap: timeMap, reusing: previous?.media)
         let music = await MusicMix.make(
             project: project, document: document, timeMap: timeMap, analysis: analysis, channels: channels,
             cuts: cuts(of: document, timeMap: timeMap, sources: sources), tracks: Set(sources.flatMap(\.keys)))

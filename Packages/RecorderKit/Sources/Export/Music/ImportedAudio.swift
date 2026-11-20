@@ -251,7 +251,7 @@ public enum ImportedAudio {
 
     /// The label of each of the `channels` channels of `format`, in their order, from its channel layout (a tag or a
     /// bitmap expanded by Core Audio, or its own descriptions); `nil` without one, or one of another count.
-    private static func labels(of format: CMAudioFormatDescription, channels: Int) -> [AudioChannelLabel]? {
+    static func labels(of format: CMAudioFormatDescription, channels: Int) -> [AudioChannelLabel]? {
         var size = 0
         guard let layout = CMAudioFormatDescriptionGetChannelLayout(format, sizeOut: &size) else { return nil }
         let tag = layout.pointee.mChannelLayoutTag

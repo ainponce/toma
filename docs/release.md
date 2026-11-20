@@ -1168,6 +1168,8 @@ En un proyecto de dos tomas con cámara y micrófono en las dos (la segunda agre
 
 - Con auriculares, en un proyecto con voz, soltar en la pista Video un `.mov` con sonido (una canción o alguien hablando): en su tramo se oye el clip y no la toma, sin chasquidos en los bordes; a −6 dB en el inspector, más bajo; a 2×, más rápido con el mismo tono; a 8×, callado. Lo mismo exportado.
 - Agregar un clip encima con sonido (Anotaciones ▸ Clip…): se oye junto con la voz desde que aparece hasta que termina el archivo, una sola vez; Silenciar lo calla en la vista previa y en el export. Recién importado, se oye apenas termina de prepararse la mezcla (unos segundos en un proyecto largo), sin cerrar el editor.
+- Un clip de 5.1 (o de más de dos canales) se oye al volumen de uno estéreo, sin saturar.
+- Límite conocido (no es una falla): el sonido de los clips se guarda en memoria, como se decodificó, hasta 10 min por mezcla entre todos (primero lo que se usa de cada clip, después cada clip entero); lo que pasa de ahí se lee del archivo mientras suena. Se oye igual, pero dos exportaciones del mismo proyecto pueden diferir en los últimos bits del sonido (−134 dBFS, inaudible), y también la vista previa contra el export. Lo que lo resolvería es una caché CAF del audio de cada clip, como la de la música importada (U8); queda para después.
 
 **Los marcadores en el editor** (T11)
 

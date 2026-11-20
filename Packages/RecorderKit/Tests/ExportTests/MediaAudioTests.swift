@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import AVFoundation
 @testable import Export
 import Foundation
 import ProjectFormat
@@ -234,34 +235,157 @@ import Testing
         }
     }
 
-    /// A clip's sound decoded whole into memory gives the same bits for a range however it is read (in any order, again
-    /// and again), silence outside it, and opens no file then; one longer than the most it holds, or with nothing placed,
-    /// is given back as it is.
-    @Test func aClipDecodedWholeReadsTheSameBits() async throws {
+    /// What a line holds of a clip's sound, decoded on the one pass that places it, gives the same bits for a range however
+    /// it is read (in any order, again and again), silence past its end; what it does not hold is read from the file, the
+    /// same to the units in the last place two decodings of the AAC can differ by. A window past the end holds up to it; a
+    /// file that cannot be heard holds nothing.
+    @Test func aLineHoldsWhatItDecodedOnce() async throws {
         try await withTemporaryDirectory { dir in
-            let project = try await voiceTake(in: dir, name: "whole", seconds: 1)
+            let project = try await voiceTake(in: dir, name: "held", seconds: 1)
             let asset = try await importedClip(dir, into: project, seconds: 1, tone: 440)
             let url = try #require(project.package.mediaAsset(asset, as: .video))
-            let line = try await AudioTrackTimeline.load(file: url, id: asset, channels: 2)
-            let end = try #require(line.placed.last?.end)
-            let whole = try await AudioTrackTimeline.decodedWhole(line)
-            let frames = try #require(whole.wholeFrames)
-            #expect(frames.count == Int(end) * 2 && whole.placed.count == line.placed.count && whole.track == asset)
+            let whole = try await AudioTrackTimeline.load(await AudioTrackTimeline.open(file: url), id: asset, channels: 2, holding: 0..<Int64.max)
+            let end = try #require(whole.placed.last?.end)
+            #expect(whole.heldFrames == 0..<end && whole.track == asset && whole.missing.isEmpty)
             let reads = try await offThePool { () -> [[Float]] in
                 let reader = AudioTrackTimeline.Reader(whole)
-                return [Int64(30_000)..<30_480, 0..<4_800, -100..<100, (end - 50)..<(end + 50), 30_000..<30_480].map { range in
+                return [Int64(30_000)..<30_480, 0..<4_800, -100..<100, (end - 50)..<(end + 50), 30_000..<30_480, 0..<end].map { range in
                     var samples: [Float] = []
                     reader.read(range, into: &samples)
                     return samples
                 }
             }
+            let frames = reads[5]
             #expect(bits(reads[0]) == bits(frames[60_000..<60_960]) && bits(reads[4]) == bits(reads[0]))
             #expect(bits(reads[1]) == bits(frames[0..<9_600]))
             #expect(reads[2][..<200].allSatisfy { $0 == 0 } && bits(reads[2][200...]) == bits(frames[0..<200]))
             #expect(bits(reads[3][..<100]) == bits(frames[(frames.count - 100)...]) && reads[3][100...].allSatisfy { $0 == 0 })
-            #expect(try await AudioTrackTimeline.decodedWhole(line, maximumFrames: end - 1).wholeFrames == nil)
-            let none = try await AudioTrackTimeline.load(file: dir.appending(path: "gone.mov"), id: "gone", channels: 2)
-            #expect(try await AudioTrackTimeline.decodedWhole(none).wholeFrames == nil)
+
+            // A stretch of it: the same bits there, read twice by readers of their own; the file around it.
+            let part = try await AudioTrackTimeline.load(await AudioTrackTimeline.open(file: url), id: asset, channels: 2, holding: 24_000..<36_000)
+            #expect(part.heldFrames == 24_000..<36_000)
+            let around = try await offThePool { () -> [[Float]] in
+                [Int64(20_000)..<40_000, 30_000..<40_000, 20_000..<40_000].map { range in
+                    var samples: [Float] = []
+                    AudioTrackTimeline.Reader(part).read(range, into: &samples)
+                    return samples
+                }
+            }
+            #expect(bits(around[0][8_000..<32_000]) == bits(around[2][8_000..<32_000]))
+            #expect(bits(around[1][..<12_000]) == bits(around[0][20_000..<32_000]))
+            #expect(zip(around[0], frames[40_000..<80_000]).allSatisfy { abs($0 - $1) <= 1e-6 })
+
+            let tail = try await AudioTrackTimeline.load(await AudioTrackTimeline.open(file: url), id: asset, channels: 2, holding: (end - 100)..<(end + 1_000))
+            #expect(tail.heldFrames == (end - 100)..<end)
+            let none = try await AudioTrackTimeline.load(await AudioTrackTimeline.open(file: dir.appending(path: "gone.mov")), id: "gone", channels: 2, holding: 0..<100)
+            #expect(none.heldFrames == nil && none.placed.isEmpty)
+        }
+    }
+
+    /// The lines of one mix hold at most its budget of frames, all together: first what the clips read of each file, then
+    /// each whole file while it fits, in the order of their paths; what they do not hold they read from the file, so the
+    /// clips sound the same either way (to the units in the last place of the AAC), and what they hold gives the same bits
+    /// twice.
+    @Test func theLinesKeepToTheBudget() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await voiceTake(in: dir, name: "budget", seconds: 3)
+            let first = try await importedClip(dir, into: project, seconds: 1, tone: 440)
+            let second = try await importedClip(dir, into: project, seconds: 1, tone: 660, pattern: 1)
+            // Half a second of each: from 0.25 to 0.75 s of its file.
+            let document = edited(project, [.take(0, 1), .media(first, 0.25, 0.75), .media(second, 0.25, 0.75), .take(1, 2)])
+            let timeMap = TimeMap(sequence: document.sequence)
+            let (a, b) = first < second ? (first, second) : (second, first)
+            let opened = await AudioTrackTimeline.open(file: try #require(project.package.mediaAsset(a, as: .video)))
+            let length = try #require(opened.estimatedFrames)
+            let end = try #require(try await AudioTrackTimeline.load(opened, id: a, channels: 2).placed.last?.end)
+            let read: Range<Int64> = 12_000..<36_000
+            let reference = try await rendered(try await EditedMix.make(project: project, document: document, framesPerSecond: 30))
+
+            // Both read, and the first whole: exactly the budget.
+            let budget = 2 * Int64(read.count) + (length - Int64(read.count))
+            let fits = try await MediaAudio.make(project: project, document: document, timeMap: timeMap, budget: budget)
+            #expect(fits.heldFrames == [a: 0..<min(length, end), b: read], "\(fits.heldFrames)")
+            #expect(fits.decodedFiles == 2)
+            // One read only; then none.
+            let one = try await MediaAudio.make(project: project, document: document, timeMap: timeMap, budget: Int64(read.count) + 1)
+            #expect(one.heldFrames == [a: read], "\(one.heldFrames)")
+            let nothing = try await MediaAudio.make(project: project, document: document, timeMap: timeMap, budget: 0)
+            #expect(nothing.heldFrames.isEmpty && nothing.played.count == 2)
+            for media in [fits, one, nothing] {
+                #expect(media.heldFrames.values.reduce(0) { $0 + $1.count } <= Int(budget))
+                let samples = try await heard(media, 0..<144_000)
+                let mono = (0..<48_000).map { (samples[2 * (48_000 + $0)] + samples[2 * (48_000 + $0) + 1]) * 0.5 }
+                #expect(zip(mono, reference[48_000..<96_000]).allSatisfy { abs($0 - $1) <= 1e-6 })
+            }
+            // What is held, the same bits twice.
+            #expect(bits(try await heard(fits, 0..<144_000)) == bits(try await heard(fits, 0..<144_000)))
+        }
+    }
+
+    /// A mix made again takes the lines of the mix before that hold all it reads of them, decoding nothing of them: the
+    /// same document sounds the same, bit for bit. A file it reads more of than the line before holds is decoded again;
+    /// a new file is decoded.
+    @Test func aRemadeMixTakesTheLinesBefore() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await voiceTake(in: dir, name: "remade", seconds: 3)
+            let asset = try await importedClip(dir, into: project, seconds: 1, tone: 440)
+            let other = try await importedClip(dir, into: project, seconds: 1, tone: 660, pattern: 1)
+            let document = edited(project, [.take(0, 1), .media(asset, 0, 1), .take(1, 2)])
+            let before = try await EditedMix.make(project: project, document: document, framesPerSecond: 30)
+            #expect(before.media.decodedFiles == 1)
+            let again = try await EditedMix.make(project: project, document: document, framesPerSecond: 30, reusing: before)
+            #expect(again.media.decodedFiles == 0 && again.media.heldFrames == before.media.heldFrames)
+            #expect(bits(try await rendered(again)) == bits(try await rendered(before)))
+            var more = document
+            more.annotations.items = [overlay(other, .whole, seconds: 1)]
+            let added = try await EditedMix.make(project: project, document: more, framesPerSecond: 30, reusing: again)
+            #expect(added.media.decodedFiles == 1 && added.media.assets == [asset, other])
+
+            // Held only where it is read: reading more of it decodes it again.
+            let timeMap = TimeMap(sequence: document.sequence)
+            let short = edited(project, [.take(0, 1), .media(asset, 0, 0.5), .take(1, 2)])
+            let held = try await MediaAudio.make(
+                project: project, document: short, timeMap: TimeMap(sequence: short.sequence), budget: 30_000)
+            #expect(held.heldFrames == [asset: 0..<24_000])
+            let longer = try await MediaAudio.make(project: project, document: document, timeMap: timeMap, reusing: held)
+            #expect(longer.decodedFiles == 1 && longer.heldFrames[asset]?.lowerBound == 0 && (longer.heldFrames[asset]?.count ?? 0) > 24_000)
+            let same = try await MediaAudio.make(
+                project: project, document: short, timeMap: TimeMap(sequence: short.sequence), reusing: held, budget: 30_000)
+            #expect(same.decodedFiles == 0 && same.heldFrames == held.heldFrames)
+        }
+    }
+
+    /// A clip of 5.1 (L R C LFE Ls Rs) is mixed down by ITU-R BS.775, scaled so that no side adds up to more than 1, never
+    /// clipped: block `k` has only channel `k` at 0.5, and the last every channel at 0.9 (3.6 summed at unity gain). A mono
+    /// line hears the mean of the two sides.
+    @Test func aFiveOneClipIsMixedDownWithoutClipping() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = dir.appending(path: "five-one.caf")
+            try writeMultichannel(at: url, channels: 6, tag: kAudioChannelLayoutTag_MPEG_5_1_A, blocks: 7) { k, c in
+                k == 6 ? 0.9 : (k == c ? 0.5 : 0)
+            }
+            let half = 1 / 2.0.squareRoot(), sum = 1 + 2 * half
+            let expected: [(Double, Double)] = [(1, 0), (0, 1), (half, half), (0, 0), (half, 0), (0, half)]
+            for channels in [2, 1] {
+                let line = try await AudioTrackTimeline.load(file: url, id: "five-one", channels: channels)
+                let samples = try await offThePool {
+                    var samples: [Float] = []
+                    AudioTrackTimeline.Reader(line).read(0..<(7 * 4_800), into: &samples)
+                    return samples
+                }
+                for (k, weight) in expected.enumerated() {
+                    let n = (k * 4_800 + 2_400) * channels
+                    let (left, right) = (0.5 * weight.0 / sum, 0.5 * weight.1 / sum)
+                    if channels == 2 {
+                        #expect(abs(Double(samples[n]) - left) < 1e-6 && abs(Double(samples[n + 1]) - right) < 1e-6, "channel \(k)")
+                    } else {
+                        #expect(abs(Double(samples[n]) - (left + right) / 2) < 1e-6, "channel \(k), mono")
+                    }
+                }
+                let n = (6 * 4_800 + 2_400) * channels
+                #expect(abs(samples[n] - 0.9) < 1e-6, "every channel: \(samples[n])")
+                #expect(samples.allSatisfy { abs($0) <= 0.9 + 1e-6 })
+            }
         }
     }
 
@@ -401,6 +525,39 @@ private func rendered(_ mix: EditedMix, blocks: Int64? = nil) async throws -> [F
 }
 
 private func bits(_ samples: some Collection<Float>) -> [UInt32] { samples.map(\.bitPattern) }
+
+/// What `media` adds over output frames `frames` to silence, in two channels, off the cooperative pool.
+private func heard(_ media: MediaAudio, _ frames: Range<Int64>) async throws -> [Float] {
+    try await offThePool {
+        var samples = [Float](repeating: 0, count: frames.count * 2)
+        media.add(frames, into: &samples, channels: 2)
+        return samples
+    }
+}
+
+/// Writes a CAF of Float32 at 48 kHz of `channels` channels with the layout `tag`, `blocks` blocks of 0.1 s, channel `c`
+/// of block `k` all at `value(k, c)`.
+private func writeMultichannel(
+    at url: URL, channels: Int, tag: AudioChannelLayoutTag, blocks: Int, _ value: (Int, Int) -> Float
+) throws {
+    var layout = AudioChannelLayout()
+    layout.mChannelLayoutTag = tag
+    let settings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: channels,
+        AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true, AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsNonInterleaved: false,
+        AVChannelLayoutKey: Data(bytes: &layout, count: MemoryLayout<AudioChannelLayout>.size),
+    ]
+    let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+    let frames = blocks * 4_800
+    let buffer = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(frames)))
+    buffer.frameLength = AVAudioFrameCount(frames)
+    for c in 0..<channels {
+        let samples = try #require(buffer.floatChannelData?[c])
+        for n in 0..<frames { samples[n] = value(n / 4_800, c) }
+    }
+    try file.write(from: buffer)
+}
 
 /// How many samples of `a` and `b` differ, and the first and last that do, for a message.
 private func differences(_ a: [UInt32], _ b: [UInt32]) -> String {
