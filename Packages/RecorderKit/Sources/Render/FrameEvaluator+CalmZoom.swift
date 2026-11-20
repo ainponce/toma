@@ -44,14 +44,82 @@ public struct LoupeLayer: Equatable, Sendable {
     }
 }
 
-/// The calm zoom's blocks of a document (`ZoomMode` other than `classic`) as the frames draw them, worked out once for the
-/// scene from its motion paths (`FrameEvaluator.init`): it depends on no size. `nil` everywhere in the base.
+/// The calm zoom's blocks of a document (`ZoomMode` other than `classic`) as the frames draw them (plan 3b decision 6),
+/// worked out once for the scene from its motion paths (`FrameEvaluator.init`): it depends on no size, as the paths do
+/// not. Each take of a sequence has its own scene and paths (`FrameEvaluator.init(project:document:…)`).
+///
+/// A frame's layer is the path's state of its output time (`CalmZoomPath.state(atOutput:)`), in the output's pixels:
+///
+/// - The focus is in the stage's coordinates of the output, as `RenderFrame.cursor` is: its centre is the path's, from
+///   stage units to the output (`StagePoints.stageSize`), placed again with `StageCrop` at the depth it was placed at
+///   (the larger of the instant's and the block's) over the rect today's zoom keeps to at this size, the window's with a
+///   frame, the device's bounds with one, the screen's, or the whole output without a screen, as
+///   `FrameEvaluator.stageTransform` places the stage's camera; so once settled it is exactly the crop the classic zoom
+///   would show. Across a short gap into a deeper block the path places it at that block's depth already, so it does not
+///   jump on a screen's edge (`CalmZoomPath`): there, where placing it at this block's depth would move it, it is the
+///   path's as it is. Its size is the output over the depth of the instant.
+/// - In a split's card (`RenderFrame.card`), where what is drawn of the screen is on the card and the card's zoom shows
+///   the crop of the screen's content (`CardZoomPath`), it is that crop: the path's centre at its fractions of the
+///   screen's rect in stage units (`StagePoints.rects(of:)`) taken to the screen's content on the card, the content
+///   over the depth of the instant; while the card comes in or goes (`CardPlacement.mix` from 0 to 1), the stage's focus
+///   and the card's mixed by it, so it does not jump. The compositor draws it through the card's content and cuts
+///   Highlight's and Dim's hole to the card.
+/// - In `loupe` mode the lens is the block's (`LoupeStyle`), its radius a fraction of the output's short side, and it
+///   magnifies by the depth of the instant: from 1× to the block's depth, without moving.
+///
+/// `nil` without a calm block (`MotionPaths.calmZoom`) and where nothing of one is seen.
 struct CalmZoomScene: Sendable {
-    init(document: EditDocument, take: TakeRecord, timeMap: TimeMap, paths: MotionPaths) {}
+    /// The path of the take's calm blocks; `nil` without one.
+    private let path: CalmZoomPath?
+    private let stage: StagePoints
+    private let timeMap: TimeMap
+    /// The take of each clip of the sequence, and the scene's: the stage's rect is read for its own clips alone, as the
+    /// path reads it.
+    private let clipTakes: [String]
+    private let take: String
+
+    init(document: EditDocument, take: TakeRecord, timeMap: TimeMap, paths: MotionPaths) {
+        path = paths.calmZoom
+        stage = paths.stage
+        self.timeMap = timeMap
+        clipTakes = document.sequence.map(\.take)
+        self.take = take.id
+    }
 
     /// The calm zoom of `frame`, a frame of the take at output time `output` as either path left it (`finishLayers`):
-    /// `nil` without a calm block there, and always in the base.
+    /// `nil` without a calm block there or where nothing of it is seen (see the type's notes).
     func layer(atOutput output: Int64, frame: RenderFrame) -> CalmZoomLayer? {
-        nil
+        guard let path, let state = path.state(atOutput: output) else { return nil }
+        let size = SIMD2<Double>(frame.outputSize), stageSize = stage.stageSize
+        let host = timeMap.source(atOutput: output).flatMap { shown in
+            clipTakes.indices.contains(shown.clip) && clipTakes[shown.clip] == take ? shown.source : nil
+        }
+        // The centre as the path placed it, and placed again at that depth over the rect the zoom keeps to at this size.
+        let placedDepth = max(state.depth, state.blockDepth)
+        var center = state.center / stageSize * size
+        let stageRoom = host.flatMap(stage.screenRect(at:)) ?? Rect(x: 0, y: 0, width: stageSize.x, height: stageSize.y)
+        if StageCrop.clamp(center: state.center, depth: placedDepth, stage: stageSize, screen: stageRoom) == state.center {
+            let room = frame.windowFrame?.rect ?? frame.deviceFrame?.rects.bounds ?? frame.screen?.rect
+                ?? Rect(x: 0, y: 0, width: size.x, height: size.y)
+            center = StageCrop.clamp(center: center, depth: placedDepth, stage: size, screen: room)
+        }
+        var half = size / state.depth / 2
+        if let card = frame.card, let content = frame.screen?.rect,
+           let screen = host.flatMap(stage.shownScreen(at:)).map({ stage.rects(of: $0.view).screen }),
+           screen.width > 0, screen.height > 0
+        {
+            let fraction = (state.center - SIMD2(screen.x, screen.y)) / SIMD2(screen.width, screen.height)
+            let extent = SIMD2(content.width, content.height)
+            let weight = card.mix.isNaN ? 0 : min(max(card.mix, 0), 1)
+            center += (SIMD2(content.x, content.y) + fraction * extent - center) * weight
+            half += (extent / state.depth / 2 - half) * weight
+        }
+        let loupe = state.mode == .loupe
+            ? LoupeLayer(
+                radius: state.loupe.radius * min(size.x, size.y), shape: state.loupe.shape, magnification: state.depth)
+            : nil
+        return CalmZoomLayer(
+            mode: state.mode, amount: state.amount,
+            focus: Rect(x: center.x - half.x, y: center.y - half.y, width: 2 * half.x, height: 2 * half.y), loupe: loupe)
     }
 }
