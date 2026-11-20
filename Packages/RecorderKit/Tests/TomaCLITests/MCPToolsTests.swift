@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Editing
 import Foundation
 import ProjectAPI
 import ProjectFormat
@@ -46,7 +47,104 @@ import Testing
             #expect(apply["inputSchema"]?["properties"]?["commands"]?["type"] == .string("array"))
             let export = try #require(tools.first { $0["name"] == .string("export_video") })
             #expect(export["inputSchema"]?["properties"]?["codec"]?["enum"]?.arrayValue?.count == ExportRequest.codecs.count)
+            #expect(export["inputSchema"]?["properties"]?["background"]?["type"] == .string("boolean"))
+            let status = try #require(tools.first { $0["name"] == .string("export_status") })
+            #expect(status["annotations"]?["readOnlyHint"] == .bool(true))
+            #expect(status["inputSchema"]?["properties"]?["jobId"] != nil)
+            let transcript = try #require(tools.first { $0["name"] == .string("get_transcript") })
+            for key in ["from", "to", "words"] {
+                #expect(transcript["inputSchema"]?["properties"]?[key] != nil, "\(key)")
+            }
         }
+    }
+
+    @Test func transcriptComesInSentencesWordsAndParts() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = try await Self.transcribed(in: dir)
+            let mcp = MCPHarness(in: dir)
+            let report = try #require(try await ProjectRunner.transcript(url, environment: CLIFixtures.environment(in: dir)))
+            let kept = report.words.filter { !$0.cut }
+            // Sentences: each FakeTranscript sentence ends with a period, after its twelfth word.
+            let all = try await mcp.call("get_transcript", ["project": .string(url.path)], id: 1)
+            #expect(all["isError"] == .bool(false), "\(all)")
+            let page = try #require(all["structuredContent"])
+            #expect(page["language"] == .string(report.language))
+            #expect(page["duration"]?.numberValue.map { abs($0 - CLIFixtures.seconds) < 0.01 } == true)
+            #expect(page["from"] == .integer(0))
+            #expect(page["nextFrom"] == nil)
+            #expect(page["words"] == nil)
+            let segments = try #require(page["segments"]?.arrayValue)
+            #expect(segments.count > 1)
+            #expect(segments.dropLast().allSatisfy { $0["text"]?.stringValue?.hasSuffix(".") == true })
+            let texts = segments.compactMap { $0["text"]?.stringValue }.joined(separator: " ")
+            #expect(texts == kept.map(\.text).joined(separator: " "))
+            #expect(segments.allSatisfy { ($0["start"]?.numberValue ?? 1) <= ($0["end"]?.numberValue ?? 0) })
+            // Every word, with its times, without the take's source times.
+            let words = try await mcp.call("get_transcript", ["project": .string(url.path), "words": .bool(true)], id: 2)
+            let list = try #require(words["structuredContent"]?["words"]?.arrayValue)
+            #expect(list.count == kept.count)
+            #expect(list.first?.objectValue?.keys.sorted() == ["end", "start", "text"])
+            #expect(words["structuredContent"]?["segments"] == nil)
+            // A part: what starts or goes on between 2 and 4 s.
+            let part = try await mcp.call(
+                "get_transcript", ["project": .string(url.path), "from": .integer(2), "to": .number(4), "words": .bool(true)], id: 3)
+            let inPart = try #require(part["structuredContent"]?["words"]?.arrayValue)
+            #expect(!inPart.isEmpty && inPart.count < list.count)
+            #expect(inPart.allSatisfy { ($0["end"]?.numberValue ?? 0) > 2 && ($0["start"]?.numberValue ?? 9) < 4 })
+            #expect(part["structuredContent"]?["to"] == .integer(4))
+            // Out of the output, or backwards.
+            for (k, window) in [(-1.0, 3.0), (5.0, 5.0), (60.0, 70.0)].enumerated() {
+                let wrong = try await mcp.call(
+                    "get_transcript", ["project": .string(url.path), "from": .number(window.0), "to": .number(window.1)],
+                    id: Int64(10 + k))
+                #expect(wrong["structuredContent"]?["error"]?["code"] == .string("outOfRange"), "\(window)")
+            }
+        }
+    }
+
+    @Test func aLongTranscriptComesInPartsThatFitAResult() throws {
+        // Half an hour at 2.5 words a second, a period every twelfth word.
+        var words: [WordReport] = []
+        for k in 0..<4_500 {
+            let start = Double(k) * 0.4
+            words.append(WordReport(
+                take: "take-001", text: k % 12 == 11 ? "palabra." : "palabra", start: start, end: start + 0.3,
+                sourceStart: UInt64(k) * 400_000_000, sourceEnd: UInt64(k) * 400_000_000 + 300_000_000, cut: false))
+        }
+        let report = TranscriptReport(language: "es-MX", text: "", words: words, duration: 1_800)
+        for words in [false, true] {
+            var from: Double? = nil
+            var seen = 0
+            var parts = 0
+            repeat {
+                let page = try TranscriptPage.make(report, from: from, to: nil, words: words)
+                let json = try JSONRPC.text(JSONValue(encoding: page))
+                #expect(json.utf8.count < TranscriptPage.budget + 200, "\(json.utf8.count)")
+                seen += words ? page.words?.count ?? 0 : (page.segments ?? []).reduce(0) { $0 + $1.text.split(separator: " ").count }
+                parts += 1
+                from = page.nextFrom
+                if let next = page.nextFrom { #expect(page.to == next) }
+            } while from != nil && parts < 100
+            // Every word once, over a few parts.
+            #expect(seen == 4_500, "words: \(words)")
+            #expect(parts > 1 && parts < 30, "\(parts)")
+        }
+    }
+
+    /// The project of `CLIFixtures.package` with the made-up transcript of `FakeTranscript`, as `recorder-dev
+    /// fake-transcript` puts one.
+    @MainActor static func transcribed(in dir: URL) async throws -> URL {
+        let url = try await CLIFixtures.package(in: dir)
+        let context = EditContext(
+            app: AppInfo(name: "test", version: "dev"), cachesRoot: dir.appending(path: "Caches"), defaultStyle: .toma,
+            now: { Date() }, makeID: { prefix in prefix + String(format: "%08x", UInt32.random(in: .min ... .max)) })
+        let session = try await EditSession.open(url, take: nil, context: context)
+        if let step = TranscriptCommands.create(session.document, FakeTranscript.make(for: session.project.take)) {
+            _ = session.perform(step)
+        }
+        _ = await session.flushed()
+        await session.close()
+        return url
     }
 
     @Test func resultHasTextAndStructuredContent() async throws {
@@ -241,9 +339,12 @@ import Testing
                 "jsonrpc": .string("2.0"), "method": .string("notifications/cancelled"),
                 "params": .object(["requestId": .integer(9), "reason": .string("the user changed their mind")]),
             ]))
+            // Not one progress more once the cancellation is read, even before the export stops.
+            let progressAtCancel = mcp.progress(token).count
             while await mcp.server.runningCalls > 0, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
             #expect(await mcp.server.runningCalls == 0)
             #expect(!mcp.messages.contains { $0.isAnswer(to: .integer(9)) })
+            #expect(mcp.progress(token).count == progressAtCancel)
             let left = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix("cancelled") }
             #expect(left.isEmpty, "\(left)")
             let lastProgress = mcp.messages.lastIndex { $0["method"] == .string("notifications/progress") }
@@ -362,6 +463,104 @@ import Testing
             #expect(edit["result"]?["isError"] == .bool(false))
             #expect(export["result"]?["structuredContent"]?["duration"]?.numberValue.map { abs($0 - 8) < 0.01 } == true, "\(export)")
             #expect(mcp.messages.firstIndex { $0.isAnswer(to: .integer(1)) }! < mcp.messages.firstIndex { $0.isAnswer(to: .integer(2)) }!)
+        }
+    }
+
+    @Test func aBackgroundExportAnswersAtOnceAndExportStatusFollowsIt() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = try await CLIFixtures.package(in: dir)
+            let mcp = MCPHarness(in: dir)
+            let started = try await mcp.call(
+                "export_video",
+                ["project": .string(url.path), "output": .string("later"), "size": .integer(1440), "background": .bool(true)],
+                id: 1, progressToken: .string("ignored"))
+            let job = try #require(started["structuredContent"])
+            #expect(started["isError"] == .bool(false))
+            #expect(job["status"] == .string("running"))
+            #expect(job["output"] == .string(dir.appending(path: "later.mp4").path))
+            let id = try #require(job["jobId"]?.stringValue)
+            #expect(id.hasPrefix("export-"))
+            // The call answered before the export wrote anything, and sends no progress after its answer.
+            #expect(!FileManager.default.fileExists(atPath: dir.appending(path: "later.mp4").path))
+            var status = job
+            var progress: [Double] = []
+            var k: Int64 = 2
+            let deadline = ContinuousClock.now + .seconds(300)
+            while status["status"] == .string("running"), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(50))
+                status = try #require(try await mcp.call("export_status", ["jobId": .string(id)], id: k)["structuredContent"])
+                if let value = status["progress"]?.numberValue { progress.append(value) }
+                k += 1
+            }
+            #expect(status["status"] == .string("done"), "\(status)")
+            #expect(status["result"]?["path"] == .string(dir.appending(path: "later.mp4").path))
+            #expect(status["result"]?["duration"]?.numberValue.map { abs($0 - CLIFixtures.seconds) < 0.01 } == true)
+            #expect(zip(progress, progress.dropFirst()).allSatisfy { $0 <= $1 })
+            #expect(FileManager.default.fileExists(atPath: dir.appending(path: "later.mp4").path))
+            #expect(mcp.progress(.string("ignored")).isEmpty)
+            // Every job, and one there is not.
+            let all = try await mcp.call("export_status", [:], id: 100_000)
+            #expect(all["structuredContent"]?["jobs"]?.arrayValue?.compactMap { $0["jobId"]?.stringValue } == [id])
+            let none = try await mcp.call("export_status", ["jobId": .string("export-00000000")], id: 100_001)
+            #expect(none["structuredContent"]?["error"]?["code"] == .string("refused"))
+            // A job that fails says why; arguments that are wrong fail before any job.
+            let doomed = try await mcp.call(
+                "export_video",
+                ["project": .string(url.path), "output": .string("Missing/Folder/out.gif"), "gif": .bool(true),
+                 "background": .bool(true)], id: 100_002)
+            let doomedID = try #require(doomed["structuredContent"]?["jobId"]?.stringValue)
+            var failed = try #require(doomed["structuredContent"])
+            while failed["status"] == .string("running"), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(50))
+                failed = try #require(try await mcp.call("export_status", ["jobId": .string(doomedID)], id: k)["structuredContent"])
+                k += 1
+            }
+            #expect(failed["status"] == .string("failed"))
+            #expect(failed["error"]?["code"]?.stringValue?.isEmpty == false, "\(failed)")
+            let wrong = try await mcp.call(
+                "export_video",
+                ["project": .string(url.path), "output": .string("a.mov"), "background": .bool(true)], id: 100_003)
+            #expect(wrong["structuredContent"]?["error"]?["code"] == .string("invalidCommand"))
+            #expect(try await mcp.call("export_status", [:], id: 100_004)["structuredContent"]?["jobs"]?.arrayValue?.count == 2)
+        }
+    }
+
+    @Test func anExportHoldsItsProjectOnlyWhileItReadsIt() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = try await CLIFixtures.package(in: dir)
+            let mcp = MCPHarness(in: dir)
+            await mcp.send(MCPHarness.call(
+                "export_video", ["project": .string(url.path), "output": .string("long.mp4"), "size": .integer(2160)], id: 1))
+            await mcp.send(MCPHarness.call("project_info", ["project": .string(url.path)], id: 2))
+            await mcp.send(MCPHarness.call("apply_commands", [
+                "project": .string(url.path), "commands": .array([.object(["command": .string("setTitle"), "title": .string("During")])]),
+            ], id: 3))
+            _ = try await mcp.answer(to: .integer(3))
+            // The read and the edit were answered while the export still ran; the export is of the project before them.
+            let indices = [1, 2, 3].map { id in mcp.messages.firstIndex { $0.isAnswer(to: .integer(Int64(id))) } }
+            #expect(indices[0] == nil, "the export ended before the calls after it")
+            #expect(indices[1] != nil)
+            let export = try await mcp.answer(to: .integer(1))
+            #expect(export["result"]?["isError"] == .bool(false), "\(export)")
+        }
+    }
+
+    @Test func twoExportsToOneFileTakeTurns() async throws {
+        try await withTemporaryDirectory { dir in
+            let first = try await CLIFixtures.package(in: dir)
+            let second = try await CLIFixtures.package(in: dir, name: "Other")
+            let mcp = MCPHarness(in: dir)
+            for (k, url) in [first, second].enumerated() {
+                await mcp.send(MCPHarness.call(
+                    "export_video", ["project": .string(url.path), "output": .string("same.mp4"), "size": .integer(720)],
+                    id: Int64(k)))
+            }
+            for k in 0..<2 {
+                let answer = try await mcp.answer(to: .integer(Int64(k)))
+                #expect(answer["result"]?["isError"] == .bool(false), "\(answer)")
+            }
+            let left = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix("same") }
+            #expect(left == ["same.mp4"])
         }
     }
 

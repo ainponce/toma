@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import Darwin
 import Foundation
 import ProjectAPI
 import ProjectFormat
-import Synchronization
 
 /// A tool of `toma mcp` (fases 4 y 5 design §6.3): its name, what it does for an agent to read, the JSON Schema of its
 /// arguments, and the call. `MCPToolCatalog.all` lists them. A call throws an `APIError` for what it refuses (the server
@@ -36,6 +34,8 @@ public struct MCPContext: Sendable {
     /// The place the server kept for this call in the line of the package its `project` argument names, when the call
     /// came; `nil` without one.
     let reservation: PackageLocks.Reservation?
+    /// The exports running in the background (`export_video` with `background: true`), the server's.
+    let jobs: ExportJobs
 
     public init(
         environment: APIEnvironment, workingDirectory: URL,
@@ -43,19 +43,20 @@ public struct MCPContext: Sendable {
     ) {
         self.init(
             environment: environment, workingDirectory: workingDirectory, progress: progress, locks: PackageLocks(),
-            reservation: nil)
+            reservation: nil, jobs: ExportJobs())
     }
 
     init(
         environment: APIEnvironment, workingDirectory: URL,
         progress: (@Sendable (_ fraction: Double, _ message: String?) -> Void)?, locks: PackageLocks,
-        reservation: PackageLocks.Reservation?
+        reservation: PackageLocks.Reservation?, jobs: ExportJobs
     ) {
         self.environment = environment
         self.workingDirectory = workingDirectory
         self.progress = progress
         self.locks = locks
         self.reservation = reservation
+        self.jobs = jobs
     }
 
     /// The package at `path` (`ProjectPaths.package`): `notAProject` for a path with `..`, a link, or what is not a
@@ -73,19 +74,19 @@ public struct MCPContext: Sendable {
     /// one package go one at a time, so two edits never meet at `edit.lock`, and in the order they came (the server
     /// keeps each call's place when it reads it), so an export asked for after an edit exports the edit. The package is
     /// known by its folder (device and inode), whatever path names it. A call cancelled while it waits never runs.
+    ///
+    /// The rules of a tool: the package is the one its `project` argument names (the server keeps that line's place
+    /// for the call until the call ends); `serialized` is never called inside another `serialized` (it would wait for
+    /// itself); and what takes long goes inside `body`.
     public func serialized<T: Sendable>(_ url: URL, _ body: @Sendable () async throws -> T) async throws -> T {
+        try await locks.holding(place(for: url), body)
+    }
+
+    /// This call's ticket in the line of the package at `url`: the one the server kept for it, or a new one, last.
+    /// Every ticket taken is released (`PackageLocks.holding` does it).
+    func place(for url: URL) -> PackageLocks.Ticket {
         let key = PackageKey(url)
-        let ticket = reservation?.take(for: key) ?? locks.reserve(key)
-        do {
-            try await locks.wait(ticket)
-            try Task.checkCancellation()
-            let value = try await body()
-            locks.release(ticket)
-            return value
-        } catch {
-            locks.release(ticket)
-            throw error
-        }
+        return reservation?.take(for: key) ?? locks.reserve(key)
     }
 }
 
@@ -169,6 +170,20 @@ struct MCPArguments {
         return integer
     }
 
+    /// A finite number, an integer or not.
+    func optionalNumber(_ key: String) throws(APIError) -> Double? {
+        guard let value = members[key] else { return nil }
+        let number: Double? =
+            switch value {
+            case let .integer(value): Double(value)
+            case let .unsigned(value): Double(value)
+            case let .number(value): value
+            default: nil
+            }
+        guard let number, number.isFinite else { throw wrong(key, "a number") }
+        return number
+    }
+
     func optionalBool(_ key: String) throws(APIError) -> Bool? {
         guard let value = members[key] else { return nil }
         guard case let .bool(bool) = value else { throw wrong(key, "true or false") }
@@ -199,6 +214,12 @@ enum MCPSchema {
         .object(["type": .string("integer"), "description": .string(description)])
     }
 
+    static func number(_ description: String, minimum: Double? = nil) -> JSONValue {
+        var schema: [String: JSONValue] = ["type": .string("number"), "description": .string(description)]
+        if let minimum { schema["minimum"] = .number(minimum) }
+        return .object(schema)
+    }
+
     static func boolean(_ description: String) -> JSONValue {
         .object(["type": .string("boolean"), "description": .string(description)])
     }
@@ -216,129 +237,5 @@ enum MCPSchema {
         ]
         if !readOnly { hints["destructiveHint"] = .bool(destructive) }
         return .object(hints)
-    }
-}
-
-/// A package by its folder's device and inode (the identity plan 4b decision 19 gives the control socket's), so two
-/// paths to one package are one; by its path if its folder cannot be read.
-struct PackageKey: Hashable, Sendable {
-    private let device: Int64
-    private let inode: UInt64
-    private let path: String
-
-    init(_ url: URL) {
-        var info = stat()
-        if lstat(url.path, &info) == 0 {
-            device = Int64(info.st_dev)
-            inode = UInt64(info.st_ino)
-            path = ""
-        } else {
-            device = -1
-            inode = 0
-            path = url.standardizedFileURL.path
-        }
-    }
-}
-
-/// One line per package (`MCPContext.serialized`): a call takes a ticket (`reserve`), waits until it is the first of
-/// its line (`wait`) and leaves it when done (`release`), so the calls on a package go one at a time, in the order of
-/// their tickets. The server takes a call's ticket when it reads the call, before the call's task starts.
-final class PackageLocks: Sendable {
-    struct Ticket: Hashable, Sendable {
-        let key: PackageKey
-        let number: UInt64
-    }
-
-    /// The ticket the server took for a call, which the call's first `serialized` on that package uses.
-    final class Reservation: Sendable {
-        let ticket: Ticket
-        private let taken = Mutex(false)
-
-        init(_ ticket: Ticket) {
-            self.ticket = ticket
-        }
-
-        /// The ticket, the first time it is asked for with its package; `nil` after, or for another package.
-        func take(for key: PackageKey) -> Ticket? {
-            guard ticket.key == key else { return nil }
-            return taken.withLock { taken in
-                defer { taken = true }
-                return taken ? nil : ticket
-            }
-        }
-    }
-
-    private struct Line {
-        var tickets: [UInt64] = []
-        /// The tickets waiting to be first, and how to tell them.
-        var waiting: [UInt64: CheckedContinuation<Void, any Error>] = [:]
-    }
-
-    private let state = Mutex((next: UInt64(0), lines: [PackageKey: Line]()))
-
-    /// A new ticket, last in the line of `key`.
-    func reserve(_ key: PackageKey) -> Ticket {
-        state.withLock { state in
-            let ticket = Ticket(key: key, number: state.next)
-            state.next += 1
-            state.lines[key, default: Line()].tickets.append(ticket.number)
-            return ticket
-        }
-    }
-
-    /// Returns once `ticket` is the first of its line. Throws `CancellationError`, the ticket out of the line, if the
-    /// task is cancelled before, or if the ticket left the line already.
-    func wait(_ ticket: Ticket) async throws {
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                let now: Result<Void, any Error>? = state.withLock { state in
-                    guard let line = state.lines[ticket.key], line.tickets.contains(ticket.number) else {
-                        return .failure(CancellationError())
-                    }
-                    if line.tickets.first == ticket.number { return .success(()) }
-                    if Task.isCancelled {
-                        // Not the first: nobody goes next because it leaves.
-                        _ = Self.remove(ticket, from: &state.lines)
-                        return .failure(CancellationError())
-                    }
-                    state.lines[ticket.key]?.waiting[ticket.number] = continuation
-                    return nil
-                }
-                if let now { continuation.resume(with: now) }
-            }
-        } onCancel: {
-            // Only a ticket still waiting leaves: one that is first already is its call's until it releases it.
-            let waiter: CheckedContinuation<Void, any Error>? = state.withLock { state in
-                guard let waiter = state.lines[ticket.key]?.waiting[ticket.number] else { return nil }
-                // A ticket waiting is never the first.
-                _ = Self.remove(ticket, from: &state.lines)
-                return waiter
-            }
-            waiter?.resume(throwing: CancellationError())
-        }
-    }
-
-    /// Takes `ticket` out of its line (its call is done, or never ran); the next one goes if it was first. Releasing a
-    /// ticket twice does nothing.
-    func release(_ ticket: Ticket) {
-        let next: CheckedContinuation<Void, any Error>? = state.withLock { state in
-            Self.remove(ticket, from: &state.lines)
-        }
-        next?.resume()
-    }
-
-    /// Takes `ticket` out of `lines`, and gives the first ticket's waiter when that ticket just became first.
-    private static func remove(
-        _ ticket: Ticket, from lines: inout [PackageKey: Line]
-    ) -> CheckedContinuation<Void, any Error>? {
-        guard var line = lines[ticket.key], let index = line.tickets.firstIndex(of: ticket.number) else { return nil }
-        line.tickets.remove(at: index)
-        line.waiting[ticket.number] = nil
-        var next: CheckedContinuation<Void, any Error>?
-        if index == 0, let first = line.tickets.first {
-            next = line.waiting.removeValue(forKey: first)
-        }
-        lines[ticket.key] = line.tickets.isEmpty ? nil : line
-        return next
     }
 }

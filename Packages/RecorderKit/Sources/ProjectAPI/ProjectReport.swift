@@ -253,11 +253,15 @@ public struct TranscriptReport: Codable, Equatable, Sendable {
     public var text: String
     /// Every word of every take, in the transcript's order.
     public var words: [WordReport]
+    /// What the output lasts, in seconds (so a reader can ask for parts of it, as `get_transcript` does); `nil` in a
+    /// report made before it was added.
+    public var duration: Double?
 
-    public init(language: String, text: String, words: [WordReport]) {
+    public init(language: String, text: String, words: [WordReport], duration: Double? = nil) {
         self.language = language
         self.text = text
         self.words = words
+        self.duration = duration
     }
 }
 
@@ -393,7 +397,9 @@ enum Reports {
                         sourceEnd: word.end.nanoseconds, cut: TranscriptTiming.isCut(word, take: take.take, in: clips)))
             }
         }
-        return TranscriptReport(language: transcript.language, text: kept.map(\.text).joined(separator: " "), words: words)
+        return TranscriptReport(
+            language: transcript.language, text: kept.map(\.text).joined(separator: " "), words: words,
+            duration: map.durationSeconds)
     }
 
     /// The takes of `project`'s manifest, each one's events read (from the disk, the first time): never on the main thread.
