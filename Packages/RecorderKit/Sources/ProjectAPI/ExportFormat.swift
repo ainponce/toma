@@ -28,6 +28,10 @@ public struct ExportRequest: Codable, Equatable, Sendable {
     public var fps: Int?
     /// `standard` or `high`: a video's bitrate, a GIF's colours (`balanced` or `high`).
     public var quality: String = "standard"
+    /// For an export for an external editor: whether its `.fcpxml` and `.toma-metadata.json` may replace files of their
+    /// names next to the video (`ExportSettings.replacesEditorFiles`); otherwise such files are `refused`, and nothing is
+    /// written.
+    public var replacesEditorFiles: Bool = false
 
     /// The codecs by the names the command line and the MCP server give them.
     public static let codecs: [String: ExportCodec] = [
@@ -37,12 +41,16 @@ public struct ExportRequest: Codable, Equatable, Sendable {
     /// The qualities by their names.
     public static let qualities = ["standard", "high"]
 
-    public init(kind: Kind = .video, codec: String = "h264", size: Int? = nil, fps: Int? = nil, quality: String = "standard") {
+    public init(
+        kind: Kind = .video, codec: String = "h264", size: Int? = nil, fps: Int? = nil, quality: String = "standard",
+        replacesEditorFiles: Bool = false
+    ) {
         self.kind = kind
         self.codec = codec
         self.size = size
         self.fps = fps
         self.quality = quality
+        self.replacesEditorFiles = replacesEditorFiles
     }
 
     /// The name of `codec` in `codecs`.
@@ -50,7 +58,7 @@ public struct ExportRequest: Codable, Equatable, Sendable {
         codecs.first { $0.value == codec }?.key ?? codec.rawValue
     }
 
-    private enum CodingKeys: String, CodingKey { case kind, codec, size, fps, quality }
+    private enum CodingKeys: String, CodingKey { case kind, codec, size, fps, quality, replacesEditorFiles }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -59,6 +67,7 @@ public struct ExportRequest: Codable, Equatable, Sendable {
         size = try container.decodeIfPresent(Int.self, forKey: .size)
         fps = try container.decodeIfPresent(Int.self, forKey: .fps)
         quality = try container.decodeIfPresent(String.self, forKey: .quality) ?? "standard"
+        replacesEditorFiles = try container.decodeIfPresent(Bool.self, forKey: .replacesEditorFiles) ?? false
     }
 }
 

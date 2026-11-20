@@ -282,15 +282,12 @@ private let small = ExportSettings(outputSize: [320, 180], framesPerSecond: 10)
         }
     }
 
-    @Test func externalEditorIsNotAvailableYet() async throws {
+    /// A closed project exports nothing (the export for an external editor is `APIExternalEditorTests`').
+    @Test func closedProjectExportsNothing() async throws {
         try await withTemporaryDirectory { dir in
             let environment = APIFixtures.environment(in: dir)
             let url = try await APIFixtures.package(in: dir).package.url
             let project = try await TomaProject.open(url, mode: .read, environment: environment)
-            let error = await APIFixtures.apiError {
-                _ = try await project.export(to: dir.appending(path: "edit.mp4"), format: .externalEditor(small), progress: nil)
-            }
-            #expect(error?.code == .notAvailable)
             await project.close()
             let closed = await APIFixtures.apiError {
                 _ = try await project.export(to: dir.appending(path: "late.mp4"), format: .video(small), progress: nil)

@@ -17,7 +17,9 @@ struct ExportCommand: AsyncParsableCommand {
             Codecs: \(ExportRequest.codecs.keys.sorted().joined(separator: ", ")) (h264 and hevc write an .mp4; the \
             ProRes ones and hevc-alpha a .mov). Without an extension, the codec's is added; another one is an error. \
             --size is the shorter side of a video (720, 1080, 1440 or 2160; 1080 by default) and the longer side of a \
-            GIF (800 by default); --fps is the project's by default, 15 for a GIF.
+            GIF (800 by default); --fps is the project's by default, 15 for a GIF. With --fcpxml, <name>.fcpxml \
+            (FCPXML 1.11) and <name>.toma-metadata.json go next to the video, for Final Cut Pro, DaVinci Resolve, After \
+            Effects or a script; files of those names already there are replaced only with --replace.
             """)
 
     @Argument(help: "The .toma package.")
@@ -41,9 +43,17 @@ struct ExportCommand: AsyncParsableCommand {
     @Flag(help: "Export an animated GIF of the whole output.")
     var gif = false
 
+    @Flag(help: "Also write <name>.fcpxml and <name>.toma-metadata.json next to the video, for an external editor.")
+    var fcpxml = false
+
+    @Flag(help: "With --fcpxml, replace a .fcpxml or .toma-metadata.json of those names already next to the video.")
+    var replace = false
+
     @OptionGroup var output: OutputOptions
 
     func validate() throws {
+        if fcpxml, gif { throw ValidationError("--fcpxml goes with a video, not with --gif.") }
+        if replace, !fcpxml { throw ValidationError("--replace is for the files of --fcpxml: leave it out without --fcpxml.") }
         if let codec {
             guard !gif else { throw ValidationError("A GIF has no codec: leave --codec out with --gif.") }
             guard ExportRequest.codecs[codec] != nil else {
@@ -68,7 +78,9 @@ struct ExportCommand: AsyncParsableCommand {
     func run() async throws {
         let url = try CLI.package(package)
         let target = try ProjectPaths.output(destination, relativeTo: CLI.workingDirectory)
-        let request = ExportRequest(kind: gif ? .gif : .video, codec: codec ?? "h264", size: size, fps: fps, quality: quality)
+        let kind: ExportRequest.Kind = gif ? .gif : fcpxml ? .externalEditor : .video
+        let request = ExportRequest(
+            kind: kind, codec: codec ?? "h264", size: size, fps: fps, quality: quality, replacesEditorFiles: replace)
         let progress = ProgressLine()
         let environment = CLI.environment
         let export = Task {

@@ -41,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let recovery = RecoveryPrompt()
     private let exportGate = ExportGate()
     private var editors: [URL: EditorWindowController] = [:]
+    /// The control socket `toma` and the MCP server ask the open editors' changes through (fases 4 y 5 design §6.4).
+    private lazy var controlSocket = ControlSocketServer { [weak self] in self?.editors.values.map(\.model) ?? [] }
     /// The editors whose windows closed and whose sessions are still closing (`EditorModel.closing`), by a number of
     /// their own, with where their packages were: a quit waits for them too, and the library counts them as open.
     private var closingEditors: [Int: (place: EditorPlace, task: Task<Void, Never>)] = [:]
@@ -178,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await focus.recoverAfterLaunch() }
         // The named styles: the default style of 1b becomes «My Style» the first time (1c design §8).
         StyleCatalog.shared.start()
+        controlSocket.start()
         makeIsland()
         powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
@@ -279,6 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The editors' windows close with the app: their states were written as their sessions closed for the quit
     /// (`QuitSequencer`), as when one closes (design §5.1); any still open is written now, and all are waited for.
     func applicationWillTerminate(_ notification: Notification) {
+        controlSocket.stop()
         for editor in editors.values where !editor.model.closed { editor.writeStateBeforeQuit() }
         EditorStateWriter.flush()
     }

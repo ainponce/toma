@@ -41,7 +41,7 @@ toma --help           # los subcomandos y los códigos de salida
 | `toma edit <proyecto> '<comando>'` | Aplica un comando JSON, por ejemplo `'{"command":"setAspect","aspect":"9:16"}'` |
 | `toma edit <proyecto> --file <archivo>` | Aplica una lista de comandos en orden (`-` lee la entrada estándar); para en el primero que falla y lo hecho antes queda |
 | `toma undo <proyecto>`, `toma redo <proyecto>` | Deshace o rehace el último paso, también uno hecho en la app |
-| `toma export <proyecto> <salida>` | Exporta como la app (ver abajo) |
+| `toma export <proyecto> <salida>` | Exporta como la app (ver abajo); con `--fcpxml`, también los archivos para un editor externo |
 | `toma mcp` | El servidor MCP por la entrada y la salida estándar (ver abajo) |
 
 Todos (menos `mcp`) aceptan `--json`: la salida estándar tiene entonces exactamente un documento JSON, el resultado o
@@ -49,7 +49,22 @@ Todos (menos `mcp`) aceptan `--json`: la salida estándar tiene entonces exactam
 medida que lo guarda.
 
 **Códigos de salida:** 0 bien; 1 un error; 2 un error de uso (argumentos que no son los del subcomando, o un comando que
-no es de la API: `invalidCommand`); 3 el proyecto lo está editando otro proceso (`locked`).
+no es de la API: `invalidCommand`); 3 el proyecto lo está editando otro proceso que no es Toma (`locked`).
+
+### Con el proyecto abierto en Toma
+
+Si Toma tiene el proyecto abierto en el editor, tiene su `edit.lock`, y `toma` no escribe en el paquete: le pide a la app
+que haga el cambio, por su socket de control (`~/Library/Application Support/dev.toma.Toma/control.sock`, solo de tu
+usuario). `toma edit`, `toma undo` y `toma redo` (y `apply_commands`, `undo` y `redo` del MCP) se ven al instante en el
+editor, como si fueran gestos: Edición ▸ Deshacer los deshace, y el resultado dice `"via": "app"`. La respuesta llega
+cuando el cambio ya está en el disco.
+
+- `toma info`, `transcript`, `markers`, `chapters` y `export` le piden antes a la app que guarde lo que muestra, así leen
+  y exportan el último cambio.
+- Por la app no se hacen `transcribe` ni un `setBackground` con una imagen de afuera del proyecto: dan `notAvailable`
+  (hacerlo en Toma, o cerrar ahí el proyecto y volver a correr el comando).
+- Si el que tiene el `edit.lock` no es Toma (otro `toma`, otra Mac por una carpeta compartida) o Toma no contesta, sigue
+  siendo `locked`.
 
 ### Exportar
 
@@ -57,6 +72,7 @@ no es de la API: `invalidCommand`); 3 el proyecto lo está editando otro proceso
 toma export Demo.toma ~/Desktop/demo                       # ~/Desktop/demo.mp4, H.264 1080p
 toma export Demo.toma demo.mov --codec prores4444         # fondo transparente
 toma export Demo.toma demo.gif --gif --size 640 --fps 15  # un GIF animado
+toma export Demo.toma ~/Desktop/demo --fcpxml             # demo.mp4, demo.fcpxml y demo.toma-metadata.json
 ```
 
 - `--codec`: `h264` (por defecto) y `hevc` escriben un `.mp4`; `prores422`, `prores422hq`, `prores4444` y
@@ -65,6 +81,11 @@ toma export Demo.toma demo.gif --gif --size 640 --fps 15  # un GIF animado
   800, 1080, 1280 o 1920; 800 por defecto).
 - `--fps`: el del proyecto por defecto (24, 25, 30, 50 o 60); para un GIF, 10, 15, 20, 25 o 30 (15 por defecto).
 - `--quality`: `standard` o `high`.
+- `--fcpxml`: junto al video escribe `<nombre>.fcpxml` (FCPXML 1.11, para Final Cut Pro o DaVinci Resolve: el video como
+  un solo clip, un `chapter-marker` por marcador, los clics y los bloques de zoom como marcadores) y
+  `<nombre>.toma-metadata.json` (`metadata-1`, para After Effects, Motion o un script: el cursor en cada cuadro, los
+  clics, la cámara del zoom, los marcadores y los cortes, en píxeles y cuadros del video). No va con `--gif`. Si ya hay
+  archivos con esos nombres, el export se rechaza sin escribir nada, salvo con `--replace`.
 
 Sin extensión se agrega la del formato; otra extensión es un error de uso. Un export nunca escribe dentro de un `.toma`;
 un archivo que ya está en la salida se reemplaza cuando el nuevo está entero. El progreso sale por la salida de errores
@@ -127,6 +148,7 @@ con `id: null`.
 | `apply_commands` | `project`, `commands` | Los comandos de la API, en orden, cada uno su paso; para en el primero que falla |
 | `undo`, `redo` | `project` | Deshace o rehace el último paso del proyecto |
 | `export_video` | `project`, `output`, `codec`?, `size`?, `fps`?, `quality`?, `gif`? | Exporta como `toma export` |
+| `export_fcpxml` | `project`, `output`, `codec`?, `size`?, `fps`?, `quality`?, `replace`? | Exporta como `toma export --fcpxml`: el video y, junto a él, el `.fcpxml` y el `.toma-metadata.json`; el resultado trae las tres rutas (`path`, `fcpxml`, `metadata`) |
 
 - **Resultados.** Cada resultado trae el JSON en `structuredContent` y el mismo JSON como texto en `content`. Las
   herramientas que solo leen llevan `readOnlyHint: true`.
@@ -138,9 +160,9 @@ con `id: null`.
   corra ninguno.
 - **Tiempos.** En segundos de la salida tal como se reproduce cuando corre el comando: después de un `cut`, el resto se
   corre. Para encontrarlos sirven `project_info`, `get_transcript` (cada palabra con su `start` y `end`) y `get_markers`.
-- **Progreso.** Un `export_video` puede tardar minutos. Si la llamada trae `_meta.progressToken`, el servidor manda
-  `notifications/progress` con ese token, `progress` de 0 a 1 (sube con cada aviso) y `total: 1`, y ninguno después de la
-  respuesta. `notifications/cancelled` con el `requestId` de la llamada la cancela: el export para, no queda archivo y no
+- **Progreso.** Un `export_video` o un `export_fcpxml` puede tardar minutos. Si la llamada trae `_meta.progressToken`, el
+  servidor manda `notifications/progress` con ese token, `progress` de 0 a 1 (sube con cada aviso) y `total: 1`, y
+  ninguno después de la respuesta. `notifications/cancelled` con el `requestId` de la llamada la cancela: el export para, no queda archivo y no
   hay respuesta.
 - **Rutas.** `project` es un paquete `.toma` con su `manifest.json`; ni el paquete ni el manifiesto pueden ser enlaces, y
   una ruta con `..` se rechaza (`notAProject`). `output` nunca puede caer dentro de un paquete (`refused`). Las rutas
@@ -148,8 +170,11 @@ con `id: null`.
 - **Un proyecto a la vez.** Las llamadas corren a la vez, pero las de un mismo paquete (aunque lleguen por rutas
   distintas) esperan su turno, en el orden en que llegaron. Ninguna deja el proyecto abierto entre llamadas: lo abre, hace
   lo suyo y lo cierra.
-- **La app.** Si Toma tiene el proyecto abierto, tiene su `edit.lock`: `apply_commands`, `undo` y `redo` dan `locked`
-  (cerrar el proyecto en Toma, o editarlo ahí). Leer y exportar funcionan igual, con lo que hay en disco.
+- **La app.** Si Toma tiene el proyecto abierto, tiene su `edit.lock`: `apply_commands`, `undo` y `redo` se los pide a
+  la app, que los hace en su editor (se ven al instante, se deshacen con Edición ▸ Deshacer y el resultado dice
+  `"via": "app"`), y leer y exportar le piden antes que guarde lo que muestra (ver «Con el proyecto abierto en Toma»).
+  `transcribe` y una imagen de afuera para el fondo dan `notAvailable` por ese camino. Si el `edit.lock` lo tiene otro
+  proceso, `locked`.
 
 ### Sesión de ejemplo: Claude Code
 

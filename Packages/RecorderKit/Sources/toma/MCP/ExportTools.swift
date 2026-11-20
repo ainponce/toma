@@ -39,12 +39,15 @@ struct ExportArguments {
     var fps: Int?
     var quality: String?
     var gif: Bool
+    /// `export_fcpxml`'s `replace`: its files may replace files of their names next to the video.
+    var replace = false
 
-    /// The arguments of `tool`; `gif` is one of them only when the tool takes it. `invalidCommand` for a codec or a
-    /// quality it does not know, or a codec with a GIF.
-    init(_ arguments: JSONValue, tool: String, gif takesGIF: Bool, context: MCPContext) throws {
+    /// The arguments of `tool`; `gif` and `replace` are among them only when the tool takes them. `invalidCommand` for a
+    /// codec or a quality it does not know, or a codec with a GIF.
+    init(_ arguments: JSONValue, tool: String, gif takesGIF: Bool, replace takesReplace: Bool = false, context: MCPContext) throws {
         var keys: Set<String> = ["project", "output", "codec", "size", "fps", "quality"]
         if takesGIF { keys.insert("gif") }
+        if takesReplace { keys.insert("replace") }
         let arguments = try MCPArguments(arguments, tool: tool, keys: keys)
         project = try context.packageURL(try arguments.string("project"))
         output = try context.outputURL(try arguments.string("output"))
@@ -53,6 +56,7 @@ struct ExportArguments {
         fps = try arguments.optionalInt("fps")
         quality = try arguments.optionalString("quality")
         gif = try arguments.optionalBool("gif") ?? false
+        replace = try arguments.optionalBool("replace") ?? false
         if let codec {
             guard !gif else { throw APIError(.invalidCommand, "\(tool): a GIF has no codec; leave “codec” out with “gif”") }
             guard ExportRequest.codecs[codec] != nil else {
@@ -67,7 +71,8 @@ struct ExportArguments {
 
     /// The export of `kind`, with the call's progress, once no other call works on the package.
     func run(kind: ExportRequest.Kind, context: MCPContext) async throws -> ExportResult {
-        let request = ExportRequest(kind: kind, codec: codec ?? "h264", size: size, fps: fps, quality: quality ?? "standard")
+        let request = ExportRequest(
+            kind: kind, codec: codec ?? "h264", size: size, fps: fps, quality: quality ?? "standard", replacesEditorFiles: replace)
         let project = project, output = output, environment = context.environment
         var progress: (@Sendable (Double) -> Void)?
         if let report = context.progress { progress = { report($0, nil) } }
