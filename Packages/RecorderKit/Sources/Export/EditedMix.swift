@@ -7,38 +7,46 @@ import os
 
 /// The sound of an edit document, at 48 kHz: the one mix of the export and of the preview (design §7.7).
 ///
-/// For each clip, every audio track reads the range of the source the clip keeps (each placed by host time with its own
-/// `audioClock` anchors, `AudioTrackTimeline`), at its gain from `audio.tracks` (0 to 2, 0 when muted, 1 for a track the
-/// plan does not name); the tracks are added together with the click sounds, go through the limiter when
-/// `audio.limiter` is on, and are clipped to [−1, 1]. The mix is mono if every track is, stereo otherwise.
+/// For each clip, every audio track of the clip's take (phase 3 design §9: each take the sequence shows is a `Source` of
+/// its own) reads the range of that take the clip keeps (each placed by host time with its own `audioClock` anchors,
+/// `AudioTrackTimeline`), at its gain from `audio.tracks` (0 to 2, 0 when muted, 1 for a track the plan does not name),
+/// found by `AudioPlan.trackGain(take:track:takes:)`: the track's own key, or else that of the same track in the first
+/// take of the sequence that has one, so a row's gain holds in every take; the tracks are added together with the click
+/// sounds, go through the limiter when `audio.limiter` is on, and are clipped to [−1, 1]. The mix is mono if every track
+/// of every take is, stereo otherwise. A track that one take has and another does not is silent in the clips of the
+/// other. With one take, the mix of phase 2, sample for sample.
 ///
 /// - Clip `k` is output frames `round(O_k × 48 000 / 10⁹) ..< round(O_{k+1} × 48 000 / 10⁹)` (`TimeMap`'s starts, the
-///   last clip ending at `round(D × 48 000 / 10⁹)`, where the content ends), reading the source from the frame of its
-///   start, `round((s_k − origin) × 48 000 / 10⁹)`, with `origin` the take's timeline start (`TakeTimeline.bounds`).
+///   last clip ending at `round(D × 48 000 / 10⁹)`, where the content ends), reading its take from the frame of its
+///   start, `round((s_k − origin) × 48 000 / 10⁹)`, with `origin` that take's timeline start (`TakeTimeline.bounds`).
 /// - Where two clips meet and the sound would jump (a cut, another take, another speed, or a clip that is silent), the
 ///   one before fades out over its last 192 frames (4 ms) and the one after fades in over its first 192, linearly. Where
 ///   the clip after goes on with the source of the one before (the same take and speed, its start the other's end, as
 ///   a clip split without a cut), there is no fade and the source is read on without a break: the mix is the clip's
 ///   unsplit. The output's start fades in, and its end out, the same way only where the clip there starts or ends inside
-///   the take (`TakeTimeline.editableBounds`): a trimmed start or end never sounds as a step (final review C-M1). A clip
-///   at the take's own start or end never fades there (plan decision 7), so the legacy document, one clip over the whole
-///   take, mixes the samples the export always did.
+///   its take (`TakeTimeline.editableBounds` of the take of the first clip and of the last): a trimmed start or end never
+///   sounds as a step (final review C-M1). A clip at its take's own start or end never fades there (plan decision 7), so
+///   the legacy document, one clip over the whole take, mixes the samples the export always did.
 /// - A clip at another speed than 1, up to 4×, plays its source stretched to the clip's frames with its pitch kept
 ///   (`SpeedStretch`), track by track before its gain: the clips of one take at one speed that go on one from the
-///   other are stretched as one, from where they start. A clip faster than 4×, or of another take, is silent.
+///   other are stretched as one, from where they start. A clip faster than 4×, a clip with content (phase 3 base plan
+///   decision 8) or one of a take the mix has no source for (`with(document:framesPerSecond:)`) is silent.
 /// - A click sound (`cursor.clickSound`, `ClickSounds`) plays at `clickSoundGain` from the output frame of every left
-///   or right `mouseDown` the clips keep where it can be seen (1c design §5.4): where the screen's opacity
-///   (`LayoutTimeline.screenOpacity`, with the camera readable as the render finds it) is at least 0.5 then, so not under
-///   a settled Camera only or Camera full screen; one less than `ClickSounds.minimumSpacing` after the last that sounded
-///   does not sound. A document without layouts (`LayoutTimeline.isTrivial`) sounds every one, as in 1b.
-/// - A track with its clean voice (phase 2 design §5.6, `soundIsolation-2`: `analysis.cleanVoice`, a file for every segment
-///   heard, each exactly as long as its span) and a cleanup `c` above 0 (`TrackGain.cleanup`, 0 to 1) mixes
+///   or right `mouseDown` of every take the clips keep where it can be seen (1c design §5.4): where the screen's opacity
+///   (`LayoutTimeline.screenOpacity` of that take's layouts, with its camera readable as the render finds it) is at
+///   least 0.5 then, so not under a settled Camera only or Camera full screen; one less than
+///   `ClickSounds.minimumSpacing` after the last that sounded, of whichever take, does not sound. A document without
+///   layouts (`LayoutTimeline.isTrivial`) sounds every one, as in 1b.
+/// - A track with its clean voice (phase 2 design §5.6, `soundIsolation-2`: `analysis.cleanVoice` by the track's own
+///   `AudioPlan.key`, a file for every segment heard, each exactly as long as its span) and a cleanup `c` above 0
+///   (`TrackGain.cleanup` of the gain the track mixes at, 0 to 1) mixes
 ///   `c × clean + (1 − c) × dry` before its gain, frame for frame where the dry sound is (the clean voice's own line of the
 ///   same segments, `AudioTrackTimeline.cleaned`), and at another speed each stretched with a stretch of its own. At
 ///   cleanup 0, or without its clean voice (a file missing or of another length), the track mixes as recorded and nothing
 ///   of the clean voice is read; a clean file that is gone while the mix plays (macOS emptied the caches) turns the
 ///   track dry from the next range on.
-/// - With `audio.normalize` (design §5.7, `loudness-1`), a track whose whole measure is there (`analysis.loudness`, and
+/// - With `audio.normalize` (design §5.7, `loudness-1`), a track whose whole measure is there (`analysis.loudness` by its
+///   own `AudioPlan.key`, and
 ///   its clean voice's blocks when it is mixed clean) is brought to its target loudness by `Loudness.gain` of its blocks
 ///   as it plays (`Loudness.blocks(of:cleanup:mixChannels:)`, with its cleanup when mixed clean and 0 when not), before
 ///   the user's gain; without the measure, it has no gain of its own. The limiter is on with Normalize, whatever
@@ -62,8 +70,10 @@ public final class EditedMix: Sendable {
     public let totalFrames: Int64
     /// The frames the document's clips last: `round(D × 48 000 / 10⁹)`. Silence from there on.
     let contentFrames: Int64
-    /// The source, shared with the mixes of other revisions (`with(document:framesPerSecond:)`).
-    let source: Source
+    /// One for each take the document the mix was made for shows (`LoadedProject.takesShown(by:)`), in the order its
+    /// sequence first shows them; the project's own take when it shows none the package has. Shared with the mixes of
+    /// other revisions (`with(document:framesPerSecond:)`).
+    let sources: [Source]
     /// The segments this mix decoded to find where their audio ends: none for one made by `with(document:framesPerSecond:)`.
     let prereadSegments: Int
     /// What the mix reads of the project's analysis caches (phase 2 design §10), kept by the mixes of other revisions
@@ -76,29 +86,38 @@ public final class EditedMix: Sendable {
     /// The document and the frame rate the mix plays, for `with(analysis:)`.
     private let document: EditDocument
     private let framesPerSecond: Int
-    /// The clean voice of each of `source.tracks` that `analysis` has whole, opened once (`AudioTrackTimeline.cleaned`):
-    /// shared by the mixes of every revision.
+    /// `AudioPlan.key` of every audio track of `sources`, one take after the other, each in its take's order: the tracks
+    /// the arrays of one value per track below go by. With one take, that take's tracks.
+    private let keys: [String]
+    /// Where the tracks of each of `sources` are in `keys`.
+    private let trackRanges: [Range<Int>]
+    /// The clean voice of each track that `analysis` has whole, opened once (`AudioTrackTimeline.cleaned`): shared by the
+    /// mixes of every revision.
     private let cleanLines: [AudioTrackTimeline?]
-    /// How much of its clean voice each of `source.tracks` mixes, 0 to 1: 0 for a track mixed dry.
+    /// How much of its clean voice each track mixes, 0 to 1: 0 for a track mixed dry.
     private let cleanups: [Float]
-    /// The clean files of each of `source.tracks` mixed clean, which `render` looks for before it mixes.
+    /// The clean files of each track mixed clean, which `render` looks for before it mixes.
     private let cleanFiles: [[String]]
     /// The clips with any output, in order.
     private let pieces: [Piece]
     /// The runs of clips the stretched pieces play.
     private let runs: [SpeedStretch.Run]
-    /// The gain of each of `source.tracks`: the user's, times the one that normalizes the track as it plays.
+    /// The gain of each track: the user's, times the one that normalizes the track as it plays.
     private let gains: [Float]
-    /// The gain of each of `source.tracks` once it turns dry (its clean files gone): normalized as dry.
+    /// The gain of each track once it turns dry (its clean files gone): normalized as dry.
     private let dryGains: [Float]
     /// The output frames the click sound starts at, in order, and the sound at its gain.
-    private let clickFrames: [Int64]
+    let clickFrames: [Int64]
     private let clickSound: [Float]
     private let limited: Bool
     private let missing: [MissingAudio]
     private let state: Mutex<State>
 
-    /// What the mixes of every revision of a project's document share: the take's audio tracks, read and placed once.
+    /// The takes the mix has a source for, in its order (`sources`): a clip of any other take is silent in it, so the
+    /// editor makes the mix again (`make`) when the sequence comes to show one of those.
+    public var takeIDs: [String] { sources.map(\.takeID) }
+
+    /// What the mixes of every revision of a project's document share: one take's audio tracks, read and placed once.
     final class Source: Sendable {
         let takeID: String
         /// Frame 0 of the tracks' timeline: the take's timeline start, where its legacy document starts.
@@ -106,6 +125,7 @@ public final class EditedMix: Sendable {
         /// What a document can show of the take (`TakeTimeline.editableBounds`): a clip that starts after its start, or
         /// ends before its end, is trimmed there.
         let editable: ClosedRange<HostTime>
+        /// The mix's: the most any take's tracks need.
         let channels: Int
         /// Every microphone and system audio track of the take, in the take's order.
         let tracks: [AudioTrackTimeline]
@@ -155,14 +175,22 @@ public final class EditedMix: Sendable {
         }
     }
 
-    /// What a clip plays.
+    /// What a clip plays: the tracks of `sources[take]`.
     private enum Sound: Equatable, Sendable {
-        /// Nothing: a clip of another take, or faster than `SpeedStretch.maximumSpeed`.
+        /// Nothing: a clip with content, of a take the mix has no source for, or faster than `SpeedStretch.maximumSpeed`.
         case silent
         /// At 1×: the tracks' timeline from this frame on, frame for frame.
-        case source(Int64)
+        case source(take: Int, frame: Int64)
         /// At another speed: its frames of `runs[run]`, stretched.
-        case stretched(run: Int)
+        case stretched(take: Int, run: Int)
+
+        /// The source whose tracks it plays; `nil` for silence.
+        var take: Int? {
+            switch self {
+            case .silent: nil
+            case .source(let take, _), .stretched(let take, _): take
+            }
+        }
     }
 
     /// What `render` changes: each track's reader and stretch, those of its clean voice when it is mixed clean, and the
@@ -187,16 +215,34 @@ public final class EditedMix: Sendable {
     static let fadeFrames: Int64 = 192
 
     /// The mix of `document` of `project` at `framesPerSecond`, reading `analysis` of the caches: reads every microphone and
-    /// system audio track of the take (opening its segments and decoding them once, off Swift's cooperative pool, to find
-    /// where each one's audio ends).
+    /// system audio track of each take the sequence shows (`LoadedProject.takesShown(by:)`; of `project`'s own take when
+    /// it shows none the package has), opening its segments and decoding them once, off Swift's cooperative pool, to find
+    /// where each one's audio ends.
     /// - Precondition: `framesPerSecond` is positive.
     /// - Throws: `ExportError.cancelled` if the task is cancelled while reading.
     public static func make(
         project: LoadedProject, document: EditDocument, framesPerSecond: Int, analysis: AnalysisInputs = .none
     ) async throws -> EditedMix {
-        let tracks = project.take.tracks.filter { !$0.kind.isVideo }
+        let shown = project.takesShown(by: document)
+        let takes = shown.isEmpty ? [project] : shown
+        let tracks = takes.map { $0.take.tracks.filter { !$0.kind.isVideo } }
         var channels = 1
-        for track in tracks { channels = max(channels, await AudioTrackTimeline.channelCount(of: track, in: project)) }
+        for (take, own) in zip(takes, tracks) {
+            for track in own { channels = max(channels, await AudioTrackTimeline.channelCount(of: track, in: take)) }
+        }
+        var sources: [Source] = []
+        for (take, own) in zip(takes, tracks) {
+            sources.append(try await source(of: take, tracks: own, channels: channels))
+        }
+        let prereadSegments = sources.reduce(0) { sum, source in source.tracks.reduce(sum) { $0 + $1.decodedSegments } }
+        return EditedMix(
+            sources: sources, cleanLines: await cleanLines(of: sources, analysis: analysis), document: document,
+            framesPerSecond: framesPerSecond, prereadSegments: prereadSegments, analysis: analysis)
+    }
+
+    /// The source of the take `project` is focused on (`LoadedProject.focused(on:)`): its audio tracks `tracks` read with
+    /// `channels` channels on its timeline, its clicks, what a document can show of it and whether its camera can be read.
+    private static func source(of project: LoadedProject, tracks: [TrackRecord], channels: Int) async throws -> Source {
         let origin = TakeTimeline.bounds(take: project.take, events: project.events).start
         var timelines: [AudioTrackTimeline] = []
         for track in tracks {
@@ -209,28 +255,26 @@ public final class EditedMix: Sendable {
         let editable = TakeTimeline.editableBounds(take: project.take, events: project.events)
         // The render's rule (`FrameRenderer.cameraReadable`): the layouts that need the camera are Screen only without it.
         let cameraReadable = LayoutTimeline.cameraReadable(take: project.take) { SegmentAvailability.classify($0, in: project.package) }
-        let source = Source(
+        return Source(
             take: project.take, origin: origin, editable: editable.start...editable.end, channels: channels, tracks: timelines,
             clicks: clicks, cameraReadable: cameraReadable)
-        return EditedMix(
-            source: source, cleanLines: await cleanLines(of: source, analysis: analysis), document: document,
-            framesPerSecond: framesPerSecond, prereadSegments: timelines.reduce(0) { $0 + $1.decodedSegments }, analysis: analysis)
     }
 
     /// The mix of another revision of the document, `document` at `framesPerSecond`, of the same project: it reads the
-    /// same source and the same clean voice, without decoding the one again to place it nor opening the other.
+    /// same sources and the same clean voice, without decoding the one again to place it nor opening the other. A clip of
+    /// a take it has no source for (`takeIDs`) is silent in it.
     /// - Precondition: `framesPerSecond` is positive.
     public func with(document: EditDocument, framesPerSecond: Int) -> EditedMix {
         EditedMix(
-            source: source, cleanLines: cleanLines, document: document, framesPerSecond: framesPerSecond, prereadSegments: 0,
+            sources: sources, cleanLines: cleanLines, document: document, framesPerSecond: framesPerSecond, prereadSegments: 0,
             analysis: analysis)
     }
 
-    /// The mix of this document reading `analysis` of the caches instead: the same source, without decoding it again;
+    /// The mix of this document reading `analysis` of the caches instead: the same sources, without decoding them again;
     /// only the clean files `analysis` names are opened (never decoded).
     public func with(analysis: AnalysisInputs) async -> EditedMix {
         EditedMix(
-            source: source, cleanLines: await Self.cleanLines(of: source, analysis: analysis), document: document,
+            sources: sources, cleanLines: await Self.cleanLines(of: sources, analysis: analysis), document: document,
             framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
     }
 
@@ -240,58 +284,80 @@ public final class EditedMix: Sendable {
         a.cleanVoice == b.cleanVoice && a.loudness == b.loudness
     }
 
-    /// The clean voice of each of `source`'s tracks that `analysis` has, if it has it whole.
-    private static func cleanLines(of source: Source, analysis: AnalysisInputs) async -> [AudioTrackTimeline?] {
+    /// The clean voice of each track of `sources` (one take after the other) that `analysis` has, by the track's own key,
+    /// if it has it whole.
+    private static func cleanLines(of sources: [Source], analysis: AnalysisInputs) async -> [AudioTrackTimeline?] {
         var lines: [AudioTrackTimeline?] = []
-        for (t, track) in source.tracks.enumerated() {
-            guard let voice = analysis.cleanVoice[source.keys[t]] else {
-                lines.append(nil)
-                continue
+        for source in sources {
+            for (t, track) in source.tracks.enumerated() {
+                guard let voice = analysis.cleanVoice[source.keys[t]] else {
+                    lines.append(nil)
+                    continue
+                }
+                lines.append(await AudioTrackTimeline.cleaned(track, files: voice.files, channels: source.channels))
             }
-            lines.append(await AudioTrackTimeline.cleaned(track, files: voice.files, channels: source.channels))
         }
         return lines
     }
 
     private init(
-        source: Source, cleanLines: [AudioTrackTimeline?], document: EditDocument, framesPerSecond: Int, prereadSegments: Int,
+        sources: [Source], cleanLines: [AudioTrackTimeline?], document: EditDocument, framesPerSecond: Int, prereadSegments: Int,
         analysis: AnalysisInputs
     ) {
         precondition(framesPerSecond > 0, "EditedMix: \(framesPerSecond) frames per second")
-        precondition(cleanLines.count == source.tracks.count, "EditedMix: \(cleanLines.count) clean lines")
-        self.source = source
+        precondition(!sources.isEmpty, "EditedMix: no take")
+        // Every track of every take, one take after the other.
+        let tracks = sources.flatMap(\.tracks)
+        let takes = sources.flatMap { source in source.tracks.map { _ in source.takeID } }
+        let keys = sources.flatMap(\.keys), kinds = sources.flatMap(\.kinds)
+        precondition(cleanLines.count == tracks.count, "EditedMix: \(cleanLines.count) clean lines")
+        self.sources = sources
+        self.keys = keys
+        var next = 0
+        trackRanges = sources.map { source in
+            defer { next += source.tracks.count }
+            return next..<(next + source.tracks.count)
+        }
         self.cleanLines = cleanLines
         self.document = document
         self.framesPerSecond = framesPerSecond
         self.prereadSegments = prereadSegments
         self.analysis = analysis
-        channels = source.channels
+        let mixChannels = sources[0].channels
+        channels = mixChannels
         let timeMap = TimeMap(sequence: document.sequence)
         totalFrames = Self.totalFrames(frameCount: timeMap.frameCount(frameRate: framesPerSecond), framesPerSecond: framesPerSecond)
         contentFrames = Self.frames(ofNanoseconds: timeMap.duration)
-        (pieces, runs) = Self.pieces(of: document.sequence, timeMap: timeMap, contentFrames: contentFrames, source: source)
-        let userGains = source.keys.map { key -> Float in
-            guard let plan = document.audio.tracks[key] else { return 1 }
+        (pieces, runs) = Self.pieces(of: document.sequence, timeMap: timeMap, contentFrames: contentFrames, sources: sources)
+        // The takes the sequence shows, in the order it first shows them: where a track's gain is looked for by its id
+        // when its own take has none (phase 3 base plan decision 11).
+        var seen: Set<String> = []
+        let shownTakes = document.sequence.compactMap { seen.insert($0.take).inserted ? $0.take : nil }
+        let plans = tracks.indices.map { t in
+            document.audio.trackGain(take: takes[t], track: tracks[t].track, takes: shownTakes)
+        }
+        let userGains = plans.map { plan -> Float in
+            guard let plan else { return 1 }
             if plan.muted { return 0 }
             return plan.gain.isNaN ? 1 : Float(min(max(plan.gain, 0), 2))
         }
         // The cleanup of each track, 0 to 1, where its clean voice is there to mix.
-        let cleanup = source.tracks.indices.map { t -> Double in
-            guard cleanLines[t] != nil, let plan = document.audio.tracks[source.keys[t]], !plan.cleanup.isNaN else { return 0 }
+        let cleanup = tracks.indices.map { t -> Double in
+            guard cleanLines[t] != nil, let plan = plans[t], !plan.cleanup.isNaN else { return 0 }
             return min(max(plan.cleanup, 0), 1)
         }
         cleanups = cleanup.map(Float.init)
-        cleanTracks = Set(source.tracks.indices.filter { cleanup[$0] > 0 }.map { source.keys[$0] })
-        cleanFiles = source.tracks.indices.map { t in
+        cleanTracks = Set(tracks.indices.filter { cleanup[$0] > 0 }.map { keys[$0] })
+        cleanFiles = tracks.indices.map { t in
             cleanup[t] > 0 ? (cleanLines[t]?.placed.map(\.segment.asset.url.path) ?? []) : []
         }
         if document.audio.normalize {
             let normalized = { (t: Int, cleanup: Double) -> Float in
                 userGains[t] * Self.normalizingGain(
-                    analysis.loudness[source.keys[t]], cleanup: cleanup, mixChannels: source.channels, kind: source.kinds[t])
+                    analysis.loudness[keys[t]], cleanup: cleanup, mixChannels: mixChannels, kind: kinds[t])
             }
-            gains = source.tracks.indices.map { normalized($0, cleanup[$0]) }
-            dryGains = source.tracks.indices.map { normalized($0, 0) }
+            gains = tracks.indices.map { normalized($0, cleanup[$0]) }
+            dryGains = tracks.indices.map { normalized($0, 0) }
         } else {
             gains = userGains
             dryGains = userGains
@@ -299,21 +365,22 @@ public final class EditedMix: Sendable {
         let clickGain = document.cursor.clickSoundGain.isNaN ? 0 : Float(min(max(document.cursor.clickSoundGain, 0), 1))
         if let sound = ClickSounds.samples(document.cursor.clickSound), clickGain > 0 {
             clickSound = sound.map { $0 * clickGain }
-            let layouts = LayoutTimeline(document: document, take: source.take, timeMap: timeMap, cameraReadable: source.cameraReadable)
-            clickFrames = Self.clickFrames(of: source, timeMap: timeMap, layouts: layouts)
+            clickFrames = Self.clickFrames(of: sources, document: document, timeMap: timeMap)
         } else {
             clickSound = []
             clickFrames = []
         }
         limited = document.audio.limiter || document.audio.normalize
-        missing = Self.missing(of: source, timeMap: timeMap, totalFrames: totalFrames)
+        var missing: [MissingAudio] = []
+        for source in sources { missing += Self.missing(of: source, timeMap: timeMap, totalFrames: totalFrames) }
+        self.missing = missing
         // Nothing of the clean voice is made for a track mixed dry.
         let mixedClean = cleanLines.indices.map { cleanup[$0] > 0 ? cleanLines[$0] : nil }
         state = Mutex(State(
-            readers: source.tracks.map(AudioTrackTimeline.Reader.init), stretches: source.tracks.map(SpeedStretch.init),
+            readers: tracks.map(AudioTrackTimeline.Reader.init), stretches: tracks.map(SpeedStretch.init),
             cleanReaders: mixedClean.map { $0.map(AudioTrackTimeline.Reader.init) },
-            cleanStretches: mixedClean.map { $0.map(SpeedStretch.init) }, turnedDry: Array(repeating: false, count: source.tracks.count),
-            limiter: PeakLimiter(channels: source.channels)))
+            cleanStretches: mixedClean.map { $0.map(SpeedStretch.init) }, turnedDry: Array(repeating: false, count: tracks.count),
+            limiter: PeakLimiter(channels: mixChannels)))
     }
 
     /// The gain that brings a track of `kind` measured as `loudness` to its target as the mix plays it, with `cleanup` of
@@ -333,8 +400,35 @@ public final class EditedMix: Sendable {
     /// segments that could not be opened, then where reading one stopped.
     public var missingAudio: [MissingAudio] { missing }
 
-    /// Whether there is anything to hear: an audio track, or a click sound the clips keep. Without, the export has no audio.
-    var hasSound: Bool { !source.tracks.isEmpty || !clickFrames.isEmpty }
+    /// Whether there is anything to hear: an audio track of a take, or a click sound the clips keep. Without, the export
+    /// has no audio.
+    var hasSound: Bool { !keys.isEmpty || !clickFrames.isEmpty }
+
+    /// What the mix plays, as text, for the tests that hold it as it was (`MultiTakeMixTests`): its channels and lengths,
+    /// each piece (its output frames, what it plays and its fades), each run, each track's key, gains and cleanup, the
+    /// click frames and the spans left silent. What the first take plays reads as in phase 2, without its index.
+    var playDescription: String {
+        var lines = ["channels \(channels) total \(totalFrames) content \(contentFrames) limited \(limited)"]
+        for piece in pieces {
+            let sound: String
+            switch piece.sound {
+            case .silent: sound = "silent"
+            case .source(let take, let frame): sound = take == 0 ? "source \(frame)" : "source \(take):\(frame)"
+            case .stretched(let take, let run): sound = take == 0 ? "run \(run)" : "run \(take):\(run)"
+            }
+            lines.append("piece \(piece.start)..<\(piece.end) \(sound)\(piece.fadesIn ? " in" : "")\(piece.fadesOut ? " out" : "")")
+        }
+        for run in runs { lines.append("run \(run.output) from \(run.source) heard \(run.heard) at \(run.speed)") }
+        for t in gains.indices {
+            lines.append("track \(keys[t]) gain \(gains[t]) dry \(dryGains[t]) cleanup \(cleanups[t])")
+        }
+        lines.append("clicks \(clickFrames)")
+        for span in missing {
+            let reason = "\(span.reason)".prefix { $0 != "(" }
+            lines.append("missing \(span.track) \(span.file) \(span.start) \(span.end) \(reason)")
+        }
+        return lines.joined(separator: "\n")
+    }
 
     /// The frames of audio that `frameCount` frames of video at `fps` last: `round(frameCount / fps × 48 000)`.
     static func totalFrames(frameCount: Int, framesPerSecond fps: Int) -> Int64 {
@@ -405,7 +499,7 @@ public final class EditedMix: Sendable {
     private func turnDryWhereTheCleanVoiceIsGone(_ state: inout State) {
         for t in cleanFiles.indices where !cleanFiles[t].isEmpty && !state.turnedDry[t] {
             guard let gone = cleanFiles[t].first(where: { !FileManager.default.fileExists(atPath: $0) }) else { continue }
-            let file = (gone as NSString).lastPathComponent, key = source.keys[t]
+            let file = (gone as NSString).lastPathComponent, key = keys[t]
             Self.logger.error("Clean voice \(file, privacy: .public) is gone: track \(key, privacy: .public) mixes dry from here")
             state.turnedDry[t] = true
             state.cleanReaders[t] = nil
@@ -413,8 +507,8 @@ public final class EditedMix: Sendable {
         }
     }
 
-    /// The sum of the tracks and the click sounds over output frames `frames`, into `samples`, before the limiter; a
-    /// stretch that starts anew starts `preroll` frames before (0: at its run's start).
+    /// The sum of the tracks (each piece's, those of its take) and the click sounds over output frames `frames`, into
+    /// `samples`, before the limiter; a stretch that starts anew starts `preroll` frames before (0: at its run's start).
     private func mix(_ frames: Range<Int64>, preroll: Int64, into samples: inout [Float], state: inout State) {
         samples.removeAll(keepingCapacity: true)
         samples.append(contentsOf: repeatElement(0, count: frames.count * channels))
@@ -424,9 +518,9 @@ public final class EditedMix: Sendable {
         while k < pieces.count, pieces[k].start < heard.upperBound {
             let piece = pieces[k]
             k += 1
-            guard piece.sound != .silent else { continue }
+            guard let take = piece.sound.take else { continue }
             let from = max(heard.lowerBound, piece.start), to = min(heard.upperBound, piece.end)
-            for t in state.readers.indices where gains[t] != 0 {
+            for t in trackRanges[take] where gains[t] != 0 {
                 // A track turned dry has no clean reader any more.
                 let cleanReader = state.cleanReaders[t]
                 let cleanup = cleanReader == nil ? 0 : cleanups[t]
@@ -472,22 +566,25 @@ public final class EditedMix: Sendable {
         case .silent:
             samples.removeAll(keepingCapacity: true)
             samples.append(contentsOf: repeatElement(0, count: frames.count * reader.timeline.channels))
-        case .source(let source):
+        case .source(_, let source):
             reader.read((source + (frames.lowerBound - piece.start))..<(source + (frames.upperBound - piece.start)), into: &samples)
-        case .stretched(let run):
+        case .stretched(_, let run):
             stretch.read(runs[run], frames: frames, preroll: preroll, into: &samples)
         }
     }
 
     // MARK: - From the document
 
-    /// The clips of `sequence` with any output frames, in order, as the mix plays them: faded where the sound would
-    /// jump, read on where a clip goes on with the source of the one before (at 1× frame for frame, at another speed in
-    /// the same run), and the runs the stretched ones play. A clip with content is silent here (phase 3 base plan
-    /// decision 8: the sound of an imported clip is `EditedMix+Media`'s), and the clips on both sides of it fade.
+    /// The clips of `sequence` with any output frames, in order, as the mix plays them, each from the source of its take:
+    /// faded where the sound would jump (between two takes too, as at a cut), read on where a clip goes on with the
+    /// source of the one before (at 1× frame for frame, at another speed in the same run), and the runs the stretched
+    /// ones play. A clip with content is silent here (phase 3 base plan decision 8: the sound of an imported clip is
+    /// `EditedMix+Media`'s), and so is a clip of a take `sources` does not have; the clips on both sides of either fade.
     private static func pieces(
-        of sequence: [Clip], timeMap: TimeMap, contentFrames: Int64, source: Source
+        of sequence: [Clip], timeMap: TimeMap, contentFrames: Int64, sources: [Source]
     ) -> (pieces: [Piece], runs: [SpeedStretch.Run]) {
+        // The source of each take, the first one for a take there twice.
+        let sourceOf = Dictionary(sources.enumerated().map { ($1.takeID, $0) }) { first, _ in first }
         let starts = timeMap.clipOutputStarts.map(frames(ofNanoseconds:))
         var pieces: [Piece] = []
         var runs: [SpeedStretch.Run] = []
@@ -503,15 +600,18 @@ public final class EditedMix: Sendable {
             guard start < end else { continue }
             // Read as `TimeMap` reads it, which gives the clip its frames: the picture and the sound agree on it.
             let clipSpeed = ClipSpeed.clamped(clip.speed)
-            let from = frames(ofNanoseconds: nanoseconds(from: source.origin, to: clip.start))
-            let to = frames(ofNanoseconds: nanoseconds(from: source.origin, to: clip.end))
+            // The frames of its take's timeline (none for a clip without a source: it is silent).
+            let take = sourceOf[clip.take]
+            let origin = take.map { sources[$0].origin } ?? clip.start
+            let from = frames(ofNanoseconds: nanoseconds(from: origin, to: clip.start))
+            let to = frames(ofNanoseconds: nanoseconds(from: origin, to: clip.end))
             var piece = Piece(start: start, end: end, sound: .silent, fadesIn: false, fadesOut: false)
             if clip.content != nil {
                 // Silent: a point of the take that lasts.
-            } else if clip.take == source.takeID, clipSpeed == 1 {
-                piece.sound = .source(from)
-            } else if clip.take == source.takeID, clipSpeed <= SpeedStretch.maximumSpeed {
-                piece.sound = .stretched(run: runs.count)
+            } else if let take, clipSpeed == 1 {
+                piece.sound = .source(take: take, frame: from)
+            } else if let take, clipSpeed <= SpeedStretch.maximumSpeed {
+                piece.sound = .stretched(take: take, run: runs.count)
                 runs.append(SpeedStretch.Run(output: start..<end, source: from, heard: from..<to, speed: clipSpeed))
             }
             let followsOn = previous.map { clip.take == $0.take && clip.start == $0.end } ?? false
@@ -523,21 +623,21 @@ public final class EditedMix: Sendable {
             if let previous, let last = pieces.indices.last {
                 let goesOn = followsOn && clipSpeed == ClipSpeed.clamped(previous.speed)
                 switch (pieces[last].sound, piece.sound) {
-                case (.source(let before), .source) where goesOn:
+                case (.source(let take, let before), .source) where goesOn:
                     // The source frames on from where the clip before left off, so the seam is not there at all.
-                    piece.sound = .source(before + (pieces[last].end - pieces[last].start))
-                case (.stretched(let run), .stretched) where goesOn:
+                    piece.sound = .source(take: take, frame: before + (pieces[last].end - pieces[last].start))
+                case (.stretched(let take, let run), .stretched) where goesOn:
                     // The same stretch goes on, so the seam is not there either.
                     runs[run].output = runs[run].output.lowerBound..<end
                     runs.removeLast()
-                    piece.sound = .stretched(run: run)
+                    piece.sound = .stretched(take: take, run: run)
                 default:
                     piece.fadesIn = true
                     pieces[last].fadesOut = true
                 }
             }
             // A stretch is fed the source heard in one go with it, from where that starts to where this clip ends.
-            if case .stretched(let run) = piece.sound, !heardRuns.contains(run) {
+            if case .stretched(_, let run) = piece.sound, !heardRuns.contains(run) {
                 heardRuns.append(run)
                 runs[run].heard = (heardFrom ?? from)..<to
             }
@@ -546,22 +646,37 @@ public final class EditedMix: Sendable {
             if first == nil { first = clip }
             previous = clip
         }
-        // The output's own edges fade only where they are trimmed inside the take.
-        if let first, first.start > source.editable.lowerBound, !pieces.isEmpty { pieces[0].fadesIn = true }
-        if let previous, previous.end < source.editable.upperBound, let last = pieces.indices.last { pieces[last].fadesOut = true }
+        // The output's own edges fade only where they are trimmed inside the take of the clip there.
+        if let first, let take = sourceOf[first.take], first.start > sources[take].editable.lowerBound, !pieces.isEmpty {
+            pieces[0].fadesIn = true
+        }
+        if let previous, let take = sourceOf[previous.take], previous.end < sources[take].editable.upperBound,
+           let last = pieces.indices.last {
+            pieces[last].fadesOut = true
+        }
         return (pieces, runs)
     }
 
-    /// The output frames where a click sounds: each kept `mouseDown` at its output time where `layouts` show the screen
-    /// at an opacity of at least 0.5 (every one when they are trivial), unless it comes less than
-    /// `ClickSounds.minimumSpacing` after the last that sounded.
-    private static func clickFrames(of source: Source, timeMap: TimeMap, layouts: LayoutTimeline) -> [Int64] {
-        let times = source.clicks.compactMap { timeMap.output(atSource: $0, take: source.takeID) }.sorted()
+    /// The output frames where a click sounds: each kept `mouseDown` of each of `sources` at its output time where the
+    /// layouts of its take (`LayoutTimeline` of `document`) show the screen at an opacity of at least 0.5 (every one when
+    /// they are trivial), unless it comes less than `ClickSounds.minimumSpacing` after the last that sounded, of any take.
+    private static func clickFrames(of sources: [Source], document: EditDocument, timeMap: TimeMap) -> [Int64] {
+        // Each kept click's output time, the source it is of (which orders two at the same time) and whether it is seen.
+        var clicks: [(time: Int64, take: Int, seen: Bool)] = []
+        for (take, source) in sources.enumerated() {
+            let layouts = LayoutTimeline(document: document, take: source.take, timeMap: timeMap, cameraReadable: source.cameraReadable)
+            for click in source.clicks {
+                guard let time = timeMap.output(atSource: click, take: source.takeID) else { continue }
+                // Not under 0.5, as 1c reads it.
+                clicks.append((time, take, layouts.isTrivial || !(layouts.screenOpacity(atOutput: time) < 0.5)))
+            }
+        }
+        clicks.sort { ($0.time, $0.take) < ($1.time, $1.take) }
         var frames: [Int64] = []
         var last: Int64?
-        for time in times {
+        for (time, _, seen) in clicks {
             // A click that cannot be seen does not sound (1c design §5.4), nor keeps the next one quiet.
-            if !layouts.isTrivial, layouts.screenOpacity(atOutput: time) < 0.5 { continue }
+            if !seen { continue }
             if let last, time - last < ClickSounds.minimumSpacing { continue }
             last = time
             frames.append(Self.frames(ofNanoseconds: time))
@@ -569,8 +684,8 @@ public final class EditedMix: Sendable {
         return frames
     }
 
-    /// The tracks' silent spans in output seconds, clamped to the mix: from the first instant kept in each to the end of
-    /// the last (the cuts in it closed), to the end of the mix for one open to the end; none for a span all cut.
+    /// The silent spans of `source`'s tracks in output seconds, clamped to the mix: from the first instant kept in each to
+    /// the end of the last (the cuts in it closed), to the end of the mix for one open to the end; none for a span all cut.
     private static func missing(of source: Source, timeMap: TimeMap, totalFrames: Int64) -> [MissingAudio] {
         let duration = Double(totalFrames) / AudioTrackTimeline.sampleRate
         return source.tracks.flatMap { track in

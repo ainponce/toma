@@ -578,9 +578,9 @@ func seekLatencyOnALongTake(microphoneRate: Double) async throws {
             $0.cursor.clickSound = "mechanical-1"
         }
         let revised = mix.with(document: other, framesPerSecond: 60)
-        #expect(revised.prereadSegments == 0 && revised.source === mix.source)
+        #expect(revised.prereadSegments == 0 && revised.sources.elementsEqual(mix.sources, by: ===))
         let fresh = try await EditedMix.make(project: project, document: other, framesPerSecond: 60)
-        #expect(fresh.prereadSegments == 2 && fresh.source !== mix.source)
+        #expect(fresh.prereadSegments == 2 && fresh.sources[0] !== mix.sources[0])
         #expect(revised.totalFrames == fresh.totalFrames && revised.channels == fresh.channels)
         #expect(bits(try await rendered(revised)) == bits(try await rendered(fresh)))
     }

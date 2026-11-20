@@ -174,6 +174,9 @@ final class AudioTrackTimeline: Sendable {
     /// `track` of `project` on a timeline whose frame 0 is host time `origin`, with `channels` channels (1 or 2). Opens
     /// every segment's track and decodes the segments that are heard to their end (on a thread of its own, never on
     /// Swift's cooperative pool), so the stream can then be read from anywhere without waiting.
+    ///
+    /// `project` is focused on the take `track` is of (`LoadedProject.focused(on:)`, phase 3 design §9): its `events` are
+    /// that take's, whose `audioClock` anchors place the segments.
     /// - Throws: `ExportError.cancelled` if the task is cancelled while loading.
     static func load(_ project: LoadedProject, track: TrackRecord, origin: HostTime, channels: Int) async throws -> AudioTrackTimeline {
         precondition(channels == 1 || channels == 2, "AudioTrackTimeline: \(channels) channels")
@@ -275,7 +278,8 @@ final class AudioTrackTimeline: Sendable {
         return frame
     }
 
-    /// The channels the stream of `track` needs: 1 if every segment that can be opened is mono, 2 otherwise.
+    /// The channels the stream of `track` needs: 1 if every segment that can be opened is mono, 2 otherwise. Of any take
+    /// of `project`'s package: only the package is read.
     static func channelCount(of track: TrackRecord, in project: LoadedProject) async -> Int {
         for record in track.segments {
             if case let .audio(_, _, _, channels, _) = await openAudio(of: record, in: project.package), channels > 1 { return 2 }
