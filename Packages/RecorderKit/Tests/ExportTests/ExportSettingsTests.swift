@@ -92,10 +92,10 @@ import Testing
 }
 
 @Test func codecsAndTheirFiles() {
-    #expect(ExportCodec.allCases == [.h264, .hevc, .proRes422, .proRes422HQ])
-    #expect(ExportCodec.allCases.map(\.rawValue) == ["h264", "hevc", "proRes422", "proRes422HQ"])
-    #expect(ExportCodec.allCases.map(\.fileExtension) == ["mp4", "mp4", "mov", "mov"])
-    #expect(ExportCodec.allCases.map(\.fileType) == [.mp4, .mp4, .mov, .mov])
+    #expect(ExportCodec.allCases == [.h264, .hevc, .proRes422, .proRes422HQ, .hevcAlpha, .proRes4444])
+    #expect(ExportCodec.allCases.map(\.rawValue) == ["h264", "hevc", "proRes422", "proRes422HQ", "hevcAlpha", "proRes4444"])
+    #expect(ExportCodec.allCases.map(\.fileExtension) == ["mp4", "mp4", "mov", "mov", "mov", "mov"])
+    #expect(ExportCodec.allCases.map(\.fileType) == [.mp4, .mp4, .mov, .mov, .mov, .mov])
     // H.264 unless asked otherwise, by either initializer; the codec changes neither the size nor the rate.
     #expect(ExportSettings().codec == .h264)
     #expect(ExportSettings(aspect: .square, resolution: .p720, framesPerSecond: 30, quality: .high).codec == .h264)
@@ -103,4 +103,15 @@ import Testing
     #expect(proRes.codec == .proRes422HQ && proRes.outputSize == [720, 720] && proRes.framesPerSecond == 30)
     #expect(ExportSettings(outputSize: [640, 360], framesPerSecond: 24, codec: .hevc).codec == .hevc)
     #expect(ExportSettings(codec: .hevc) != ExportSettings())
+}
+
+@Test func alphaCodecsAreMovWithAlpha() {
+    for codec in [ExportCodec.hevcAlpha, .proRes4444] {
+        #expect(codec.fileExtension == "mov" && codec.fileType == .mov && codec.hasAlpha, "\(codec)")
+        #expect(ExportSettings(codec: codec).transparent)
+    }
+    for codec in [ExportCodec.h264, .hevc, .proRes422, .proRes422HQ] {
+        #expect(!codec.hasAlpha && !ExportSettings(codec: codec).transparent, "\(codec)")
+    }
+    #expect(ExportCodec(rawValue: "hevcAlpha") == .hevcAlpha && ExportCodec(rawValue: "proRes4444") == .proRes4444)
 }

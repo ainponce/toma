@@ -29,6 +29,33 @@ import Testing
         }
     }
 
+    @Test func phase3SettingsDecodeWithDefaultShareAndReplay() throws {
+        try withDefaults { defaults in
+            let store = SettingsStore(defaults: defaults)
+            // What phase 3 saved has neither `share` nor `replay`.
+            defaults.set(Data(#"{"countdownSeconds":5,"recordKeys":true}"#.utf8), forKey: SettingsStore.key)
+            let settings = store.settings
+            #expect(settings.countdownSeconds == 5 && settings.recordKeys)
+            #expect(settings.share == SharePreferences() && settings.replay == ReplayPreferences())
+            #expect(
+                settings.share == SharePreferences(
+                    provider: .r2, endpoint: "", region: "auto", bucket: "", prefix: "toma/", accessKeyID: "", publicBaseURL: "", linkDays: 7))
+            #expect(settings.replay == ReplayPreferences(enabled: false, seconds: 30))
+            #expect(ReplayPreferences.validSeconds == [15, 30, 60, 120, 300])
+            // A length the settings do not offer, or a provider this version does not know, takes its default.
+            defaults.set(
+                Data(#"{"share":{"provider":"gcs","bucket":"b"},"replay":{"enabled":true,"seconds":7}}"#.utf8), forKey: SettingsStore.key)
+            #expect(store.settings.share == SharePreferences(bucket: "b"))
+            #expect(store.settings.replay == ReplayPreferences(enabled: true, seconds: 30))
+            // And they round-trip.
+            var changed = RecorderSettings()
+            changed.share = SharePreferences(provider: .minio, endpoint: "http://localhost:9000", bucket: "x", linkDays: 1)
+            changed.replay = ReplayPreferences(enabled: true, seconds: 120)
+            store.settings = changed
+            #expect(store.settings == changed)
+        }
+    }
+
     @Test func settingsWithMissingKeysUseDefaults() throws {
         try withDefaults { defaults in
             let store = SettingsStore(defaults: defaults)

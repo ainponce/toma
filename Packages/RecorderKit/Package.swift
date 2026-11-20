@@ -13,6 +13,8 @@ let package = Package(
             ]),
         .library(name: "AppSupport", targets: ["AppSupport"]),
         .executable(name: "recorder-dev", targets: ["recorder-dev"]),
+        .library(name: "ProjectAPI", targets: ["ProjectAPI"]),
+        .executable(name: "toma", targets: ["toma"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
@@ -32,6 +34,11 @@ let package = Package(
         .target(name: "Transcription", dependencies: ["ProjectFormat", "Export"]),
         .target(name: "ImageAnalysis", dependencies: ["ProjectFormat", "Analysis", "Render"]),
         .target(name: "ProjectJobs", dependencies: ["ProjectFormat", "Editing", "Export", "Transcription", "ImageAnalysis"]),
+        // Phase 4's project API (milestone 4b): what the `toma` command and the control socket share. No AppKit.
+        .target(
+            name: "ProjectAPI",
+            dependencies: ["ProjectFormat", "Analysis", "Editing", "Render", "Export", "ProjectJobs", "Transcription"]),
+        .executableTarget(name: "toma", dependencies: ["ProjectAPI", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
         // Shared by every test target; not a product. `Editing` for `MediaFixtures.imported`, which imports as the editor does.
         .target(name: "RecorderKitTestSupport", dependencies: ["ProjectFormat", "Recording", "SyntheticCapture", "Editing"]),
         .executableTarget(
@@ -71,6 +78,7 @@ let package = Package(
         .testTarget(name: "TranscriptionTests", dependencies: ["Transcription", "ProjectFormat", "Export", "Recording", "SyntheticCapture", "RecorderKitTestSupport"]),
         .testTarget(name: "ImageAnalysisTests", dependencies: ["ImageAnalysis", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(name: "ProjectJobsTests", dependencies: ["ProjectJobs", "Editing", "ProjectFormat", "Export", "Transcription", "RecorderKitTestSupport"]),
+        .testTarget(name: "ProjectAPITests", dependencies: ["ProjectAPI", "ProjectFormat", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )

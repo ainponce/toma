@@ -40,6 +40,10 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     /// for the keys on screen. Off unless the user turns it on in Settings ▸ Recording, which asks for Input Monitoring;
     /// a take never asks for it, and without it records all the same, without keys (`TakeNotice.keysNotRecorded`).
     public var recordKeys: Bool = false
+    /// Where "Share Link" uploads to (phase 5, milestone 5a): the provider, bucket and link options; the secret key lives in the Keychain.
+    public var share: SharePreferences = .init()
+    /// The instant replay (phase 5, milestone 5c): whether it keeps the last seconds on screen, and how many.
+    public var replay: ReplayPreferences = .init()
 
     /// The countdowns the settings offer.
     public static let countdownOptions = [0, 3, 5, 10]
@@ -50,7 +54,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         cameraStyle: CameraStyle = .default, savedAreas: SavedAreas = .init(), aspectLock: AspectLock = .free,
         focusShortcutIdentifier: String? = nil, hideDesktopIcons: Bool = false, noteKeyActivity: Bool = true,
         export: ExportPreferences = .init(), newProjectsStyleID: String? = nil,
-        library: LibraryPreferences = .init(), recordKeys: Bool = false
+        library: LibraryPreferences = .init(), recordKeys: Bool = false,
+        share: SharePreferences = .init(), replay: ReplayPreferences = .init()
     ) {
         self.selection = selection
         self.quick = quick
@@ -68,6 +73,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         self.newProjectsStyleID = newProjectsStyleID
         self.library = library
         self.recordKeys = recordKeys
+        self.share = share
+        self.replay = replay
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -93,6 +100,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
             (try? container.decodeIfPresent(String.self, forKey: .newProjectsStyleID)) ?? defaults.newProjectsStyleID
         library = (try? container.decodeIfPresent(LibraryPreferences.self, forKey: .library)) ?? defaults.library
         recordKeys = (try? container.decodeIfPresent(Bool.self, forKey: .recordKeys)) ?? defaults.recordKeys
+        share = (try? container.decodeIfPresent(SharePreferences.self, forKey: .share)) ?? defaults.share
+        replay = (try? container.decodeIfPresent(ReplayPreferences.self, forKey: .replay)) ?? defaults.replay
     }
 
     /// The countdown to count, in whole seconds: what was saved, kept between 0 and 10.

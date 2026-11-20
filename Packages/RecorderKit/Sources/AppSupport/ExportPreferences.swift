@@ -69,8 +69,9 @@ public struct ExportPreferences: Codable, Equatable, Sendable {
 
     /// The resolutions the sheet offers: 720p, 1080p, 1440p and 4K.
     public static let shortSides = [720, 1080, 1440, 2160]
-    /// The codecs the sheet offers, as `ExportCodec`'s raw values: H.264, HEVC, ProRes 422 and ProRes 422 HQ.
-    public static let codecs = ["h264", "hevc", "proRes422", "proRes422HQ"]
+    /// The codecs it reads, as `ExportCodec`'s raw values: H.264, HEVC, ProRes 422 and ProRes 422 HQ, and the two with alpha
+    /// (HEVC with alpha, ProRes 4444), which the sheet does not offer until milestone 4c.
+    public static let codecs = ["h264", "hevc", "proRes422", "proRes422HQ", "hevcAlpha", "proRes4444"]
 
     public init(
         shortSide: Int = 1080, highQuality: Bool = false, kind: ExportKind = .mp4, gif: GIFPreferences = .init(),
