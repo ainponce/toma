@@ -2,7 +2,7 @@
 VERSION ?=
 
 .PHONY: project test tsan crash-test golden golden-record golden-fixtures golden-accept build install release golden-1c golden-1c-record \
-	golden-2 golden-2-record golden-3 golden-3-record
+	golden-2 golden-2-record golden-3 golden-3-record golden-4 golden-4-record
 
 project:
 	xcodegen generate
@@ -371,6 +371,105 @@ golden-3-record:
 		echo "recorded $(GOLDEN_3) from $$(cat "$(GOLDEN_3)/COMMIT")"; \
 	else \
 		rm -rf "$(GOLDEN_3).partial"; echo "nothing recorded in $(GOLDEN_3)" >&2; \
+	fi; \
+	exit $$status
+
+# The golden files of phases 4 and 5 (phases 4 and 5 design §4.2, "golden 4"): golden 3's cases (edit documents of 1b,
+# 1c and phase 2, documentVersion 1 to 3) and a project of phase 3 (GoldenPhase3Project: two takes, a title card, a
+# frozen frame, an imported clip, a text, an arrow and a step, a Dim block and a loupe, the theme library:music-1/calm
+# with ducking, a J cut, a stretch at -6 dB and two markers, documentVersion 4) of GoldenPhase3Project.golden4Cases:
+# their frames (frames.bin), their mix (frames.bin.mix) and their documents as the app of phase 3 writes them
+# (documents/<case>.json), recorded once from the commit of task B2 of the base of phases 4 and 5 (phase 3's code with
+# only test code and this Makefile changed, before document 5), outside git, with fixtures.sha (the digests of the
+# video the frames were drawn from, which tell a change of the render from other video of the encoder), VERSION (the
+# fingerprint of scripts/golden-system.sh) and COMMIT (the commit they were recorded from). They live next to the others
+# in the main checkout. Recording needs EditDocument.currentVersion 4 at the commit recorded from, which golden-4-record
+# reads from git, and which no code of phases 4 and 5 has; with their code the same documents, migrated, must draw and
+# sound the same, and written back in their versions be the same bytes. In phases 4 and 5 it is the gate of every
+# change of the render, the export or the document. Record them with the Mac doing no other video work.
+GOLDEN_4_DIR ?= $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-4
+GOLDEN_4 = $(abspath $(GOLDEN_4_DIR))
+GOLDEN_4_SRC = $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-4-src
+# What golden 4 compares: the frames, the mix, and the documents (golden4DocumentsMatch: each one, migrated, keeps the
+# rules of the document and written back in its version is the bytes recorded). Recording runs the first two alone.
+GOLDEN_4_TESTS = swift test --package-path Packages/RecorderKit --filter 'golden4FramesMatch|golden4MixMatches|golden4DocumentsMatch'
+GOLDEN_4_RECORD_TESTS = swift test --package-path Packages/RecorderKit --filter 'golden4FramesMatch|golden4MixMatches'
+# Prints EditDocument.currentVersion of the commit checked out (HEAD), read from git: golden 4 is recorded only from one
+# of version 4.
+GOLDEN_4_DOCUMENT_VERSION = git show HEAD:Packages/RecorderKit/Sources/ProjectFormat/EditDocument.swift \
+	| sed -n 's/^[[:space:]]*public static let currentVersion = \([0-9][0-9]*\)[[:space:]]*$$/\1/p'
+# Sets $$commit to the commit the golden files of golden 4 were recorded from.
+GOLDEN_4_COMMIT = commit=$$(cat "$(GOLDEN_4)/COMMIT" 2>/dev/null || echo "<the commit of task B2 of the base of phases 4 and 5>")
+# Records them again from $$commit, in a worktree of that commit, with the ones there moved aside.
+GOLDEN_4_RECORD_AGAIN = mv '$(GOLDEN_4)' '$(GOLDEN_4).old' && git worktree add '$(GOLDEN_4_SRC)' $$commit \
+	&& make -C '$(GOLDEN_4_SRC)' golden-4-record GOLDEN_4_DIR='$(GOLDEN_4)' && git worktree remove '$(GOLDEN_4_SRC)'
+# Whether every golden test of golden 4 ran and passed, from the output of GOLDEN_4_TESTS in file $(1): a filter that
+# matches no test exits with 0 too.
+GOLDEN_4_RAN = { grep -qF 'golden4FramesMatch() passed' "$(1)" && grep -qF 'golden4MixMatches() passed' "$(1)" \
+	&& grep -qF 'golden4DocumentsMatch() passed' "$(1)" \
+	|| { echo "golden4FramesMatch, golden4MixMatches and golden4DocumentsMatch did not all run and pass: nothing was compared" >&2; false; }; }
+# The same for the two tests a recording runs (GOLDEN_4_RECORD_TESTS).
+GOLDEN_4_RECORDED = { grep -qF 'golden4FramesMatch() passed' "$(1)" && grep -qF 'golden4MixMatches() passed' "$(1)" \
+	|| { echo "golden4FramesMatch and golden4MixMatches did not both run and pass: nothing was recorded" >&2; false; }; }
+
+golden-4 golden-4-record: SHELL := /bin/bash
+
+golden-4:
+	@$(GOLDEN_4_COMMIT); \
+	for file in frames.bin frames.bin.mix documents fixtures.sha COMMIT; do \
+		if [ ! -e "$(GOLDEN_4)/$$file" ]; then \
+			echo "no $(GOLDEN_4)/$$file: the golden files of golden 4 are recorded whole, once; record them again from the commit in $(GOLDEN_4_DIR)/COMMIT, never from later code (phases 4 and 5 design §4.2):" >&2; \
+			echo "  $(GOLDEN_4_RECORD_AGAIN)" >&2; \
+			exit 1; \
+		fi; \
+	done; \
+	if [ ! -f "$(GOLDEN_4)/VERSION" ]; then \
+		echo "no $(GOLDEN_4)/VERSION, the fingerprint of the system the golden files of golden 4 were recorded on: they cannot be compared without it; record them again from the commit in $(GOLDEN_4_DIR)/COMMIT, never from later code (phases 4 and 5 design §4.2):" >&2; \
+		echo "  $(GOLDEN_4_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi; \
+	now=$$(mktemp -t toma-golden-4); \
+	bash scripts/golden-system.sh > "$$now" || { rm -f "$$now"; echo "scripts/golden-system.sh failed: no fingerprint of this system to compare" >&2; exit 1; }; \
+	if ! cmp -s "$(GOLDEN_4)/VERSION" "$$now"; then \
+		echo "the system changed since the golden files in $(GOLDEN_4) were recorded (< then, > now):" >&2; \
+		diff "$(GOLDEN_4)/VERSION" "$$now" >&2; \
+		rm -f "$$now"; \
+		echo "record them again from the commit in $(GOLDEN_4_DIR)/COMMIT, never from later code (phases 4 and 5 design §4.2):" >&2; \
+		echo "  $(GOLDEN_4_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi; \
+	rm -f "$$now"
+	@set -o pipefail; log=$$(mktemp -t toma-golden-4); \
+	TOMA_GOLDEN_4_DIR="$(GOLDEN_4)" $(GOLDEN_4_TESTS) 2>&1 | tee "$$log" && $(call GOLDEN_4_RAN,$$log); \
+	status=$$?; rm -f "$$log"; exit $$status
+
+# Records into $(GOLDEN_4).partial and moves that into place only once both tests passed and VERSION and COMMIT are
+# written: the golden files of golden 4 are there whole or not at all. Only from a clean checkout of a commit whose
+# EditDocument.currentVersion is 4 (GOLDEN_4_DOCUMENT_VERSION): from code of phases 4 and 5 they would protect nothing.
+golden-4-record:
+	@$(GOLDEN_4_COMMIT); \
+	if [ -e "$(GOLDEN_4)" ]; then \
+		echo "$(GOLDEN_4) is already there: the golden files of golden 4 are recorded once, from the commit of task B2 of the base of phases 4 and 5, never over others (phases 4 and 5 design §4.2)." >&2; \
+		echo "To record them again from the commit in $(GOLDEN_4_DIR)/COMMIT, never from later code (phases 4 and 5 design §4.2): $(GOLDEN_4_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi
+	@test -z "$$(git status --porcelain)" || { echo "this checkout has uncommitted changes: the golden files of golden 4 are recorded from a commit, which they name in COMMIT" >&2; exit 1; }
+	@version=$$($(GOLDEN_4_DOCUMENT_VERSION)); \
+	if [ "$$version" != 4 ]; then \
+		echo "EditDocument.currentVersion is $${version:-unknown} at $$(git rev-parse --short HEAD), not 4: golden 4 holds documents of phase 3 and is recorded only from a commit before document 5, never from later code (phases 4 and 5 design §4.2)" >&2; \
+		exit 1; \
+	fi
+	@set -o pipefail; log=$$(mktemp -t toma-golden-4); \
+	rm -rf "$(GOLDEN_4).partial" && mkdir -p "$(GOLDEN_4).partial" && \
+	TOMA_GOLDEN_4_DIR="$(GOLDEN_4).partial" TOMA_GOLDEN_RECORD=1 $(GOLDEN_4_RECORD_TESTS) 2>&1 | tee "$$log" && \
+	$(call GOLDEN_4_RECORDED,$$log) && \
+	bash scripts/golden-system.sh > "$(GOLDEN_4).partial/VERSION" && git rev-parse HEAD > "$(GOLDEN_4).partial/COMMIT" && \
+	test ! -e "$(GOLDEN_4)" && mv "$(GOLDEN_4).partial" "$(GOLDEN_4)"; \
+	status=$$?; rm -f "$$log"; \
+	if [ $$status -eq 0 ]; then \
+		echo "recorded $(GOLDEN_4) from $$(cat "$(GOLDEN_4)/COMMIT")"; \
+	else \
+		rm -rf "$(GOLDEN_4).partial"; echo "nothing recorded in $(GOLDEN_4)" >&2; \
 	fi; \
 	exit $$status
 
