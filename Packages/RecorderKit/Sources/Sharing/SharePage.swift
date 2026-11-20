@@ -123,6 +123,7 @@ public enum SharePage {
         a:hover { background: var(--hover); }
         a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
         a span { flex: none; color: var(--accent); font-variant-numeric: tabular-nums; }
+        a span[dir] { flex: 1 1 auto; min-width: 0; color: inherit; font-variant-numeric: normal; }
         @media (max-width: 600px) {
           main { padding-top: 16px; }
           video { border-radius: 8px; }
@@ -131,10 +132,20 @@ public enum SharePage {
 
         """
 
-    /// The page of `content` with `labels`, UTF-8 text for `index.html`.
+    /// The longest `og:title`, in characters (`String.count`, whole graphemes), its ellipsis included: what a chat's
+    /// preview shows. The page itself has the whole title.
+    public static let openGraphTitleLimit = 70
+    /// The longest `og:description`, as `openGraphTitleLimit`; the page itself has the whole summary.
+    public static let openGraphDescriptionLimit = 200
+
+    /// The page of `content` with `labels`, UTF-8 text for `index.html`. The title, the summary and each chapter's title
+    /// lose their bidirectional embedding, override and isolate controls (U+202A–U+202E, U+2066–U+2069) and their control
+    /// characters but the tab and the line breaks, so none turns the rest of a line around; each is shown in its own
+    /// direction (`dir="auto"`), a Hebrew or Arabic title on the right of a page in English.
     public static func html(_ content: Content, labels: Labels) -> String {
-        let title = singleLine(content.title)
-        let summary = content.summary.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.flatMap { $0.isEmpty ? nil : $0 }
+        let title = singleLine(cleaned(content.title))
+        let summary = content.summary.map { cleaned($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .flatMap { $0.isEmpty ? nil : $0 }
         let video = content.videoURL.absoluteString, poster = content.posterURL.absoluteString
         let policy = [
             "default-src 'none'", "script-src \(hash(script))", "style-src \(hash(style))",
@@ -152,9 +163,9 @@ public enum SharePage {
             #"<meta name="generator" content="Toma \#(id)">"#,
             "<title>\(escaped(title))</title>",
             property("og:type", "video.other"),
-            property("og:title", title),
+            property("og:title", capped(title, to: openGraphTitleLimit)),
         ]
-        if let summary { head.append(property("og:description", singleLine(summary))) }
+        if let summary { head.append(property("og:description", capped(singleLine(summary), to: openGraphDescriptionLimit))) }
         head += [
             property("og:image", poster),
             property("og:image:type", "image/jpeg"),
@@ -170,17 +181,18 @@ public enum SharePage {
 
         var main = [
             #"<video controls playsinline preload="metadata" poster="\#(escaped(poster))" width="\#(content.width)" height="\#(content.height)" src="\#(escaped(video))"></video>"#,
-            "<h1>\(escaped(title))</h1>",
+            #"<h1 dir="auto">\#(escaped(title))</h1>"#,
         ]
-        if let summary { main.append(#"<p class="summary">\#(escaped(summary))</p>"#) }
+        if let summary { main.append(#"<p class="summary" dir="auto">\#(escaped(summary))</p>"#) }
         if !content.chapters.isEmpty {
             main += [#"<nav aria-labelledby="chapters">"#, #"<h2 id="chapters">\#(escaped(labels.chapters))</h2>"#, "<ol>"]
             for chapter in content.chapters {
                 let t = max(chapter.start, 0) / 1_000_000_000
                 let link = escaped("\(video)#t=\(t)")
                 let clock = clock(chapter.start, duration: content.duration)
-                let name = escaped(chapter.title.split(whereSeparator: \.isNewline).joined(separator: " "))
-                main.append(#"<li><a href="\#(link)" data-t="\#(t)"><span>\#(clock)</span> \#(name)</a></li>"#)
+                let name = escaped(cleaned(chapter.title).split(whereSeparator: \.isNewline).joined(separator: " "))
+                main.append(
+                    #"<li><a href="\#(link)" data-t="\#(t)"><span>\#(clock)</span> <span dir="auto">\#(name)</span></a></li>"#)
             }
             main += ["</ol>", "</nav>"]
         }
@@ -229,6 +241,30 @@ public enum SharePage {
     /// one line, as a chat shows it.
     private static func singleLine(_ text: String) -> String {
         text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
+    }
+
+    /// `text` without the bidirectional controls that embed, override or isolate (U+202A–U+202E, U+2066–U+2069) and
+    /// without the control characters (C0 and DEL) but the tab, the line feed and the carriage return.
+    static func cleaned(_ text: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0x202A...0x202E, 0x2066...0x2069: continue
+            case 0x09, 0x0A, 0x0D: scalars.append(scalar)
+            case 0x00...0x1F, 0x7F: continue
+            default: scalars.append(scalar)
+            }
+        }
+        return String(scalars)
+    }
+
+    /// `text` if it has at most `limit` characters (graphemes); otherwise its first `limit − 1`, without the spaces they
+    /// end in, and `…`: never half of a grapheme (an emoji of several scalars, a letter and its accent).
+    static func capped(_ text: String, to limit: Int) -> String {
+        guard text.count > limit else { return text }
+        var kept = String(text.prefix(max(limit - 1, 0)))
+        while kept.last?.isWhitespace == true { kept.removeLast() }
+        return kept + "…"
     }
 
     /// The CSP source of `text`'s SHA-256: `'sha256-<base 64>'`.

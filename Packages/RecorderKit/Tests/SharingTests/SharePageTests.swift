@@ -2,7 +2,7 @@
 import Analysis
 import CryptoKit
 import Foundation
-import Sharing
+@testable import Sharing
 import Testing
 
 // The page `sharePage-1` (plan 5a decision 9): its own HTML, inline CSS and one fixed script whose hash the CSP allows,
@@ -70,7 +70,7 @@ private func contents(of tag: String, in html: String) -> [String] {
             labels: spanish)
         let escaped = "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;y&#39;"
         #expect(html.contains("<title>\(escaped)</title>"))
-        #expect(html.contains("<h1>\(escaped)</h1>"))
+        #expect(html.contains(#"<h1 dir="auto">\#(escaped)</h1>"#))
         #expect(html.contains(#"<meta property="og:title" content="\#(escaped)">"#))
         #expect(html.contains("a &lt; b &gt; c"))
         #expect(html.contains("&lt;b&gt;&quot;one&quot; &amp; &#39;two&#39;&lt;/b&gt;"))
@@ -144,7 +144,7 @@ private func contents(of tag: String, in html: String) -> [String] {
         #expect(!signed.contains(#"class="summary""#))
         let twoLines = SharePage.html(demo(summary: "Cómo grabar.\n\nEn dos   minutos."), labels: spanish)
         #expect(try meta("og:description", in: twoLines) == ["Cómo grabar. En dos minutos."])
-        #expect(twoLines.contains("<p class=\"summary\">Cómo grabar.\n\nEn dos   minutos.</p>"))
+        #expect(twoLines.contains("<p class=\"summary\" dir=\"auto\">Cómo grabar.\n\nEn dos   minutos.</p>"))
         // An empty summary is none.
         #expect(try meta("og:description", in: SharePage.html(demo(summary: "  \n"), labels: spanish)).isEmpty)
     }
@@ -152,8 +152,8 @@ private func contents(of tag: String, in html: String) -> [String] {
     @Test func chaptersLinkToTheirSecond() throws {
         let video = folder.appending(path: "video.mp4").absoluteString
         let html = SharePage.html(demo(), labels: spanish)
-        #expect(html.contains(#"<a href="\#(video)#t=65" data-t="65"><span>01:05</span> Configuración ✨</a>"#))
-        #expect(html.contains(#"<a href="\#(video)#t=0" data-t="0"><span>00:00</span> Intro</a>"#))
+        #expect(html.contains(#"<a href="\#(video)#t=65" data-t="65"><span>01:05</span> <span dir="auto">Configuración ✨</span></a>"#))
+        #expect(html.contains(#"<a href="\#(video)#t=0" data-t="0"><span>00:00</span> <span dir="auto">Intro</span></a>"#))
         #expect(try values("//a", "data-t", in: html) == ["0", "65"])
         // From an hour on, every clock has its hours, as YouTube's text.
         let long: [Chapter] = [
@@ -161,8 +161,8 @@ private func contents(of tag: String, in html: String) -> [String] {
             Chapter(start: 3665 * second, title: "Dos\nlíneas"),
         ]
         let hour = SharePage.html(demo(chapters: long, duration: 62 * 60 * second), labels: spanish)
-        #expect(hour.contains(#"data-t="3665"><span>1:01:05</span> Dos líneas</a>"#))
-        #expect(hour.contains(#"data-t="65"><span>0:01:05</span> Uno</a>"#))
+        #expect(hour.contains(#"data-t="3665"><span>1:01:05</span> <span dir="auto">Dos líneas</span></a>"#))
+        #expect(hour.contains(#"data-t="65"><span>0:01:05</span> <span dir="auto">Uno</span></a>"#))
         for duration in [180 * second, 62 * 60 * second, 3600 * second - 1, 3600 * second] {
             let lines = Chapters.youTubeText(long, duration: duration).split(separator: "\n")
             for (chapter, line) in zip(long, lines) {
@@ -179,6 +179,55 @@ private func contents(of tag: String, in html: String) -> [String] {
         let english = SharePage.html(demo(), labels: .english)
         #expect(english.contains(#"<html lang="en">"#) && english.contains(">Chapters</h2>"))
         #expect(SharePage.Labels.english == SharePage.Labels(chapters: "Chapters", language: "en"))
+    }
+
+    @Test func rightToLeftTextIsShownInItsDirection() {
+        let html = SharePage.html(
+            demo(title: "שלום עולם", summary: "مرحبا بالعالم", chapters: [Chapter(start: 0, title: "פתיחה")]), labels: .english)
+        #expect(html.contains(#"<h1 dir="auto">שלום עולם</h1>"#))
+        #expect(html.contains(#"<p class="summary" dir="auto">مرحبا بالعالم</p>"#))
+        #expect(html.contains(#"<span>00:00</span> <span dir="auto">פתיחה</span></a>"#))
+        // The page keeps its language's direction: only the project's texts go their own way.
+        #expect(html.contains(#"<html lang="en">"#) && !html.contains(#"dir="rtl""#))
+    }
+
+    @Test func bidiAndControlCharactersAreRemoved() throws {
+        let controls = ["\u{202A}", "\u{202B}", "\u{202C}", "\u{202D}", "\u{202E}", "\u{2066}", "\u{2067}", "\u{2068}", "\u{2069}"]
+        let html = SharePage.html(
+            demo(
+                title: "Demo\u{202E}lmth.exe\u{202C} \u{2066}x\u{2069}\u{0007}", summary: "Uno\u{202B} dos\u{0000}\ntres\u{7F}",
+                chapters: [Chapter(start: 0, title: "Intro\u{2067}\u{001B}[31m")]),
+            labels: spanish)
+        for control in controls + ["\u{0000}", "\u{0007}", "\u{001B}", "\u{7F}"] {
+            #expect(!html.unicodeScalars.contains(control.unicodeScalars.first!), "U+\(String(control.unicodeScalars.first!.value, radix: 16))")
+        }
+        #expect(html.contains(#"<h1 dir="auto">Demolmth.exe x</h1>"#))
+        #expect(try meta("og:title", in: html) == ["Demolmth.exe x"])
+        #expect(html.contains("<p class=\"summary\" dir=\"auto\">Uno dos\ntres</p>"))
+        #expect(html.contains(#"<span dir="auto">Intro[31m</span>"#))
+        // Marks that only say a direction stay: they turn nothing around.
+        #expect(SharePage.html(demo(title: "a\u{200F}b"), labels: spanish).contains("<h1 dir=\"auto\">a\u{200F}b</h1>"))
+    }
+
+    @Test func openGraphTextIsCapped() throws {
+        let family = "👩‍👩‍👧"
+        // 68 letters and ten emoji of five scalars each: 78 characters.
+        let title = String(repeating: "a", count: 68) + String(repeating: family, count: 10)
+        let summary = String(repeating: "Una frase corta. ", count: 30) + "Fin."
+        let html = SharePage.html(demo(title: title, summary: summary), labels: spanish)
+        let ogTitle = try #require(try meta("og:title", in: html).first)
+        #expect(ogTitle == String(repeating: "a", count: 68) + family + "…")
+        #expect(ogTitle.count == SharePage.openGraphTitleLimit)
+        let description = try #require(try meta("og:description", in: html).first)
+        #expect(description.count <= SharePage.openGraphDescriptionLimit && description.hasSuffix("…"))
+        #expect(description == String(summary.prefix(SharePage.openGraphDescriptionLimit - 1)).trimmingCharacters(in: .whitespaces) + "…")
+        // The page has them whole, and the browser's tab the whole title.
+        #expect(html.contains(#"<h1 dir="auto">\#(title)</h1>"#) && html.contains("<title>\(title)</title>"))
+        #expect(html.contains(summary.trimmingCharacters(in: .whitespaces)))
+        // At the limit, nothing is cut.
+        let seventy = String(repeating: "b", count: 69) + family
+        #expect(try meta("og:title", in: SharePage.html(demo(title: seventy), labels: spanish)) == [seventy])
+        #expect(SharePage.capped("abc  def", to: 6) == "abc…")
     }
 
     @Test func nothingFromThirdParties() throws {
@@ -207,7 +256,7 @@ private let frozenPage = """
     <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-i8OL/HMOp5Q4LT3BbnHS/r2jQzJ8DM5DjcopRC9xfCw='; style-src 'sha256-HNuXRWGlj4YvawnGE1QF2WRyzZyCvwj7qD5V1oxy+ek='; img-src https://cdn.example.com; media-src https://cdn.example.com; base-uri 'none'; form-action 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-i8OL/HMOp5Q4LT3BbnHS/r2jQzJ8DM5DjcopRC9xfCw='; style-src 'sha256-pe/85XMnYstdz64evfBkvXy+AthI10DFg9S9enZSq4I='; img-src https://cdn.example.com; media-src https://cdn.example.com; base-uri 'none'; form-action 'none'">
     <meta name="referrer" content="no-referrer">
     <meta name="robots" content="noindex">
     <meta name="color-scheme" content="light dark">
@@ -267,6 +316,7 @@ private let frozenPage = """
     a:hover { background: var(--hover); }
     a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     a span { flex: none; color: var(--accent); font-variant-numeric: tabular-nums; }
+    a span[dir] { flex: 1 1 auto; min-width: 0; color: inherit; font-variant-numeric: normal; }
     @media (max-width: 600px) {
       main { padding-top: 16px; }
       video { border-radius: 8px; }
@@ -277,13 +327,13 @@ private let frozenPage = """
     <body>
     <main>
     <video controls playsinline preload="metadata" poster="https://cdn.example.com/toma/k3m7q2x4za/poster.jpg" width="1920" height="1080" src="https://cdn.example.com/toma/k3m7q2x4za/video.mp4"></video>
-    <h1>Demo de Toma</h1>
-    <p class="summary">Dos frases. Otra.</p>
+    <h1 dir="auto">Demo de Toma</h1>
+    <p class="summary" dir="auto">Dos frases. Otra.</p>
     <nav aria-labelledby="chapters">
     <h2 id="chapters">Capítulos</h2>
     <ol>
-    <li><a href="https://cdn.example.com/toma/k3m7q2x4za/video.mp4#t=0" data-t="0"><span>00:00</span> Intro</a></li>
-    <li><a href="https://cdn.example.com/toma/k3m7q2x4za/video.mp4#t=65" data-t="65"><span>01:05</span> Configuración ✨</a></li>
+    <li><a href="https://cdn.example.com/toma/k3m7q2x4za/video.mp4#t=0" data-t="0"><span>00:00</span> <span dir="auto">Intro</span></a></li>
+    <li><a href="https://cdn.example.com/toma/k3m7q2x4za/video.mp4#t=65" data-t="65"><span>01:05</span> <span dir="auto">Configuración ✨</span></a></li>
     </ol>
     </nav>
     </main>
@@ -304,5 +354,3 @@ private let frozenPage = """
     </html>
 
     """
-
-
