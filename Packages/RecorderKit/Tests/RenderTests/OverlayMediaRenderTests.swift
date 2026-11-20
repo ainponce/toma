@@ -328,14 +328,19 @@ private func pictureTexture(
             func clipKind(from start: Double) -> AnnotationKind {
                 .clip(ClipAnnotation(asset: clip, start: TimeMap.outputNanoseconds(seconds: start), end: 2_000_000_000))
             }
-            // One after the other.
+            // One after the other, the second where the first ends (its file's 0–1 s, then its 1–2 s): one reader for both,
+            // read on from one into the other, while the second is shown.
             let sequential = try FrameRenderer(
                 project: project,
                 document: document(project, [
-                    overlay(1, clipKind(from: 0), rect, from: 0.2, to: 1.2), overlay(2, clipKind(from: 1), other, from: 1.5, to: 2.5),
+                    overlay(1, clipKind(from: 0), rect, from: 0.2, to: 1.2), overlay(2, clipKind(from: 1), other, from: 1.2, to: 2.2),
                 ]), outputSize: [640, 360], frameRate: 30)
-            _ = try await exportBytes(sequential, frames: 0...80, rate: 30)
             let lane = FrameRenderer.overlayReaderID(of: clip, lane: 0)
+            for n in stride(from: 0, through: 60, by: 3) {
+                let ids = Set(sequential.videos(of: try sequential.frame(of: sequential.scene, at: seconds(n, rate: 30))).map(\.trackID))
+                #expect(ids.filter { $0.hasPrefix("asset:") }.isSubset(of: [lane]), "frame \(n): \(ids)")
+            }
+            _ = try await exportBytes(sequential, frames: 0...60, rate: 30)
             #expect(sequential.mediaResources.readerCount == 1)
             #expect(sequential.reader(for: lane)?.openedReaderCount == 1)
 
