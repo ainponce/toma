@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
+import Analysis
 import CoreMedia
 import CoreVideo
 import Darwin
@@ -28,6 +29,11 @@ import os
 /// refuses it as phase 0 and 1a do (`ExportError.noDisplayTrack`).
 ///
 /// It exports the document it was given, a copy: what is edited while it runs changes nothing in it (design §5.6).
+///
+/// With chapters (`ExportSettings.chapters`, phase 3 plan 3d decision 5), the file also has a chapter track
+/// (`ChapterTrack`), after the video and the audio, tied to the video as its chapter list and disabled; the export of a
+/// range has the chapters of that range (`Chapters.within`). It changes no frame and no sample. Without chapters, the file
+/// has the tracks it had before phase 3.
 ///
 /// Given a range of the output (`ExportRange`, 1c design §7.1), it exports that part alone: frame `n` is the one drawn
 /// at `range.frameTime(n, fps:)`, for the frames `range.frameCount(fps:)` counts before its end (the range cut to the
@@ -131,13 +137,15 @@ public final class MP4Exporter: Sendable {
         let audio = mix.hasSound ? try AudioMix(mix: mix, frames: audioFrames) : nil
         guard !Task.isCancelled else { throw ExportError.cancelled }
 
+        let chapters = part.map { Chapters.within(settings.chapters, range: $0.start..<$0.end) } ?? settings.chapters
+
         let partial = URL(fileURLWithPath: destination.path + ".partial." + settings.codec.fileExtension)
         try Self.removeStalePartial(partial)
         let summary: ExportSummary
         do {
             let session = try ExportSession(
                 url: partial, settings: settings, renderer: renderer, start: part?.start ?? 0, frameCount: frameCount, audio: audio,
-                frameSink: frameSink)
+                chapters: chapters, frameSink: frameSink)
             try await withTaskCancellationHandler {
                 try await session.run(progress: progress)
             } onCancel: {
@@ -447,6 +455,9 @@ private final class ExportSession: @unchecked Sendable {
     private let adaptor: AVAssetWriterInputPixelBufferAdaptor
     private let audioInput: AVAssetWriterInput?
     private let audio: AudioMix?
+    /// The chapter track's input and its samples, in order: `nil` and none without chapters.
+    private let chapterInput: AVAssetWriterInput?
+    private let chapterSamples: [CMSampleBuffer]
     private let renderer: FrameRenderer
     private let settings: ExportSettings
     /// The output time of frame 0, in nanoseconds: the start of the range exported, 0 for the whole video.
@@ -458,10 +469,11 @@ private final class ExportSession: @unchecked Sendable {
     /// Signalled each time a frame drawn ahead is done, to wake the loop.
     private let frameDrawn = DispatchSemaphore(value: 0)
 
-    /// Creates the writer of `url` (the file appears when writing starts) and its inputs.
+    /// Creates the writer of `url` (the file appears when writing starts) and its inputs: the video, the audio when there
+    /// is `audio`, and the chapter track when `chapters` (starts in ns from frame 0) give it a sample.
     init(
         url: URL, settings: ExportSettings, renderer: FrameRenderer, start: Int64, frameCount: Int, audio: AudioMix?,
-        frameSink: MP4Exporter.FrameSink?
+        chapters: [Chapter], frameSink: MP4Exporter.FrameSink?
     ) throws {
         let codec = settings.codec
         let writer: AVAssetWriter
@@ -500,6 +512,31 @@ private final class ExportSession: @unchecked Sendable {
             audioInput = input
         } else {
             audioInput = nil
+        }
+
+        let duration = TimeMap.frameTime(frameCount, frameRate: settings.framesPerSecond)
+        let format = chapters.isEmpty ? nil : try ChapterTrack.formatDescription(for: codec.fileType)
+        let samples = try format.map { try ChapterTrack.samples(chapters, duration: duration, format: $0) } ?? []
+        if let format, !samples.isEmpty {
+            let input = AVAssetWriterInput(mediaType: .text, outputSettings: nil, sourceFormatHint: format)
+            input.expectsMediaDataInRealTime = false
+            input.marksOutputTrackAsEnabled = false
+            input.mediaTimeScale = ChapterTrack.timescale
+            if let tag = settings.chapterLanguage, let language = Locale.Language(identifier: tag).languageCode?.identifier(.alpha3) {
+                input.languageCode = language
+            }
+            guard writer.canAdd(input) else { throw ExportError.writerFailed("the \(codec.name) writer takes no chapter track") }
+            writer.add(input)
+            let chapterList = AVAssetTrack.AssociationType.chapterList.rawValue
+            guard videoInput.canAddTrackAssociation(withTrackOf: input, type: chapterList) else {
+                throw ExportError.writerFailed("the \(codec.name) writer cannot tie the chapter track to the video")
+            }
+            videoInput.addTrackAssociation(withTrackOf: input, type: chapterList)
+            chapterInput = input
+            chapterSamples = samples
+        } else {
+            chapterInput = nil
+            chapterSamples = []
         }
         self.writer = writer
         self.videoInput = videoInput
@@ -549,9 +586,10 @@ private final class ExportSession: @unchecked Sendable {
         }
     }
 
-    /// The loop: feeds whichever input takes data, polling while neither does (woken early when a frame is drawn). The
-    /// writer interleaves the two tracks by holding back the input that is ahead (`isReadyForMoreMediaData`), so an input
-    /// that takes data is always fed: holding one back here too could leave both waiting for each other.
+    /// The loop: feeds whichever input takes data, polling while none does (woken early when a frame is drawn). The
+    /// writer interleaves the tracks by holding back the input that is ahead (`isReadyForMoreMediaData`), so an input
+    /// that takes data is always fed: holding one back here too could leave them waiting for each other. The chapter
+    /// track, when there is one, is fed as the audio is, a sample at a time, and marked finished with its last.
     ///
     /// Video: up to `framesInFlight` frames are queued to be drawn (`FrameRenderer.render(at:into:completion:)`), and the
     /// oldest goes to the writer once it is drawn; drawing one fails the export. With `framesInFlight` 1, each frame is
@@ -565,8 +603,10 @@ private final class ExportSession: @unchecked Sendable {
         var drawing: [DrawnFrame] = []  // queued and not appended yet, in frame order
         var videoDone = false
         var audioDone = audioInput == nil
+        var chaptersAppended = 0
+        var chaptersDone = chapterInput == nil
         var idleSince: HostTime?
-        while !(videoDone && audioDone) {
+        while !(videoDone && audioDone && chaptersDone) {
             if cancelled.load(ordering: .relaxed) { throw ExportError.cancelled }
             var fed = false
             let appendedBefore = appended
@@ -616,6 +656,16 @@ private final class ExportSession: @unchecked Sendable {
                 } else {
                     audioInput.markAsFinished()
                     audioDone = true
+                }
+                fed = true
+            }
+            if !chaptersDone, let chapterInput, chapterInput.isReadyForMoreMediaData {
+                try waitUntilReady(chapterInput)
+                guard chapterInput.append(chapterSamples[chaptersAppended]) else { throw failure() }
+                chaptersAppended += 1
+                if chaptersAppended == chapterSamples.count {
+                    chapterInput.markAsFinished()
+                    chaptersDone = true
                 }
                 fed = true
             }
