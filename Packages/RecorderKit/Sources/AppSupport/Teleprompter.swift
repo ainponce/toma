@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import CoreGraphics
 
 /// The teleprompter (notch design §5.4): whether it shows, the one script (the last used, kept in the app's
@@ -12,6 +13,9 @@ public struct TeleprompterSettings: Codable, Equatable, Sendable {
     public var speed: Double = 1
     /// Of its background and its text: from 20 to 100 %.
     public var opacity: Double = 0.85
+    /// "Follow the Voice" (phase 3 design §8.4): while a take records, the script goes where the voice is instead of up at
+    /// `speed`.
+    public var followsVoice: Bool = false
 
     public static let fontSizes = 14.0...40.0
     public static let fontStep = 2.0
@@ -20,12 +24,16 @@ public struct TeleprompterSettings: Codable, Equatable, Sendable {
     /// How far the script goes up in a second at 1×.
     public static let pointsPerSecondAtOneX = 24.0
 
-    public init(isOn: Bool = false, script: String = "", fontSize: Double = 22, speed: Double = 1, opacity: Double = 0.85) {
+    public init(
+        isOn: Bool = false, script: String = "", fontSize: Double = 22, speed: Double = 1, opacity: Double = 0.85,
+        followsVoice: Bool = false
+    ) {
         self.isOn = isOn
         self.script = script
         self.fontSize = fontSize
         self.speed = speed
         self.opacity = opacity
+        self.followsVoice = followsVoice
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -38,6 +46,7 @@ public struct TeleprompterSettings: Codable, Equatable, Sendable {
         fontSize = (try? container.decodeIfPresent(Double.self, forKey: .fontSize)) ?? defaults.fontSize
         speed = (try? container.decodeIfPresent(Double.self, forKey: .speed)) ?? defaults.speed
         opacity = (try? container.decodeIfPresent(Double.self, forKey: .opacity)) ?? defaults.opacity
+        followsVoice = (try? container.decodeIfPresent(Bool.self, forKey: .followsVoice)) ?? defaults.followsVoice
     }
 
     /// Each value in its range, and the size on its step: `14 + ((size − 14) / 2).rounded() × 2`, a tie going
@@ -74,6 +83,12 @@ public struct TeleprompterScroll: Equatable, Sendable {
     /// Back to the top.
     public mutating func reset() {
         offset = 0
+    }
+
+    /// At `offset`, within the text: never before the top, nor past `maximum` (the height of the text less what is visible
+    /// of it). Where Follow the Voice or a re-record's word puts it.
+    public mutating func move(to offset: Double, maximum: Double) {
+        self.offset = min(max(offset, 0), max(0, maximum))
     }
 
     /// The text was laid out again (another size, or the script edited): it is `newHeight` tall instead of
@@ -135,6 +150,19 @@ public enum TeleprompterRules {
         returning && !isRecording
     }
 
+    /// Where the script starts when it comes back on the screen without a take recording (`startsFromTheTop`): with the
+    /// line of `word` at the reading line (`TeleprompterFollow.offset`), the word a re-record begins at (plan 3d, decision
+    /// 12); from the top (0) without one, or for a word `lines` does not have. `nil` when it does not start again: it stays
+    /// where it is. `maximum` is how far it can go up.
+    public static func startOffset(
+        returning: Bool, isRecording: Bool, word: Int?, lines: TeleprompterLines, readingHeight: Double, leadIn: Double,
+        maximum: Double
+    ) -> Double? {
+        guard startsFromTheTop(returning: returning, isRecording: isRecording) else { return nil }
+        guard let word, let index = lines.line(ofWord: word) else { return 0 }
+        return TeleprompterFollow.offset(showing: lines.lines[index], readingHeight: readingHeight, leadIn: leadIn, maximum: maximum)
+    }
+
     /// The island starts counting down: the take is about to read the script, so editing it ends (never from
     /// one second of the countdown to the next).
     public static func endsEditing(from before: IslandState, to after: IslandState) -> Bool {
@@ -151,5 +179,70 @@ public enum TeleprompterRules {
         case .open, .choosing: false
         case .rest, .peek, .countdown, .recording, .recordingOpen, .notice, .saving, .saved: true
         }
+    }
+}
+
+/// Follow the Voice (phase 3 design §8.4; plan 3d, decisions 13 and 14): the line being read goes to the reading line, a
+/// third of the way down the reading area, and what was said is dimmed.
+public enum TeleprompterFollow {
+    /// Where the reading line is, as a share of the reading area's height from its top.
+    public static let readingLineShare = 1.0 / 3
+    /// What was said, as a share of the text's opacity.
+    public static let spokenOpacity = 0.4
+
+    /// How far the script goes up for `line` to be at the reading line: its top a third of the way down the reading area
+    /// (`readingHeight` tall), the script's first line being `leadIn` from the top of the area; never before the top, nor
+    /// past `maximum`.
+    public static func offset(showing line: TeleprompterLines.Line, readingHeight: Double, leadIn: Double, maximum: Double) -> Double {
+        min(max(line.top + leadIn - readingHeight * readingLineShare, 0), max(0, maximum))
+    }
+
+    /// The first word of the line at the reading line when the script has gone `offset` up: where the voice is taken to be
+    /// when Follow the Voice is turned on during a take. 0 without lines.
+    public static func word(atOffset offset: Double, lines: TeleprompterLines, readingHeight: Double, leadIn: Double) -> Int {
+        // The reading line is never above where the line it shows starts, so a hair of rounding keeps that line.
+        let y = offset + readingHeight * readingLineShare - leadIn + 1e-6
+        return lines.line(at: y).map { lines.lines[$0].words.lowerBound } ?? 0
+    }
+
+    /// Where the speaker is in the script, as the teleprompter shows it: what the live engine heard, aligned with
+    /// `teleprompterAlign-1` from the word the take began at. Final results are confirmed (`alignment`); a volatile one is
+    /// aligned on trial over what is confirmed, and the next result replaces it. What is shown (`word`) never goes back,
+    /// though a final result may give less than the volatile one before it.
+    public struct Place: Equatable, Sendable {
+        /// What the final results confirmed.
+        public private(set) var alignment: TeleprompterAlignment
+        /// The next word to say, as shown: the furthest any result reached.
+        public private(set) var word: Int
+
+        /// At `word` of `script`: the words before it are said.
+        public init(script: ScriptWords, from word: Int) {
+            alignment = TeleprompterAlignment(script: script, at: word)
+            self.word = alignment.position
+        }
+
+        /// What the engine heard of a stretch of speech so far (`text`), volatile or final.
+        public mutating func hear(_ text: String, isFinal: Bool) {
+            let heard = ScriptWords(text).words.map(\.text)
+            guard !heard.isEmpty else { return }
+            if isFinal {
+                alignment.hear(heard)
+                word = max(word, alignment.position)
+            } else {
+                word = max(word, alignment.trying(heard).position)
+            }
+        }
+    }
+
+    /// Why Follow the Voice, on, does not follow: the teleprompter says it, and goes up at its speed instead.
+    public enum Note: Equatable, Sendable {
+        /// Live transcription needs macOS 26.
+        case needsMacOS26
+        /// The model of this language (BCP 47) is not on the Mac: it is downloaded in Captions.
+        case missingLanguage(String)
+        /// The take records no microphone.
+        case noMicrophone
+        /// The engine failed (a permission, or anything else), or the Mac cannot transcribe.
+        case failed
     }
 }

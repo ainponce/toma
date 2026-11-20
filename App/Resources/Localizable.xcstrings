@@ -2634,6 +2634,17 @@
         }
       }
     },
+    "Couldn't follow the voice." : {
+      "comment" : "The teleprompter, with Follow the Voice on: the live transcription failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo seguir la voz."
+          }
+        }
+      }
+    },
     "Couldn't import the style." : {
       "comment" : "Importing a .tomastyle failed on the disk",
       "localizations" : {
@@ -3924,6 +3935,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Seguir el cursor dentro del zoom"
+          }
+        }
+      }
+    },
+    "Follow the Voice" : {
+      "comment" : "The teleprompter: the switch that makes the script follow the voice (its help and VoiceOver label)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir la voz"
+          }
+        }
+      }
+    },
+    "Follow the Voice needs macOS 26." : {
+      "comment" : "The teleprompter, with Follow the Voice on, on macOS 15",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir la voz necesita macOS 26."
           }
         }
       }
@@ -9619,6 +9652,17 @@
         }
       }
     },
+    "The take doesn't record the microphone." : {
+      "comment" : "The teleprompter, with Follow the Voice on, in a take without a microphone",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La toma no graba el micrófono."
+          }
+        }
+      }
+    },
     "The take went to the trash." : {
       "comment" : "The capsule under the island once a restart moved the take to the trash",
       "localizations" : {
@@ -9928,6 +9972,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La ventana que se graba está minimizada u oculta. La grabación sigue cuando vuelva."
+          }
+        }
+      }
+    },
+    "The “%@” language is missing on this Mac: download it in Captions." : {
+      "comment" : "The teleprompter, with Follow the Voice on: the speech model of that language is not on the Mac",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falta el idioma «%@» en esta Mac: se baja en Subtítulos."
           }
         }
       }

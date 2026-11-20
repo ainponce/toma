@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import AppSupport
 import CoreGraphics
 import Foundation
@@ -179,5 +180,55 @@ import Testing
         let island = CGRect(x: 578, y: 950, width: 356, height: 32)
         #expect(TeleprompterLayout.capsuleAnchor(island: island, teleprompterOnScreen: true) == CGRect(x: 436, y: 780, width: 640, height: 160))
         #expect(TeleprompterLayout.capsuleAnchor(island: island, teleprompterOnScreen: false) == island)
+    }
+
+    @Test func followsVoiceDefaultsOffAndDecodesOldSettings() throws {
+        #expect(!TeleprompterSettings().followsVoice)
+        // What phase 2 saved: no `followsVoice`.
+        let old = Data(#"{"isOn":true,"script":"Hola","fontSize":30,"speed":1.5,"opacity":0.6}"#.utf8)
+        let decoded = try JSONDecoder().decode(TeleprompterSettings.self, from: old)
+        #expect(decoded == TeleprompterSettings(isOn: true, script: "Hola", fontSize: 30, speed: 1.5, opacity: 0.6))
+        #expect(!decoded.followsVoice)
+        // Saved and read again, on.
+        let on = TeleprompterSettings(isOn: true, script: "Hola", fontSize: 30, speed: 1.5, opacity: 0.6, followsVoice: true)
+        #expect(try JSONDecoder().decode(TeleprompterSettings.self, from: JSONEncoder().encode(on)) == on)
+        // A value it cannot read takes its default; the rest is kept.
+        let wrong = Data(#"{"isOn":true,"script":"Hola","followsVoice":"yes"}"#.utf8)
+        #expect(try JSONDecoder().decode(TeleprompterSettings.self, from: wrong) == TeleprompterSettings(isOn: true, script: "Hola"))
+        // Clamping keeps it.
+        #expect(on.clamped().followsVoice)
+    }
+
+    @Test func rerecordStartsAtItsWord() throws {
+        let script = TeleprompterLinesTests.script(words: 120)
+        let lines = TeleprompterLines(script: script, words: ScriptWords(script), fontSize: 22, width: TeleprompterLinesTests.width)
+        func start(returning: Bool = true, isRecording: Bool = false, word: Int?) -> Double? {
+            TeleprompterRules.startOffset(
+                returning: returning, isRecording: isRecording, word: word, lines: lines, readingHeight: 122, leadIn: 40, maximum: 1000)
+        }
+        // The line of its word, at the reading line.
+        let line = try #require(lines.line(ofWord: 37))
+        #expect(line > 0)
+        #expect(start(word: 37) == TeleprompterFollow.offset(showing: lines.lines[line], readingHeight: 122, leadIn: 40, maximum: 1000))
+        #expect(start(word: 37)! > 0)
+        // Without a word (a new take), or one the script does not have: from the top, as today.
+        #expect(start(word: nil) == 0)
+        #expect(start(word: 500) == 0)
+        // Only when it comes back without a take recording, as `startsFromTheTop` says.
+        #expect(start(returning: false, word: 37) == nil)
+        #expect(start(isRecording: true, word: 37) == nil)
+        #expect(start(returning: false, isRecording: true, word: nil) == nil)
+    }
+
+    @Test func scrollMovesWhereItIsSent() {
+        var scroll = TeleprompterScroll()
+        scroll.move(to: 120, maximum: 1000)
+        #expect(scroll.offset == 120)
+        scroll.move(to: 2000, maximum: 1000)
+        #expect(scroll.offset == 1000)
+        scroll.move(to: -5, maximum: 1000)
+        #expect(scroll.offset == 0)
+        scroll.move(to: 50, maximum: -40)
+        #expect(scroll.offset == 0)
     }
 }
