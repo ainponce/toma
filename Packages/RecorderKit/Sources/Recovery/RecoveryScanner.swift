@@ -22,7 +22,8 @@ public enum RecoveryScanner {
     /// (`ProjectPackage.checkLayout`), and then none of its takes is offered for recovery. A folder under
     /// `takes/` that the manifest does not list but that holds a segment file or a `recording.lock` nobody
     /// holds (a take whose first manifest write never landed) also `needsRepair`, named in the reason with
-    /// what it holds (recorded files, or only the lock): nothing else would ever show it.
+    /// what it holds (recorded files, or only the lock): nothing else would ever show it. The Replay's working package
+    /// (`ReplayScratch.isScratch`) gives nothing at all: it is never recovered nor shown (fases 4 y 5 design §10.2).
     ///
     /// Never throws because of a package; a `directory` that cannot be listed gives no results.
     public static func scan(directory: URL) -> [ScanResult] {
@@ -41,8 +42,10 @@ public enum RecoveryScanner {
     }
 
     /// Looks at the one package `package` as `scan(directory:)` looks at each (the library's Recuperar on a project,
-    /// 1c design §6.6): its recoverable takes, or why it needs repair.
+    /// 1c design §6.6): its recoverable takes, or why it needs repair. Nothing for the Replay's working package, told by
+    /// its marker before its manifest is read: what a forced quit leaves of the Replay is never a take of the user.
     public static func scan(package: ProjectPackage) -> [ScanResult] {
+        guard !ReplayScratch.isScratch(package) else { return [] }
         let manifest: Manifest
         do {
             let data = try Data(contentsOf: package.manifestURL)
