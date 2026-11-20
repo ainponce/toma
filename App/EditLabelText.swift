@@ -208,6 +208,8 @@ func localizedTitle(_ label: EditLabel) -> String {
         String(localized: "Change Title", comment: "Undo label (Edit ▸ Undo «…»): the project's title was written or changed")
     case .projectSummary:
         String(localized: "Change Summary", comment: "Undo label (Edit ▸ Undo «…»): the project's summary was written or changed")
+    case .markerChapters:
+        String(localized: "Add Chapters", comment: "Undo label (Edit ▸ Undo «…»): the chapters proposed by the AI were added as markers")
     }
 }
 

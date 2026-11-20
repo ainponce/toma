@@ -568,6 +568,17 @@
         }
       }
     },
+    "Add Chapters" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the chapters proposed by the AI were added as markers",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar capítulos"
+          }
+        }
+      }
+    },
     "Add Clip" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): an imported video clip was added to the video",
       "localizations" : {
