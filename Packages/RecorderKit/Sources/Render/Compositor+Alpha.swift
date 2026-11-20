@@ -12,12 +12,15 @@ import Metal
 /// - `highlight(for:)`: Highlight that darkens what is drawn and not the void, in each pass of what goes over the stage
 ///   (`calmHighlightAlphaFragment`, `calmHighlightAlphaTargetFragment`, which read the target and blend in the shader).
 /// - `dim`: Dim's veil from the blurred copy with its own alpha (`calmDimAlphaFragment`), blended "over".
+/// - `lens`: the loupe's lens magnifying what is under it with its alpha, its shadow and its ring as they are drawn
+///   (`loupeAlphaFragment`, which reads the target and blends in the shader), into the target alone.
 struct AlphaPipelines {
     private let clearTarget: any MTLRenderPipelineState
     private let clearSubsample: any MTLRenderPipelineState
     private let highlightTarget: any MTLRenderPipelineState
     private let highlightBlurTarget: any MTLRenderPipelineState
     let dim: any MTLRenderPipelineState
+    let lens: any MTLRenderPipelineState
 
     init(maker: PipelineMaker) throws {
         clearTarget = try maker.pipeline(
@@ -30,6 +33,7 @@ struct AlphaPipelines {
             vertex: "quadVertex", fragment: "calmHighlightAlphaTargetFragment", blending: .none,
             into: LayerPass.blurTarget.attachments)
         dim = try maker.pipeline(vertex: "quadVertex", fragment: "calmDimAlphaFragment", blending: .over, into: .target)
+        lens = try maker.pipeline(vertex: "quadVertex", fragment: "loupeAlphaFragment", blending: .none, into: .target)
     }
 
     /// The background's step of a transparent frame in `pass`, a pass of the stage.
