@@ -247,7 +247,8 @@ public final class EditedMix: Sendable {
     /// it shows none the package has), opening its segments and decoding them once, off Swift's cooperative pool, to find
     /// where each one's audio ends. Each take's events are read first, off that pool too (another take's event log is read
     /// from the disk the first time, `LoadedProject.events(ofTake:)`); a take whose event log cannot be read
-    /// (`LoadedProject.readEvents()` throws) is silent: none of its tracks is read and none of its clicks sounds.
+    /// (`LoadedProject.readEvents()` throws) is silent: none of its tracks is read and none of its clicks sounds. Every file
+    /// of `assets/` the document's imported clips name is opened and decoded once too (`MediaAudio.make`).
     /// - Precondition: `framesPerSecond` is positive.
     /// - Throws: `ExportError.cancelled` if the task is cancelled while reading.
     public static func make(
@@ -269,7 +270,7 @@ public final class EditedMix: Sendable {
         }
         let prereadSegments = sources.reduce(0) { sum, source in source.tracks.reduce(sum) { $0 + $1.decodedSegments } }
         let timeMap = TimeMap(sequence: document.sequence)
-        let media = await MediaAudio.make(project: project, document: document, timeMap: timeMap, channels: channels)
+        let media = try await MediaAudio.make(project: project, document: document, timeMap: timeMap)
         let music = await MusicMix.make(
             project: project, document: document, timeMap: timeMap, analysis: analysis, channels: channels,
             cuts: cuts(of: document, timeMap: timeMap, sources: sources), tracks: Set(sources.flatMap(\.keys)))
@@ -321,13 +322,15 @@ public final class EditedMix: Sendable {
 
     /// The mix of another revision of the document, `document` at `framesPerSecond`, of the same project: it reads the
     /// same sources and the same clean voice, without decoding the one again to place it nor opening the other. A clip of
-    /// a take it has no source for (`takeIDs`) is silent in it. It keeps the sound of the imported clips this mix opened
-    /// (empty in the base of phase 3: plan 3a plans it again here for `document`, without waiting), and plans the music
-    /// again for `document` with the files this mix opened (`MusicMix.with(document:timeMap:cuts:)`), without waiting: a
-    /// source this mix has no file for is silent in it until `with(analysis:)`.
+    /// a take it has no source for (`takeIDs`) is silent in it. It plans the sound of the imported clips again for
+    /// `document` with the files this mix opened (`MediaAudio.with(document:timeMap:)`), without waiting: a file this mix
+    /// did not look at is silent in it (`lacksMedia(for:)`); and the music with the files this mix opened
+    /// (`MusicMix.with(document:timeMap:cuts:)`), without waiting: a source this mix has no file for is silent in it until
+    /// `with(analysis:)`.
     /// - Precondition: `framesPerSecond` is positive.
     public func with(document: EditDocument, framesPerSecond: Int) -> EditedMix {
         let timeMap = TimeMap(sequence: document.sequence)
+        let media = media.with(document: document, timeMap: timeMap)
         let music = music.with(document: document, timeMap: timeMap, cuts: Self.cuts(of: document, timeMap: timeMap, sources: sources))
         return EditedMix(
             project: project, sources: sources, cleanLines: cleanLines, media: media, music: music, document: document,
@@ -335,16 +338,18 @@ public final class EditedMix: Sendable {
     }
 
     /// The mix of this document reading `analysis` of the caches instead: the same sources and imported clips, without
-    /// decoding them again; only the clean files `analysis` names are opened (never decoded), and the music is made again
-    /// (`MusicMix.make`), its files and its voice being `analysis`'s.
+    /// decoding them again (the imported clips with a state of their own, `MediaAudio.with(document:timeMap:)`); only the
+    /// clean files `analysis` names are opened (never decoded), and the music is made again (`MusicMix.make`), its files
+    /// and its voice being `analysis`'s.
     public func with(analysis: AnalysisInputs) async -> EditedMix {
         let timeMap = TimeMap(sequence: document.sequence)
         let music = await MusicMix.make(
             project: project, document: document, timeMap: timeMap, analysis: analysis, channels: channels,
             cuts: Self.cuts(of: document, timeMap: timeMap, sources: sources), tracks: Set(keys))
         return EditedMix(
-            project: project, sources: sources, cleanLines: await Self.cleanLines(of: sources, analysis: analysis), media: media,
-            music: music, document: document, framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
+            project: project, sources: sources, cleanLines: await Self.cleanLines(of: sources, analysis: analysis),
+            media: media.with(document: document, timeMap: timeMap), music: music, document: document,
+            framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
     }
 
     /// Whether a mix reads the same of the caches in `a` as in `b`: the same clean voice, the same loudness, the same files
@@ -667,7 +672,7 @@ public final class EditedMix: Sendable {
         }
         // The imported clips, then the music (phase 3 design §13, steps 2 and 3), kept within the content.
         guard media.hasSound || music.hasSound else { return }
-        media.add(frames, into: &samples, channels: channels)
+        media.add(frames, preroll: preroll, into: &samples, channels: channels)
         music.add(frames, into: &samples, channels: channels)
         let before = Int(heard.lowerBound - frames.lowerBound) * channels, after = Int(heard.upperBound - frames.lowerBound) * channels
         for i in 0..<before { samples[i] = 0 }

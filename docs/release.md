@@ -1164,6 +1164,11 @@ En un proyecto de dos tomas con cámara y micrófono en las dos (la segunda agre
 
 - Con un clip importado de 3a en la secuencia (o un clip sobre el video), aparece la fila Clips importados con su bloque y la onda del sonido de su archivo, a su volumen; Solo en esa fila deja oírse solo a ellos (y atenúa las demás), y Solo en Música, solo a la música.
 
+**El sonido de los clips importados** (A10)
+
+- Con auriculares, en un proyecto con voz, soltar en la pista Video un `.mov` con sonido (una canción o alguien hablando): en su tramo se oye el clip y no la toma, sin chasquidos en los bordes; a −6 dB en el inspector, más bajo; a 2×, más rápido con el mismo tono; a 8×, callado. Lo mismo exportado.
+- Agregar un clip encima con sonido (Anotaciones ▸ Clip…): se oye junto con la voz desde que aparece hasta que termina el archivo, una sola vez; Silenciar lo calla en la vista previa y en el export. Recién importado, se oye apenas termina de prepararse la mezcla (unos segundos en un proyecto largo), sin cerrar el editor.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

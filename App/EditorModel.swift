@@ -624,8 +624,10 @@ final class EditorModel {
             }
             guard !closed, state == .ready, builder != nil, generation == mixGeneration else { return }
             baseMix = mix
-            // The sequence came to show a take this mix has no source for meanwhile (3d): made again with it.
-            if let session, Self.mixLacksATake(mix.takeIDs, project: project, document: session.document) {
+            // The sequence came to show a take this mix has no source for meanwhile (3d), or the document came to name an
+            // imported clip the mix did not look at (plan 3a decision 15): made again with it.
+            if let session,
+               Self.mixLacksATake(mix.takeIDs, project: project, document: session.document) || mix.lacksMedia(for: session.document) {
                 makeMix(of: currentProject(of: session), document: session.document, revision: session.revision)
                 return
             }
@@ -1053,6 +1055,11 @@ final class EditorModel {
             pruneSelection(in: next)
             if !isPlaying { movePlayhead(to: Timeline(next, revision: session.revision)) }
             build(next, revision: session.revision)
+            // An imported clip the mix has not opened is silent in it until the mix is made again with it (plan 3a
+            // decision 15); one being made checks once it is.
+            if !makingMix, let baseMix, baseMix.lacksMedia(for: next) {
+                makeMix(of: currentProject(of: session), document: next, revision: session.revision)
+            }
             image.documentChanged(next)
             voice.documentChanged(next)
             audio.documentChanged(next)

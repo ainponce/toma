@@ -9,7 +9,8 @@ import os
 /// One audio track of a take, a microphone or system audio, as one continuous stream of 48 kHz Float32 PCM on the take's
 /// timeline, whose frame 0 is host time `origin` (`TakeTimeline.bounds`, where the legacy document starts). A `Reader`
 /// reads any range of it (`EditedMix` reads the ranges its clips keep). A file of audio of its own (an imported clip or
-/// sound, a theme of the music library) is such a stream too, of one segment from frame 0 (`load(file:id:channels:)`).
+/// sound, a theme of the music library) is such a stream too, of one segment from frame 0 (`load(file:id:channels:)`),
+/// which can be held decoded whole in memory (`decodedWhole(_:)`) when its codec need not decode the same bits twice.
 ///
 /// Each segment is placed by host time: its frames go to timeline frame `(host − origin) × 48 kHz`, where a frame's host
 /// time comes from its segment's clock map (`ClockMap`), made from the track's own `audioClock` anchors. Segments that
@@ -60,6 +61,10 @@ final class AudioTrackTimeline: Sendable {
     /// Spans of the source that are silent because a segment's audio could not be used, in the order of the segments:
     /// those that could not be opened, then where reading one stopped.
     let missing: [MissingSpan]
+    /// The stream's frames from frame 0 to the end of its last segment, interleaved, when it was decoded whole into
+    /// memory (`decodedWhole(_:)`): a `Reader` copies them and never opens a file. `nil` for a stream read from its files
+    /// as it plays.
+    let wholeFrames: [Float]?
     /// The segments `load` decoded to find where their audio ends.
     var decodedSegments: Int { placed.count }
 
@@ -427,11 +432,38 @@ final class AudioTrackTimeline: Sendable {
         return (kept, rejected)
     }
 
-    private init(track: String, channels: Int, placed: [Placed], missing: [MissingSpan]) {
+    private init(track: String, channels: Int, placed: [Placed], missing: [MissingSpan], wholeFrames: [Float]? = nil) {
         self.track = track
         self.channels = channels
         self.placed = placed
         self.missing = missing
+        self.wholeFrames = wholeFrames
+    }
+
+    /// The most frames `decodedWhole(_:)` holds in memory: 10 minutes at 48 kHz, 230 MB in two channels.
+    static let maximumWholeFrames: Int64 = 28_800_000
+
+    /// `line` with its frames decoded whole, once, into memory (`wholeFrames`), read in order from frame 0 to the end of
+    /// its last segment by a reader of its own, off Swift's cooperative pool: every range of it then gives the same bits,
+    /// whatever was read before and however often. For a file of audio of its own (`load(file:id:channels:)`), whose
+    /// codec need not decode the same bits twice: macOS's AAC decoder gives samples a few units in the last place apart
+    /// (up to 2·10⁻⁷, −134 dBFS) from one reader to the next, so an imported clip read from its file as it plays would
+    /// not mix the same twice. A line with nothing placed, or longer than `maximumFrames`, is given back as it is (read
+    /// from its file as it plays).
+    /// - Throws: `ExportError.cancelled` if the task is cancelled while it waits to decode.
+    static func decodedWhole(_ line: AudioTrackTimeline, maximumFrames: Int64 = maximumWholeFrames) async throws -> AudioTrackTimeline {
+        guard let end = line.placed.last?.end, end > 0, end <= maximumFrames else { return line }
+        let frames: [Float]
+        do {
+            frames = try await offTheCooperativePool {
+                var frames: [Float] = []
+                Reader(line).read(0..<end, into: &frames)
+                return frames
+            }
+        } catch is CancellationError {
+            throw ExportError.cancelled  // while it waited for a decoding slot
+        }
+        return AudioTrackTimeline(track: line.track, channels: line.channels, placed: line.placed, missing: line.missing, wholeFrames: frames)
     }
 
     /// The clean voice of `dry` (`soundIsolation-2`, plan decision 14) as a stream of its own with `channels` channels:
@@ -495,6 +527,15 @@ final class AudioTrackTimeline: Sendable {
             let channels = timeline.channels
             samples.removeAll(keepingCapacity: true)
             samples.append(contentsOf: repeatElement(0, count: frames.count * channels))
+            if let whole = timeline.wholeFrames {
+                // Decoded whole: its frames as they are, silence outside them.
+                let kept = frames.clamped(to: 0..<Int64(whole.count / channels))
+                guard !kept.isEmpty else { return }
+                let into = Int(kept.lowerBound - frames.lowerBound) * channels
+                let from = Int(kept.lowerBound) * channels, to = Int(kept.upperBound) * channels
+                samples.replaceSubrange(into..<(into + to - from), with: whole[from..<to])
+                return
+            }
             let placed = timeline.placed
             // The first segment whose audio ends after the range starts.
             var low = 0, high = placed.count
