@@ -163,6 +163,7 @@ extension EditorPanelTab {
         case .captions: "captions"
         case .privacy: "privacy"
         case .annotations: "annotations"
+        case .info: "info"
         }
     }
 
