@@ -410,7 +410,7 @@ private enum LayoutFixture {
     let document = LayoutFixture.document([inside, across], sequence: sequence)
     #expect(LayoutCommands.block(atOutput: LayoutFixture.output(7), in: document, timeMap: LayoutFixture.timeMap(document)) == inside)
 
-    let cut = try SequenceCommands.delete(document, clipIDs: ["c-00000002"]).get()
+    let cut = try SequenceCommands.delete(document, clipIDs: ["c-00000002"], takeBounds: [:]).get()
     let edited = try document.applying(cut.changes)
     // Both blocks stay in the document; the one in the cut shows nothing, the one across it shows its kept part as one.
     #expect(edited.camera.layouts == [inside, across])
@@ -433,7 +433,7 @@ private enum LayoutFixture {
     // As on the Zoom track (1c design §5.5), a block hidden whole in a cut takes no room on the track.
     let hidden = LayoutFixture.block("l-0000000a", from: 6, to: 8, kind: .split, split: SplitLayout(side: .start))
     let document = LayoutFixture.document([hidden], sequence: LayoutFixture.threeClips)
-    let cut = try SequenceCommands.delete(document, clipIDs: ["c-00000002"]).get()
+    let cut = try SequenceCommands.delete(document, clipIDs: ["c-00000002"], takeBounds: [:]).get()
     let edited = try document.applying(cut.changes)
     let step = try #require(LayoutFixture.add(edited, .bubble, from: 4, to: 6))
     let across = try LayoutFixture.applying(step, to: edited)
@@ -512,7 +512,7 @@ private enum LayoutFixture {
         sequence: LayoutFixture.threeClips)
     document.camera.changes.append(
         CameraChange(id: "k-00000002", take: LayoutFixture.takeID, t: LayoutFixture.at(7), style: LayoutFixture.custom, origin: .user))
-    document = try document.applying(try SequenceCommands.delete(document, clipIDs: ["c-00000002"]).get().changes)
+    document = try document.applying(try SequenceCommands.delete(document, clipIDs: ["c-00000002"], takeBounds: [:]).get().changes)
     let map = LayoutFixture.timeMap(document)
     #expect(LayoutCommands.block(atOutput: LayoutFixture.output(5), in: document, timeMap: map) == nil)
     func bubble(_ id: String) throws -> BubbleLayout? {

@@ -11,7 +11,8 @@ import ProjectFormat
 ///   clip, at a clip with content and at the one after it) and to what each take has (`takeBounds`, each take's
 ///   `TakeTimeline.editableBounds` in the mix, which the commands hold it to as well): a J cut (negative) never has clip `k`
 ///   heard from before the start of its take, an L cut (positive) never has clip `k − 1` heard past the end of its own.
-///   A take without bounds there is held to the clips alone, as `TimeMap.audioStarts` holds it.
+///   A take without bounds there is held to the clips alone. The commands that write the sequence hold every cut to the
+///   same bounds (`SequenceChanges`), so a document they write sounds where `TimeMap.audioStarts` puts it.
 /// - `starts[k] = frames(O_k + δ_k)` and `sourceShift[k] = frames(round(δ_k × v_k))` (`EditedMix.frames(ofNanoseconds:)`,
 ///   `v_k` by `ClipSpeed.clamped`): a J cut has clip `k` heard sooner from its source before `s_k`, an L cut has the clip
 ///   before heard on from its source past `e_{k−1}` (at another speed, its stretch fed it, `heardEnd(ofClip:)`), and the
@@ -34,18 +35,13 @@ struct AudioCuts: Sendable {
     private let timeMap: TimeMap
 
     /// The cuts of the sound of `document`'s sequence, whose map is `timeMap`, held to the clips at each edge and to
-    /// `takeBounds` (each take's source the sound can be read in, by take ID; none: the clips alone).
+    /// `takeBounds` (each take's source the sound can be read in, by take ID: the mix's `EditedMix.takeBounds`, which the
+    /// commands that write the sequence hold it to too), as `SequenceRules.audioShift(of:at:takeBounds:)` holds it.
     /// - Precondition: `timeMap` is the map of `document.sequence`.
-    init(document: EditDocument, timeMap: TimeMap, takeBounds: [String: ClosedRange<HostTime>] = [:]) {
+    init(document: EditDocument, timeMap: TimeMap, takeBounds: [String: ClosedRange<HostTime>]) {
         let sequence = document.sequence
         precondition(timeMap.clipOutputStarts.count == sequence.count, "AudioCuts: a map of another sequence")
-        let shifts = sequence.indices.map { k -> Int64 in
-            let asked = sequence[k].audioShift
-            // 0 is always in the range: a cut not moved needs nothing else of the sequence.
-            guard asked != 0 else { return 0 }
-            let range = SequenceRules.audioShiftRange(of: sequence, at: k, takeBounds: takeBounds)
-            return min(max(asked, range.lowerBound), range.upperBound)
-        }
+        let shifts = sequence.indices.map { k in SequenceRules.audioShift(of: sequence, at: k, takeBounds: takeBounds) }
         let soundStarts = sequence.indices.map { k -> Int64 in
             let (sum, overflow) = timeMap.clipOutputStarts[k].addingReportingOverflow(shifts[k])
             return overflow ? (shifts[k] < 0 ? .min : .max) : sum

@@ -172,7 +172,7 @@ enum TwoClips {
 
 @Test func deleteClosesTheGap() throws {
     let document = TwoClips.document()
-    let step = try SequenceCommands.delete(document, clipIDs: ["c-00000001"]).get()
+    let step = try SequenceCommands.delete(document, clipIDs: ["c-00000001"], takeBounds: [:]).get()
     #expect(step.label == .delete)
     #expect(step.target == "c-00000001")
     #expect(step.changes == [try #require(document.removeChange(.sequence, at: 0))])
@@ -185,26 +185,26 @@ enum TwoClips {
 
 @Test func deletingTheLastClipIsRefused() throws {
     let document = TwoClips.document()
-    #expect(SequenceCommands.delete(document, clipIDs: ["c-00000001", "c-00000002"]) == .failure(.lastClip))
+    #expect(SequenceCommands.delete(document, clipIDs: ["c-00000001", "c-00000002"], takeBounds: [:]) == .failure(.lastClip))
     // What is left has to be at least a frame long.
     let sliver = TwoClips.document([TwoClips.clip(1, from: 1, to: 5), TwoClips.clip(2, from: 10, to: 10.01)])
-    #expect(SequenceCommands.delete(sliver, clipIDs: ["c-00000001"]) == .failure(.lastClip))
+    #expect(SequenceCommands.delete(sliver, clipIDs: ["c-00000001"], takeBounds: [:]) == .failure(.lastClip))
     // Ids that are not in the sequence: nothing to do.
-    #expect(try SequenceCommands.delete(document, clipIDs: ["c-0000000f"]).get().changes == [])
+    #expect(try SequenceCommands.delete(document, clipIDs: ["c-0000000f"], takeBounds: [:]).get().changes == [])
 }
 
 @Test func deleteSeveralClips() throws {
     let document = TwoClips.document([
         TwoClips.clip(1, from: 1, to: 2), TwoClips.clip(2, from: 3, to: 4), TwoClips.clip(3, from: 5, to: 6),
     ])
-    let step = try SequenceCommands.delete(document, clipIDs: ["c-00000003", "c-00000001"]).get()
+    let step = try SequenceCommands.delete(document, clipIDs: ["c-00000003", "c-00000001"], takeBounds: [:]).get()
     #expect(step.target == "c-00000001,c-00000003")
     #expect(try TwoClips.applying(step, to: document).sequence == [TwoClips.clip(2, from: 3, to: 4)])
 }
 
 @Test func deleteRangeInOneStep() throws {
     let document = TwoClips.document()
-    let step = try SequenceCommands.deleteRange(document, output: TwoClips.range(3, 5), makeID: TwoClips.newIDs).get()
+    let step = try SequenceCommands.deleteRange(document, output: TwoClips.range(3, 5), takeBounds: [:], makeID: TwoClips.newIDs).get()
     #expect(step.label == .delete)
     #expect(step.target == "c-00000001,c-00000002")
     #expect(
@@ -218,7 +218,7 @@ enum TwoClips {
 
 @Test func deleteRangeInsideOneClipCutsIt() throws {
     let document = TwoClips.document()
-    let step = try SequenceCommands.deleteRange(document, output: TwoClips.range(1, 2), makeID: TwoClips.newIDs).get()
+    let step = try SequenceCommands.deleteRange(document, output: TwoClips.range(1, 2), takeBounds: [:], makeID: TwoClips.newIDs).get()
     let tail = TwoClips.clip("c-00000010", from: 3, to: 5)
     #expect(
         step.changes == [
@@ -233,7 +233,7 @@ enum TwoClips {
 @Test func deleteRangeLeavingOneFrame() throws {
     let document = TwoClips.document()
     let all = TwoClips.output(8)
-    let oneFrame = try SequenceCommands.deleteRange(document, output: 0..<(all - TwoClips.frame), makeID: TwoClips.newIDs).get()
+    let oneFrame = try SequenceCommands.deleteRange(document, output: 0..<(all - TwoClips.frame), takeBounds: [:], makeID: TwoClips.newIDs).get()
     let edited = try TwoClips.applying(oneFrame, to: document)
     #expect(
         edited.sequence == [
@@ -242,13 +242,13 @@ enum TwoClips {
     #expect(TwoClips.duration(edited) == TwoClips.frame)
     // Less than a frame left goes with the range, and then nothing is left; the same for everything and more.
     for range in [0..<(all - TwoClips.output(0.010)), 0..<all, TwoClips.range(-1, 9)] {
-        #expect(SequenceCommands.deleteRange(document, output: range, makeID: TwoClips.newIDs) == .failure(.lastClip))
+        #expect(SequenceCommands.deleteRange(document, output: range, takeBounds: [:], makeID: TwoClips.newIDs) == .failure(.lastClip))
     }
 }
 
 @Test func deleteRangeTakesASliverWithIt() throws {
     let document = TwoClips.document()
-    let step = try SequenceCommands.deleteRange(document, output: TwoClips.range(0.005, 6), makeID: TwoClips.newIDs).get()
+    let step = try SequenceCommands.deleteRange(document, output: TwoClips.range(0.005, 6), takeBounds: [:], makeID: TwoClips.newIDs).get()
     #expect(
         step.changes == [
             try #require(document.removeChange(.sequence, at: 0)),
@@ -258,7 +258,7 @@ enum TwoClips {
     #expect(TwoClips.duration(edited) == TwoClips.output(2))
     // Inside one clip, a sliver at its end goes too: the clip is only trimmed, and no id is made.
     let ids = TwoClips.CountingIDs()
-    let inside = try SequenceCommands.deleteRange(document, output: TwoClips.range(1, 3.995), makeID: ids.make).get()
+    let inside = try SequenceCommands.deleteRange(document, output: TwoClips.range(1, 3.995), takeBounds: [:], makeID: ids.make).get()
     #expect(
         try TwoClips.applying(inside, to: document).sequence == [
             TwoClips.clip(1, from: 1, to: 2), TwoClips.clip(2, from: 10, to: 14),
@@ -269,7 +269,7 @@ enum TwoClips {
 @Test func deleteRangeOutsideTheOutputDoesNothing() throws {
     let document = TwoClips.document()
     for range in [TwoClips.range(8, 9), TwoClips.range(-2, -1), TwoClips.range(2, 2)] {
-        #expect(try SequenceCommands.deleteRange(document, output: range, makeID: TwoClips.newIDs).get().changes == [])
+        #expect(try SequenceCommands.deleteRange(document, output: range, takeBounds: [:], makeID: TwoClips.newIDs).get().changes == [])
     }
 }
 
@@ -281,7 +281,7 @@ enum TwoClips {
     // From one frame of the clip to the start of the next one.
     #expect(limits == TwoClips.at(1, plus: 16_666_667)...TwoClips.at(10))
     let step = try #require(
-        SequenceCommands.trim(document, clipID: "c-00000001", edge: .end, toSource: TwoClips.at(12), limits: limits))
+        SequenceCommands.trim(document, clipID: "c-00000001", edge: .end, toSource: TwoClips.at(12), limits: limits, takeBounds: [:]))
     #expect(step.label == .trim)
     #expect(step.target == "c-00000001")
     let longer = TwoClips.clip(1, from: 1, to: 10)
@@ -294,7 +294,7 @@ enum TwoClips {
     let back = TwoClips.limits("c-00000002", .start, in: document)
     #expect(back == TwoClips.at(5)...TwoClips.at(14, plus: -16_666_667))
     let start = try #require(
-        SequenceCommands.trim(document, clipID: "c-00000002", edge: .start, toSource: TwoClips.at(2), limits: back))
+        SequenceCommands.trim(document, clipID: "c-00000002", edge: .start, toSource: TwoClips.at(2), limits: back, takeBounds: [:]))
     #expect(try TwoClips.applying(start, to: document).sequence[1] == TwoClips.clip(2, from: 5, to: 14))
 }
 
@@ -309,13 +309,13 @@ enum TwoClips {
         let limits = TwoClips.limits("c-00000001", .start, in: document, events: events)
         #expect(limits.lowerBound == TwoClips.at(0))
         let step = try #require(
-            SequenceCommands.trim(document, clipID: "c-00000001", edge: .start, toSource: TwoClips.at(-5), limits: limits))
+            SequenceCommands.trim(document, clipID: "c-00000001", edge: .start, toSource: TwoClips.at(-5), limits: limits, takeBounds: [:]))
         #expect(try TwoClips.applying(step, to: document).sequence[0] == TwoClips.clip(1, from: 0, to: 5))
 
         let end = TwoClips.limits("c-00000002", .end, in: document, events: events)
         #expect(end.upperBound == TwoClips.at(30))
         let longer = try #require(
-            SequenceCommands.trim(document, clipID: "c-00000002", edge: .end, toSource: TwoClips.at(40), limits: end))
+            SequenceCommands.trim(document, clipID: "c-00000002", edge: .end, toSource: TwoClips.at(40), limits: end, takeBounds: [:]))
         #expect(try TwoClips.applying(longer, to: document).sequence[1] == TwoClips.clip(2, from: 10, to: 30))
     }
 }
@@ -325,7 +325,7 @@ enum TwoClips {
     // Shortening past the other edge stops a frame before it.
     let limits = TwoClips.limits("c-00000001", .start, in: document)
     let step = try #require(
-        SequenceCommands.trim(document, clipID: "c-00000001", edge: .start, toSource: TwoClips.at(20), limits: limits))
+        SequenceCommands.trim(document, clipID: "c-00000001", edge: .start, toSource: TwoClips.at(20), limits: limits, takeBounds: [:]))
     let edited = try TwoClips.applying(step, to: document)
     #expect(TimeMap.outputDuration(of: edited.sequence[0]) == TwoClips.frame)
     // At 4×, a frame is four times as much source: 66 666 666 ns, which round(L / 4) makes 16 666 667.
@@ -336,7 +336,7 @@ enum TwoClips {
     // Limits that would allow less, a trim that changes nothing and a clip that is not there do nothing.
     let anything = TwoClips.at(0)...TwoClips.at(30)
     func trim(_ clipID: String, toSource seconds: Double) -> EditStep? {
-        SequenceCommands.trim(document, clipID: clipID, edge: .end, toSource: TwoClips.at(seconds), limits: anything)
+        SequenceCommands.trim(document, clipID: clipID, edge: .end, toSource: TwoClips.at(seconds), limits: anything, takeBounds: [:])
     }
     #expect(trim("c-00000001", toSource: 1.01) == nil)
     #expect(trim("c-00000001", toSource: 5) == nil)
@@ -367,10 +367,10 @@ enum TwoClips {
 @Test func speedThatLeavesLessThanAFrameIsRefused() throws {
     let document = TwoClips.document([TwoClips.clip(1, from: 1, to: 1.030), TwoClips.clip(2, from: 10, to: 14)])
     // 30 ms at 4× is 7.5 ms, less than a frame of 16.7 ms; at 1.5×, 20 ms.
-    #expect(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001"], speed: 4) == nil)
+    #expect(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001"], speed: 4, takeBounds: [:]) == nil)
     // With another clip that could: all or nothing.
-    #expect(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001", "c-00000002"], speed: 4) == nil)
-    let step = try #require(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001"], speed: 1.5))
+    #expect(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001", "c-00000002"], speed: 4, takeBounds: [:]) == nil)
+    let step = try #require(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001"], speed: 1.5, takeBounds: [:]))
     #expect(step.label == .speed)
     #expect(step.target == "c-00000001")
     let edited = try TwoClips.applying(step, to: document)
@@ -384,18 +384,18 @@ enum TwoClips {
     #expect(SequenceCommands.speedPresets == [0.5, 1, 1.5, 2, 4, 8])
     let document = TwoClips.document()
     func speed(_ value: Double) throws -> Double {
-        let step = try #require(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001"], speed: value))
+        let step = try #require(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001"], speed: value, takeBounds: [:]))
         return try TwoClips.applying(step, to: document).sequence[0].speed
     }
     #expect(try speed(32) == 16)
     #expect(try speed(0.1) == 0.25)
     #expect(try speed(.infinity) == 16)
     // The speed it has already (one that is not a number is 1), or no clip of the sequence: nothing to do.
-    #expect(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001"], speed: 1) == nil)
-    #expect(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001"], speed: .nan) == nil)
-    #expect(SequenceCommands.setSpeed(document, clipIDs: ["c-0000000f"], speed: 2) == nil)
+    #expect(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001"], speed: 1, takeBounds: [:]) == nil)
+    #expect(SequenceCommands.setSpeed(document, clipIDs: ["c-00000001"], speed: .nan, takeBounds: [:]) == nil)
+    #expect(SequenceCommands.setSpeed(document, clipIDs: ["c-0000000f"], speed: 2, takeBounds: [:]) == nil)
     // Several clips in one step, in the order of the sequence; the output gets shorter.
-    let both = try #require(SequenceCommands.setSpeed(document, clipIDs: ["c-00000002", "c-00000001"], speed: 2))
+    let both = try #require(SequenceCommands.setSpeed(document, clipIDs: ["c-00000002", "c-00000001"], speed: 2, takeBounds: [:]))
     #expect(both.target == "c-00000001,c-00000002")
     #expect(TwoClips.duration(try TwoClips.applying(both, to: document)) == TwoClips.output(4))
 }
@@ -408,8 +408,8 @@ enum TwoClips {
     #expect(try TwoClips.applying(split, to: document).sequence.map(\.speed) == [16, 16])
     let limits = TwoClips.limits("c-00000001", .end, in: document)
     let trim = try #require(
-        SequenceCommands.trim(document, clipID: "c-00000001", edge: .end, toSource: TwoClips.at(4), limits: limits))
+        SequenceCommands.trim(document, clipID: "c-00000001", edge: .end, toSource: TwoClips.at(4), limits: limits, takeBounds: [:]))
     #expect(try TwoClips.applying(trim, to: document).sequence.map(\.speed) == [16])
-    let range = try SequenceCommands.deleteRange(document, output: TwoClips.range(0, 0.125), makeID: TwoClips.newIDs).get()
+    let range = try SequenceCommands.deleteRange(document, output: TwoClips.range(0, 0.125), takeBounds: [:], makeID: TwoClips.newIDs).get()
     #expect(try TwoClips.applying(range, to: document).sequence.map(\.speed) == [16])
 }

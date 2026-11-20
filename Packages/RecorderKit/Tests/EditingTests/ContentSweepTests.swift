@@ -61,7 +61,7 @@ import ProjectFormat
         for edge in [ClipEdge.start, .end] {
             #expect(F.limits(card.id, edge, in: doc) == card.start...card.start)
             for to in [F.at(4), F.at(5), F.at(6)] {
-                #expect(SequenceCommands.trim(doc, clipID: card.id, edge: edge, toSource: to, limits: F.at(0)...F.at(30)) == nil)
+                #expect(SequenceCommands.trim(doc, clipID: card.id, edge: edge, toSource: to, limits: F.at(0)...F.at(30), takeBounds: [:]) == nil)
             }
             #expect(SequenceCommands.trimToPlayhead(doc, edge: edge, atOutput: F.output(5), take: F.take, events: []) == nil)
         }
@@ -74,32 +74,32 @@ import ProjectFormat
         let atItsStart = F.document([Self.content("c-0000000b", at: 10, .freeze(duration: 2_000_000_000)), F.clip(2, from: 10, to: 14)])
         #expect(F.limits("c-00000002", .start, in: atItsStart).lowerBound == F.at(10))
         // No speed changes it; with it alone there is nothing to change.
-        let speed = try #require(SequenceCommands.setSpeed(doc, clipIDs: [card.id, "c-00000001"], speed: 2))
+        let speed = try #require(SequenceCommands.setSpeed(doc, clipIDs: [card.id, "c-00000001"], speed: 2, takeBounds: [:]))
         let faster = try F.applying(speed, to: doc)
         #expect(faster.sequence.map(\.speed) == [2, 1, 1])
         #expect(faster.sequence[1] == card)
         #expect(speed.target == "c-00000001")
-        #expect(SequenceCommands.setSpeed(doc, clipIDs: [card.id], speed: 2) == nil)
+        #expect(SequenceCommands.setSpeed(doc, clipIDs: [card.id], speed: 2, takeBounds: [:]) == nil)
         // A deletion takes it whole.
-        let deleted = try F.applying(try SequenceCommands.delete(doc, clipIDs: [card.id]).get(), to: doc)
+        let deleted = try F.applying(try SequenceCommands.delete(doc, clipIDs: [card.id], takeBounds: [:]).get(), to: doc)
         #expect(deleted.sequence.map(\.id) == ["c-00000001", "c-00000002"])
         // A range deletion only if it covers it whole.
         let ids = IDs()
-        let partial = try SequenceCommands.deleteRange(doc, output: F.range(4.5, 6), makeID: ids.make).get()
+        let partial = try SequenceCommands.deleteRange(doc, output: F.range(4.5, 6), takeBounds: [:], makeID: ids.make).get()
         #expect(partial.changes.isEmpty)
-        let across = try SequenceCommands.deleteRange(doc, output: F.range(6, 8), makeID: ids.make).get()
+        let across = try SequenceCommands.deleteRange(doc, output: F.range(6, 8), takeBounds: [:], makeID: ids.make).get()
         let acrossEdited = try F.applying(across, to: doc)
         #expect(acrossEdited.sequence.map(\.id) == ["c-00000001", card.id, "c-00000002"])
         #expect(acrossEdited.sequence[1] == card)
         #expect(acrossEdited.sequence[2].start == F.at(11))
-        let whole = try F.applying(try SequenceCommands.deleteRange(doc, output: F.range(4, 7), makeID: ids.make).get(), to: doc)
+        let whole = try F.applying(try SequenceCommands.deleteRange(doc, output: F.range(4, 7), takeBounds: [:], makeID: ids.make).get(), to: doc)
         #expect(whole.sequence.map(\.id) == ["c-00000001", "c-00000002"])
-        let around = try F.applying(try SequenceCommands.deleteRange(doc, output: F.range(3, 8), makeID: ids.make).get(), to: doc)
+        let around = try F.applying(try SequenceCommands.deleteRange(doc, output: F.range(3, 8), takeBounds: [:], makeID: ids.make).get(), to: doc)
         #expect(around.sequence.map(\.start) == [F.at(1), F.at(11)])
         #expect(around.sequence.map(\.end) == [F.at(4), F.at(14)])
         // Content lasts: a card alone is a clip of at least a frame, so its neighbours can go.
-        #expect((try? SequenceCommands.delete(doc, clipIDs: ["c-00000001", "c-00000002"]).get()) != nil)
-        #expect(throws: SequenceError.lastClip) { try SequenceCommands.delete(doc, clipIDs: Set(doc.sequence.map(\.id))).get() }
+        #expect((try? SequenceCommands.delete(doc, clipIDs: ["c-00000001", "c-00000002"], takeBounds: [:]).get()) != nil)
+        #expect(throws: SequenceError.lastClip) { try SequenceCommands.delete(doc, clipIDs: Set(doc.sequence.map(\.id)), takeBounds: [:]).get() }
     }
 
     /// The transcript's commands take source out of the take's clips and give it back without moving a point or going
@@ -163,22 +163,22 @@ import ProjectFormat
         let ids = IDs()
         // Trimmed to 2 s, its cut can move 1 s at most.
         let trimmed = try F.applying(
-            try #require(SequenceCommands.trim(doc, clipID: "c-00000002", edge: .end, toSource: F.at(12), limits: F.at(0)...F.at(30))),
+            try #require(SequenceCommands.trim(doc, clipID: "c-00000002", edge: .end, toSource: F.at(12), limits: F.at(0)...F.at(30), takeBounds: [:])),
             to: doc)
         #expect(trimmed.sequence[1].audioShift == 1_000_000_000)
         #expect(DocumentRules.problems(in: trimmed) == [])
         // The first clip at 4×: 1 s of output.
-        let fast = try F.applying(try #require(SequenceCommands.setSpeed(doc, clipIDs: ["c-00000001"], speed: 4)), to: doc)
+        let fast = try F.applying(try #require(SequenceCommands.setSpeed(doc, clipIDs: ["c-00000001"], speed: 4, takeBounds: [:])), to: doc)
         #expect(fast.sequence[1].audioShift == 500_000_000)
         // Split: the first piece keeps the cut at its start, the second starts its sound with its picture.
         let split = try F.applying(try #require(SequenceCommands.split(doc, atOutput: F.output(5), makeID: ids.make)), to: doc)
         #expect(split.sequence.map(\.audioShift) == [0, 500_000_000, 0])
         #expect(DocumentRules.problems(in: split) == [])
         // Deleted the clip before it, it is the first, which never moves its sound.
-        let first = try F.applying(try SequenceCommands.delete(doc, clipIDs: ["c-00000001"]).get(), to: doc)
+        let first = try F.applying(try SequenceCommands.delete(doc, clipIDs: ["c-00000001"], takeBounds: [:]).get(), to: doc)
         #expect(first.sequence.map(\.audioShift) == [0])
         // A range deletion inside it: the piece after the range starts its sound with its picture.
-        let inside = try F.applying(try SequenceCommands.deleteRange(doc, output: F.range(5, 6), makeID: ids.make).get(), to: doc)
+        let inside = try F.applying(try SequenceCommands.deleteRange(doc, output: F.range(5, 6), takeBounds: [:], makeID: ids.make).get(), to: doc)
         #expect(inside.sequence.map(\.audioShift) == [0, 500_000_000, 0])
         #expect(DocumentRules.problems(in: inside) == [])
         // Typing sped up inside it: the first piece keeps the cut at its start, held to its 0.75 s.
@@ -189,15 +189,15 @@ import ProjectFormat
         #expect(DocumentRules.problems(in: typed) == [])
         // Undone, every cut comes back as it was.
         for step in [
-            try #require(SequenceCommands.trim(doc, clipID: "c-00000002", edge: .end, toSource: F.at(12), limits: F.at(0)...F.at(30))),
-            try SequenceCommands.delete(doc, clipIDs: ["c-00000001"]).get(),
+            try #require(SequenceCommands.trim(doc, clipID: "c-00000002", edge: .end, toSource: F.at(12), limits: F.at(0)...F.at(30), takeBounds: [:])),
+            try SequenceCommands.delete(doc, clipIDs: ["c-00000001"], takeBounds: [:]).get(),
         ] {
             let edited = try doc.applying(step.changes)
             #expect(try edited.applying(step.changes.reversed().map(\.inverse)) == doc)
         }
         // Without a cut moved, a command makes the changes it always made.
         let plain = F.document()
-        let plainStep = try #require(SequenceCommands.trim(plain, clipID: "c-00000002", edge: .end, toSource: F.at(12), limits: F.at(0)...F.at(30)))
+        let plainStep = try #require(SequenceCommands.trim(plain, clipID: "c-00000002", edge: .end, toSource: F.at(12), limits: F.at(0)...F.at(30), takeBounds: [:]))
         #expect(plainStep.changes.count == 1)
     }
 }

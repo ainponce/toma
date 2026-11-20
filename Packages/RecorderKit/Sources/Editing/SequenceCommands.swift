@@ -30,7 +30,10 @@ public enum SequenceError: Error, Equatable {
 /// - A clip a command makes (a piece of a split or of a deletion inside a clip) starts its sound with its picture
 ///   (`audioShift` 0), and every cut of the sound a command leaves out of its limits, because the clips at its edge are
 ///   shorter or other ones, is held to them in the same step (`SequenceRules.audioShift(of:at:)`): no step breaks a
-///   rule of the document (`DocumentRules`).
+///   rule of the document (`DocumentRules`). A command that can move a clip's start or end in its take, its speed or the
+///   clip before it (a trim, a speed, a deletion) holds them to `takeBounds` too, what each take has (the mix's
+///   `EditedMix.takeBounds`), as the mix does (`SequenceRules.audioShift(of:at:takeBounds:)`, phase 3 design §7.3): the
+///   document, `TimeMap.audioStarts` and what the mix hears agree. A split cannot move a cut past what its take has.
 /// - The changes are built from the clips they touch, never from the whole document encoded again for each one.
 /// - The `target` of a step, which joins a burst of steps into one undo group, is the id of the clip it acts on; for
 ///   several, their ids in the order of the sequence, joined by commas.
@@ -55,9 +58,11 @@ public enum SequenceCommands {
 
     /// Deletes the clips with the ids `clipIDs`, and the sequence closes the gap. `.failure(.lastClip)` if no clip of at
     /// least a frame would be left; ids that are not in the sequence are left out, and with none the step has no changes.
-    public static func delete(_ doc: EditDocument, clipIDs: Set<String>) -> Result<EditStep, SequenceError> {
+    public static func delete(
+        _ doc: EditDocument, clipIDs: Set<String>, takeBounds: [String: ClosedRange<HostTime>]
+    ) -> Result<EditStep, SequenceError> {
         let frame = oneFrame(of: doc)
-        var changes = SequenceChanges(doc.sequence)
+        var changes = SequenceChanges(doc.sequence, takeBounds: takeBounds)
         var removed: [String] = []
         var leavesAFrame = false
         for (k, clip) in doc.sequence.enumerated() {
@@ -79,13 +84,13 @@ public enum SequenceCommands {
     /// `.failure(.lastClip)` if no clip of at least a frame would be left; a range with nothing of the output in it gives a
     /// step without changes.
     public static func deleteRange(
-        _ doc: EditDocument, output: Range<Int64>, makeID: (String) -> String
+        _ doc: EditDocument, output: Range<Int64>, takeBounds: [String: ClosedRange<HostTime>], makeID: (String) -> String
     ) -> Result<EditStep, SequenceError> {
         let map = TimeMap(sequence: doc.sequence)
         let frame = oneFrame(of: doc)
         let (a, b) = (max(output.lowerBound, 0), min(output.upperBound, map.duration))
         var ids = Set(doc.sequence.map(\.id))
-        var changes = SequenceChanges(doc.sequence)
+        var changes = SequenceChanges(doc.sequence, takeBounds: takeBounds)
         var touched: [String] = []
         // Removed and inserted so far, for the index of the next change.
         var (removed, inserted) = (0, 0)
@@ -173,10 +178,12 @@ public enum SequenceCommands {
         }
     }
 
-    /// Moves `edge` of clip `clipID` to `toSource`, clamped to `limits` (`trimLimits`, worked out once for a drag). `nil`
-    /// if the edge stays where it is, there is no such clip, it has content, or the clip would be shorter than a frame.
+    /// Moves `edge` of clip `clipID` to `toSource`, clamped to `limits` (`trimLimits`, worked out once for a drag), the
+    /// cuts of the sound held to `takeBounds` too. `nil` if the edge stays where it is, there is no such clip, it has
+    /// content, or the clip would be shorter than a frame.
     public static func trim(
-        _ doc: EditDocument, clipID: String, edge: ClipEdge, toSource: HostTime, limits: ClosedRange<HostTime>
+        _ doc: EditDocument, clipID: String, edge: ClipEdge, toSource: HostTime, limits: ClosedRange<HostTime>,
+        takeBounds: [String: ClosedRange<HostTime>]
     ) -> EditStep? {
         guard let original = doc.sequence.first(where: { $0.id == clipID }), original.content == nil else { return nil }
         let to = min(max(toSource, limits.lowerBound), limits.upperBound)
@@ -190,14 +197,15 @@ public enum SequenceCommands {
             clip.end = to
         }
         guard lasts(clip, oneFrame(of: doc)) else { return nil }
-        var changes = SequenceChanges(doc.sequence)
+        var changes = SequenceChanges(doc.sequence, takeBounds: takeBounds)
         changes.replace(original, with: clip)
         return EditStep(label: .trim, target: clipID, changes: changes.changes)
     }
 
     /// Trims the clip under the playhead at output instant `atOutput`: its start up to the source instant shown there
-    /// (that frame is its first), or its end (that frame is the next clip's). `nil` on an edge, out of the output, or if
-    /// less than a frame of the clip would be left: it does not stop short of the playhead.
+    /// (that frame is its first), or its end (that frame is the next clip's), the cuts of the sound held to what `take`
+    /// has (the clip's take, the only one a trim of it can hold them to). `nil` on an edge, out of the output, or if less
+    /// than a frame of the clip would be left: it does not stop short of the playhead.
     public static func trimToPlayhead(
         _ doc: EditDocument, edge: ClipEdge, atOutput: Int64, take: TakeRecord, events: [InputEvent]
     ) -> EditStep? {
@@ -206,16 +214,21 @@ public enum SequenceCommands {
         let clipID = doc.sequence[shown.clip].id
         let limits = trimLimits(doc, clipID: clipID, edge: edge, take: take, events: events)
         guard limits.contains(shown.source) else { return nil }
-        return trim(doc, clipID: clipID, edge: edge, toSource: shown.source, limits: limits)
+        let bounds = TakeTimeline.editableBounds(take: take, events: events)
+        return trim(
+            doc, clipID: clipID, edge: edge, toSource: shown.source, limits: limits, takeBounds: [take.id: bounds.start...bounds.end])
     }
 
     /// Plays the clips with the ids `clipIDs` at `speed`, clamped to `speedRange` (`ClipSpeed.clamped(_:)`: one that is
-    /// not a number is 1); a clip with content is left as it is. All or nothing: `nil` if any of them would be shorter
-    /// than a frame, or if none changes.
-    public static func setSpeed(_ doc: EditDocument, clipIDs: Set<String>, speed: Double) -> EditStep? {
+    /// not a number is 1), the cuts of the sound held to `takeBounds` too (a faster clip heard sooner reads further back
+    /// in its take); a clip with content is left as it is. All or nothing: `nil` if any of them would be shorter than a
+    /// frame, or if none changes.
+    public static func setSpeed(
+        _ doc: EditDocument, clipIDs: Set<String>, speed: Double, takeBounds: [String: ClosedRange<HostTime>]
+    ) -> EditStep? {
         let speed = ClipSpeed.clamped(speed)
         let frame = oneFrame(of: doc)
-        var changes = SequenceChanges(doc.sequence)
+        var changes = SequenceChanges(doc.sequence, takeBounds: takeBounds)
         var changed: [String] = []
         for clip in doc.sequence where clipIDs.contains(clip.id) && clip.speed != speed && clip.content == nil {
             var faster = clip
@@ -242,7 +255,8 @@ public enum SequenceCommands {
             cuts[shown.clip, default: []].append(shown.source)
         }
         var ids = Set(doc.sequence.map(\.id))
-        var changes = SequenceChanges(doc.sequence)
+        // A split keeps each cut's take, start, end and speed: nothing a take has holds one tighter than before.
+        var changes = SequenceChanges(doc.sequence, takeBounds: nil)
         var inserted = 0
         var target: String?
         for (k, instants) in cuts.sorted(by: { $0.key < $1.key }) {
@@ -326,22 +340,26 @@ struct SequenceChanges {
     /// The sequence as the changes so far leave it.
     private(set) var sequence: [Clip]
     private var made: [EditChange] = []
+    /// What each take has, by take ID, that the cuts of the sound are held to: `nil` for a command that never moves a
+    /// clip's start or end in its take, its speed or the clip before it, which no take can hold tighter than its clips do.
+    private let takeBounds: [String: ClosedRange<HostTime>]?
 
     /// `EditCollection.sequence`.
     private static let collection = EditCollection.sequence.pointer
 
-    /// The changes of a command to `sequence`.
-    init(_ sequence: [Clip]) {
+    /// The changes of a command to `sequence`, the cuts of the sound held to `takeBounds` (`nil`: to the clips alone).
+    init(_ sequence: [Clip], takeBounds: [String: ClosedRange<HostTime>]?) {
         self.sequence = sequence
+        self.takeBounds = takeBounds
     }
 
     /// The changes made, and after them, in the order of the sequence they leave, a `replace` of each clip whose cut of
-    /// the sound they leave out of its limits, with it held to them (`SequenceRules.audioShift(of:at:)`): none while no
-    /// cut of the sound is moved.
+    /// the sound they leave out of its limits, with it held to them (`SequenceRules.audioShift(of:at:takeBounds:)`, as
+    /// the mix holds it): none while no cut of the sound is moved.
     var changes: [EditChange] {
         var changes = made
         for k in sequence.indices where sequence[k].audioShift != 0 {
-            let shift = SequenceRules.audioShift(of: sequence, at: k)
+            let shift = SequenceRules.audioShift(of: sequence, at: k, takeBounds: takeBounds)
             guard shift != sequence[k].audioShift else { continue }
             var held = sequence[k]
             held.audioShift = shift

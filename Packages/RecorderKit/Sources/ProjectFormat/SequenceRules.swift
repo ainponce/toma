@@ -70,11 +70,19 @@ public enum SequenceRules {
     /// The cut of the sound at the start of clip `k` as everything reads it: its `audioShift` held to
     /// `audioShiftRange(of:at:)`; 0 for an index out of the sequence.
     public static func audioShift(of sequence: [Clip], at k: Int) -> Int64 {
+        audioShift(of: sequence, at: k, takeBounds: nil)
+    }
+
+    /// The cut of the sound at the start of clip `k` held to `audioShiftRange(of:at:takeBounds:)`: to the clips at its
+    /// edge and to what each take of `takeBounds` has (none: the clips alone). The one rule of the mix (`AudioCuts`) and
+    /// of the commands that write the sequence, so a document they write is one `audioShift(of:at:)` reads as the mix
+    /// hears it. 0 for an index out of the sequence.
+    public static func audioShift(of sequence: [Clip], at k: Int, takeBounds: [String: ClosedRange<HostTime>]?) -> Int64 {
         guard sequence.indices.contains(k) else { return 0 }
         let shift = sequence[k].audioShift
         // 0 is always in the range: a cut not moved needs nothing else of the sequence.
         guard shift != 0 else { return 0 }
-        let range = audioShiftRange(of: sequence, at: k)
+        let range = audioShiftRange(of: sequence, at: k, takeBounds: takeBounds)
         return min(max(shift, range.lowerBound), range.upperBound)
     }
 

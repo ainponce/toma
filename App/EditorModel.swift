@@ -871,6 +871,17 @@ final class EditorModel {
 
     /// The project as the session has it, for what the overlays place.
     var overlayProject: LoadedProject? { session.map(currentProject(of:)) }
+    /// What each take the sequence shows has, by take ID: the mix's (`EditedMix.takeBounds`, its sources' events read off
+    /// the main thread), and the session's own take's until the mix is there. The commands that move a clip in its take
+    /// hold the cuts of the sound to them, as the mix does (phase 3 design §7.3).
+    var takeBounds: [String: ClosedRange<HostTime>] {
+        var bounds = baseMix?.takeBounds ?? [:]
+        if let project = session?.project, bounds[project.take.id] == nil {
+            let own = TakeTimeline.editableBounds(take: project.take, events: project.events)
+            bounds[project.take.id] = own.start...own.end
+        }
+        return bounds
+    }
     /// The playhead in output nanoseconds.
     var playheadNanoseconds: Int64 { timeline.map { Int64(TimeMap.frameTime(playheadFrame, frameRate: $0.frameRate)) } ?? 0 }
 
