@@ -205,7 +205,7 @@ extension TimelineInteraction {
     private func plainBase(_ document: EditDocument) -> Base {
         let map = TimeMap(sequence: document.sequence)
         let points = EditPoints(document: document, timeMap: map, markers: model?.markerTimes ?? []).all
-        return Base(document: document, map: map, points: points, project: nil)
+        return Base(document: document, map: map, points: points, project: nil, takeBounds: model?.takeBounds ?? [:])
     }
 
     private func updateAudioDrag(_ audio: AudioDrag, _ event: NSEvent) {
