@@ -1045,6 +1045,12 @@ Un proyecto de la fase 1 o 2 sigue siendo de su versión en el disco hasta que s
 - Con Música cerrada al empezar y abierta a los 10 s: su pista está en el manifiesto desde el principio y suena en silencio hasta que Música abre; después graba su sonido.
 - Ese proyecto lo abre la app de la fase 2 (`build/fase2/Toma.app`) sin aviso y mezcla las dos apps.
 - «Todo» sigue en una sola pista `system-audio`; Por app sin apps elegidas graba una pista `system-audio` en silencio, como en la fase 2.
+**Regrabar en el mismo paquete** (T6, con «Regrabar desde acá» de T12)
+
+Antes de cada caso, en Finder, «Mostrar contenido del paquete» del proyecto y anotar las carpetas de `takes/`. Después de cada uno, siguen todas, y la toma nueva (si la hay) es la carpeta siguiente; nunca aparece un proyecto nuevo en la carpeta de Toma ni en su `Trash/`.
+- Con cámara y micrófono reales, regrabar, hablar unos segundos y parar con «Al parar» en «Quedarse acá»: el editor vuelve igual (no se abre otra ventana) con la toma nueva desde el cursor; se oye la voz nueva.
+- Regrabar y, en la cuenta regresiva, cancelarla: el editor vuelve sin cambios y `takes/` no cambió. Regrabar, grabar unos segundos y «Reiniciar»: graba otra vez en el mismo proyecto; al parar quedan las dos tomas nuevas en `takes/`, la del reinicio sin usar en el menú Tomas.
+- Desenchufar la cámara elegida justo antes de que termine la cuenta regresiva (o elegir una que falle): graba sin cámara, con el aviso, en el mismo proyecto. Con una toma regrabándose, salir de la app (⌘Q): al abrirla otra vez el proyecto tiene la toma, y nada se perdió.
 
 ## Prueba en seco (ad hoc)
 

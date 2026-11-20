@@ -15,16 +15,34 @@ public struct TakeRequest: Equatable, Sendable {
     public var skipping: Set<TrackKind> = []
     /// How the camera looks as the take starts (`RecordingCoordinator(cameraStyle:)`).
     public var cameraStyle: CameraStyle = .default
+    /// The project a re-record adds the take to (`RecordingController.startRerecord`); `nil`, a take in a new project.
+    public var target: RerecordTarget? = nil
 
     public init(
         selection: CaptureSelection, settings: QuickSettings, includedWindowIDs: [UInt32] = [], skipping: Set<TrackKind> = [],
-        cameraStyle: CameraStyle = .default
+        cameraStyle: CameraStyle = .default, target: RerecordTarget? = nil
     ) {
         self.selection = selection
         self.settings = settings
         self.includedWindowIDs = includedWindowIDs
         self.skipping = skipping
         self.cameraStyle = cameraStyle
+        self.target = target
+    }
+}
+
+/// Where "Re-record from Here" records (phase 3 design §8.2): the package the editor has open, which the take is added
+/// to as its next `take-00N` (`RecordingCoordinator` opens it there), never a new project.
+public struct RerecordTarget: Equatable, Sendable {
+    /// The package, where the editor has it.
+    public var packageURL: URL
+    /// The word of the project's script the teleprompter opens at (plan 3d, decision 12), set by the editor; `nil`, its
+    /// start.
+    public var scriptWord: Int?
+
+    public init(packageURL: URL, scriptWord: Int? = nil) {
+        self.packageURL = packageURL
+        self.scriptWord = scriptWord
     }
 }
 

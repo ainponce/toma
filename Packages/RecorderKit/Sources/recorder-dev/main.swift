@@ -43,7 +43,8 @@ struct SynthRecord: AsyncParsableCommand {
             Creates <directory>/synth-<date>-<time>.toma and prints its absolute path as the first line \
             once recording has started. Warnings follow as "warning: …" lines, and a summary of the take \
             once it is closed. With --into, the take is added to that package instead (the next take-NNN; a \
-            package that has a take goes to version 5 with it).
+            package that has a take goes to version 5 with it). With --markers, the take is marked at those \
+            seconds after it started recording, as ⌥⌘M marks it.
 
             The tracks, in this order: display-1 at the origin of the global space (or, with --window, \
             window-4242 at (100, 80)), display-2 and further ones each to the left of the one before (--displays), camera \
@@ -117,6 +118,9 @@ struct SynthRecord: AsyncParsableCommand {
     @Option(help: "Add the take to this existing .toma package instead of creating one in <directory>.")
     var into: String?
 
+    @Option(help: "Mark the take at these seconds after it started, comma-separated (1,2.5), each below --duration.")
+    var markers: MarkerSeconds?
+
     func validate() throws {
         guard duration > 0 else { throw ValidationError("--duration must be positive.") }
         guard fps > 0, width > 0, height > 0 else { throw ValidationError("--fps, --width and --height must be positive.") }
@@ -130,6 +134,9 @@ struct SynthRecord: AsyncParsableCommand {
             guard !apps.isEmpty, apps.count <= SystemAudioTracks.maximumTracks else {
                 throw ValidationError("--app-audio takes 1 to 8 bundle IDs separated by commas.")
             }
+        }
+        if let markers, let second = markers.seconds.first(where: { $0 >= duration }) {
+            throw ValidationError("--markers: \(second) is not within --duration.")
         }
         if let rotateAt {
             guard device != nil else { throw ValidationError("--rotate-at needs --device.") }
@@ -156,8 +163,8 @@ struct SynthRecord: AsyncParsableCommand {
             sources += systemAudioSources()
             // No cursor, clicks or keys: the iPhone mode records none.
             try await recordTake(
-                in: directory, into: into, prefix: "synth", duration: duration, sources: sources, input: NoInputRecorder(),
-                systemActivity: AsyncStream { $0.finish() })
+                in: directory, into: into, prefix: "synth", duration: duration, markers: markers?.seconds ?? [], sources: sources,
+                input: NoInputRecorder(), systemActivity: AsyncStream { $0.finish() })
             return
         }
         let screens = window
@@ -185,7 +192,7 @@ struct SynthRecord: AsyncParsableCommand {
             input = CompositeInputRecorder([input, typed])
         }
         try await recordTake(
-            in: directory, into: into, prefix: "synth", duration: duration,
+            in: directory, into: into, prefix: "synth", duration: duration, markers: markers?.seconds ?? [],
             sources: sources, input: input,
             systemActivity: AsyncStream { $0.finish() },
             whileRecording: {
@@ -216,6 +223,17 @@ struct SynthRecord: AsyncParsableCommand {
                 trackID: track.trackID, kind: .systemAudio, channels: 2, clockSkewPPM: -1500,
                 app: track.appBundleID.map { (bundleID: $0, name: SystemAudioTracks.installedAppName(bundleID: $0)) })
         }
+    }
+}
+
+/// `--markers`' seconds, comma-separated, each finite and not negative, in increasing order.
+struct MarkerSeconds: ExpressibleByArgument {
+    var seconds: [Double]
+
+    init?(argument: String) {
+        let parsed = argument.split(separator: ",", omittingEmptySubsequences: false).map { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard !parsed.isEmpty, parsed.allSatisfy({ $0.map { $0.isFinite && $0 >= 0 } ?? false }) else { return nil }
+        seconds = parsed.compactMap { $0 }.sorted()
     }
 }
 
@@ -500,6 +518,7 @@ private func recordTake(
     into existing: String? = nil,
     prefix: String,
     duration: Double,
+    markers: [Double] = [],
     sources: [any CaptureSource],
     input: any InputRecorder,
     systemActivity: AsyncStream<SystemActivity>,
@@ -527,9 +546,25 @@ private func recordTake(
         endedContinuation.yield()
     }
     let sideTask = Task { await whileRecording() }
+    // Each marker at its second after the start, as the island's ⌥⌘M writes one.
+    let marking = Task {
+        let started = ContinuousClock.now
+        for second in markers {
+            do {
+                try await Task.sleep(until: started + .seconds(second), clock: .continuous)
+                try await coordinator.addMarker()
+            } catch is CancellationError {
+                return  // the take ended first
+            } catch {
+                printError("error: cannot mark the take at \(second) s: \(error)")
+            }
+        }
+    }
     for await _ in ended { break }
     timer.cancel()
     sideTask.cancel()
+    marking.cancel()
+    await marking.value  // a marker being written is written before the take closes
 
     let take: TakeRecord
     do {
