@@ -3,6 +3,7 @@ import Analysis
 import AppSupport
 import Foundation
 import Sharing
+import Synchronization
 import Testing
 
 @Suite struct ShareRulesTests {
@@ -130,5 +131,61 @@ import Testing
         #expect(moved.endpoint == r2.endpoint)
         let minio = ShareRules.choosing(.minio, in: SharePreferences())
         #expect(ShareRules.changingRegion("eu-west-1", in: minio).endpoint == "http://localhost:9000")
+    }
+
+    /// Opening Share's little window or Settings ▸ Share asks only whether the secret is there: its data is read only to
+    /// share or to test the connection.
+    @Test func configuredAsksOnlyWhetherTheSecretIsThere() {
+        let complete = SharePreferences(
+            provider: .s3, endpoint: "https://s3.us-east-1.amazonaws.com", region: "us-east-1", bucket: "videos",
+            accessKeyID: "AKIDEXAMPLE")
+        let store = CountingSecretStore(["AKIDEXAMPLE": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"])
+        #expect(ShareRules.isConfigured(complete, secrets: store))
+        // Without a secret for that Access Key ID, or with settings that make no configuration, it is not.
+        var other = complete
+        other.accessKeyID = "AKIAIOSFODNN7EXAMPLE"
+        #expect(!ShareRules.isConfigured(other, secrets: store))
+        var insecure = complete
+        insecure.endpoint = "http://s3.example.com"
+        #expect(!ShareRules.isConfigured(insecure, secrets: store))
+        #expect(!ShareRules.isConfigured(SharePreferences(), secrets: store))
+        // A Keychain that cannot say (locked, refused) counts as having it: sharing reads it and says why it cannot.
+        store.failsToAnswer = true
+        #expect(ShareRules.isConfigured(complete, secrets: store))
+        #expect(store.counts.reads == 0)
+        #expect(store.counts.asks >= 3)
+    }
+}
+
+/// A store in memory that counts how it is asked: whether a secret is there, or the secret itself.
+private final class CountingSecretStore: SecretStore {
+    struct Counts { var asks = 0, reads = 0 }
+    private let store: InMemorySecretStore
+    private let state = Mutex((counts: Counts(), fails: false))
+
+    init(_ secrets: [String: String]) { store = InMemorySecretStore(secrets) }
+
+    var counts: Counts { state.withLock { $0.counts } }
+    var failsToAnswer: Bool {
+        get { state.withLock { $0.fails } }
+        set { state.withLock { $0.fails = newValue } }
+    }
+
+    func secret(for account: String) throws -> String? {
+        state.withLock { $0.counts.reads += 1 }
+        return try store.secret(for: account)
+    }
+
+    func hasSecret(for account: String) throws -> Bool {
+        let fails = state.withLock { state in
+            state.counts.asks += 1
+            return state.fails
+        }
+        if fails { throw SecretStoreError.keychain(-25308) }
+        return try store.hasSecret(for: account)
+    }
+
+    func setSecret(_ secret: String?, for account: String) throws {
+        try store.setSecret(secret, for: account)
     }
 }

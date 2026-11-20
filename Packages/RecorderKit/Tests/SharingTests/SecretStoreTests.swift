@@ -20,6 +20,17 @@ import Testing
         #expect(try InMemorySecretStore().secret(for: "") == nil)
     }
 
+    @Test func inMemorySaysWhetherThereIsOne() throws {
+        let store = InMemorySecretStore(["AKIDEXAMPLE": "first"])
+        #expect(try store.hasSecret(for: "AKIDEXAMPLE"))
+        #expect(try !store.hasSecret(for: "AKIAIOSFODNN7EXAMPLE"))
+        #expect(try !store.hasSecret(for: ""))
+        try store.setSecret("other", for: "AKIAIOSFODNN7EXAMPLE")
+        #expect(try store.hasSecret(for: "AKIAIOSFODNN7EXAMPLE"))
+        try store.setSecret(nil, for: "AKIDEXAMPLE")
+        #expect(try !store.hasSecret(for: "AKIDEXAMPLE"))
+    }
+
     @Test func theAccountIsTheAccessKeyIDTrimmed() {
         #expect(SharePreferences(accessKeyID: "  AKIDEXAMPLE\n").secretAccount == "AKIDEXAMPLE")
         #expect(SharePreferences().secretAccount == "")
