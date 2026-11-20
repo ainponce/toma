@@ -2098,6 +2098,28 @@
         }
       }
     },
+    "Chapters copied." : {
+      "comment" : "VoiceOver: Copy Chapters put YouTube's text on the clipboard",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Capítulos copiados."
+          }
+        }
+      }
+    },
+    "Chapters in the File" : {
+      "comment" : "The export sheet: the markers with a name as the video file's chapters",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Capítulos en el archivo"
+          }
+        }
+      }
+    },
     "Check for Updates…" : {
       "localizations" : {
         "es" : {
@@ -2447,6 +2469,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Copiar"
+          }
+        }
+      }
+    },
+    "Copy Chapters" : {
+      "comment" : "The Markers menu: YouTube's text of the chapters (the markers with a name) to the clipboard",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copiar capítulos"
           }
         }
       }
@@ -4069,6 +4102,17 @@
         }
       }
     },
+    "From the markers with a name." : {
+      "comment" : "The export sheet: under Chapters in the File",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De los marcadores con nombre."
+          }
+        }
+      }
+    },
     "Frozen Frame, %@" : {
       "comment" : "VoiceOver: a frozen frame of the Video track and what it lasts (\"2 s\")",
       "localizations" : {
@@ -4560,6 +4604,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Intensidad"
+          }
+        }
+      }
+    },
+    "Intro" : {
+      "comment" : "The title of the first chapter (YouTube's, and the video file's) when no marker with a name is at its start",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introducción"
           }
         }
       }
@@ -5236,6 +5291,17 @@
         }
       }
     },
+    "Marker Name" : {
+      "comment" : "The popover that names a marker of the timeline",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre del marcador"
+          }
+        }
+      }
+    },
     "Marker added." : {
       "comment" : "The capsule under the island once a marker was written",
       "localizations" : {
@@ -5243,6 +5309,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Marcador puesto."
+          }
+        }
+      }
+    },
+    "Marker “%1$@” at %2$@" : {
+      "comment" : "VoiceOver: a marker on the timeline's ruler, its name and its time",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcador «%1$@» en %2$@"
           }
         }
       }
@@ -5790,6 +5867,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escritorio siguiente"
+          }
+        }
+      }
+    },
+    "Next Marker" : {
+      "comment" : "The Markers menu: the playhead to the marker after it (⌥→)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcador siguiente"
+          }
+        }
+      }
+    },
+    "No Markers" : {
+      "comment" : "The Markers menu, while the output shows none",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin marcadores"
           }
         }
       }
@@ -6790,6 +6889,17 @@
         }
       }
     },
+    "Previous Marker" : {
+      "comment" : "The Markers menu: the playhead to the marker before it (⌥←)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcador anterior"
+          }
+        }
+      }
+    },
     "Privacy" : {
       "localizations" : {
         "es" : {
@@ -7355,6 +7465,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Renombrar el marcador"
+          }
+        }
+      }
+    },
+    "Rename Marker…" : {
+      "comment" : "The Markers menu: names the marker at the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Renombrar el marcador…"
+          }
+        }
+      }
+    },
+    "Rename…" : {
+      "comment" : "The menu of a marker's flag on the timeline's ruler",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Renombrar…"
           }
         }
       }
@@ -10753,6 +10885,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sin terminar"
+          }
+        }
+      }
+    },
+    "Unnamed Marker" : {
+      "comment" : "A marker without a name: the Markers menu, and the field that names one",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcador sin nombre"
+          }
+        }
+      }
+    },
+    "Unnamed marker at %@" : {
+      "comment" : "VoiceOver: a marker without a name on the timeline's ruler, its time",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcador sin nombre en %@"
           }
         }
       }

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import AppKit
 import AppSupport
 import Editing
@@ -301,8 +302,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private var shown: (take: TakeRecord, document: EditDocument, missing: [ClosedRange<Double>])?
     /// The takes the shown document's sequence shows (`LoadedProject.takeRecords(shownBy:)`), whose audio tracks have rows.
     private var shownTakes: [TakeRecord] = []
-    /// The take's marker times (`TimelineContent.markerTimes(in:)`).
-    private var shownMarkers: [HostTime] = []
+    /// The instants of the `marker` events of every take (`MarkerList.Recorded`).
+    private var shownMarkers: MarkerList.Recorded = [:]
     /// What "Like the Recording" follows, of the take shown.
     private var shownContentRatio: Double?
     /// The document a drag shows while it lasts, and until the committed one arrives (`show`): the timeline follows it.
@@ -436,12 +437,12 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         accessibility.children() + (super.accessibilityChildren() ?? [])
     }
 
-    /// Shows `document` of `take` (with its `markers`, `TimelineContent.markerTimes(in:)`), the spans in `missing` hatched,
+    /// Shows `document` of `take` (with the `marker` events of every take, `recorded`), the spans in `missing` hatched,
     /// with a row for each audio track of `takes`, those its sequence shows (`take` alone when empty); `nil`, nothing (the
     /// project is opening or cannot be shown).
     func show(
-        take: TakeRecord, takes: [TakeRecord] = [], markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>],
-        contentRatio: Double? = nil
+        take: TakeRecord, takes: [TakeRecord] = [], recorded markers: MarkerList.Recorded, document: EditDocument,
+        missing: [ClosedRange<Double>], contentRatio: Double? = nil
     ) {
         let takes = takes.isEmpty ? [take] : takes
         if let shown, shown.take == take, shown.document == document, shown.missing == missing, shownMarkers == markers,
@@ -469,7 +470,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private func rebuildContent() {
         guard let shown else { return }
         let rows = content?.layout.tracks
-        let content = TimelineContent(take: shown.take, markers: shownMarkers, document: preview ?? shown.document, missing: shown.missing,
+        let content = TimelineContent(take: shown.take, recorded: shownMarkers, document: preview ?? shown.document, missing: shown.missing,
             contentRatio: shownContentRatio, takes: shownTakes)
         self.content = content
         itemsCache = nil

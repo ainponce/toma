@@ -9,6 +9,7 @@ extension EditorModel {
     /// The showcase of the takes, the markers and the teleprompter (3d): what its `TOMA_SHOWCASE_P3_*` variables ask
     /// for.
     func showcaseTakes(_ environment: [String: String]) async {
+        showcaseMarkers(environment)
         await showcaseTwoTakes(environment)
     }
 
@@ -45,7 +46,7 @@ extension EditorModel {
 
     /// The first editor timeline of the app's windows, drawn from its layers into a PNG at `url` at 2×, as
     /// `TOMA_SHOWCASE_P3_TIMELINE_PNG` of the annotations draws it.
-    private static func writeTakesTimelinePNG(to url: URL) {
+    static func writeTakesTimelinePNG(to url: URL) {
         func timeline(in view: NSView) -> EditorTimelineView? {
             if let found = view as? EditorTimelineView { return found }
             for subview in view.subviews { if let found = timeline(in: subview) { return found } }

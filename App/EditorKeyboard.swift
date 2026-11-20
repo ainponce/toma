@@ -177,6 +177,12 @@ final class EditorKeyboard {
         case .nudgeVertically:
             // ⇧↑ ⇧↓ with annotations chosen (3a, Task A13); nothing is chosen to move until then.
             return false
+        case .addMarker:
+            return model.addMarkerAtPlayhead()
+        case .previousMarker:
+            return model.goToMarker(forward: false)
+        case .nextMarker:
+            return model.goToMarker(forward: true)
         }
     }
 
@@ -211,12 +217,12 @@ extension EditorModel {
     }
 
     /// ↑ and ↓: the edit point before or after the playhead (the edges of the clips and of the zoom blocks, the camera's
-    /// and the screens' changes, the take's markers, the start and the end), paused.
+    /// and the screens' changes, the markers the output shows, the start and the end), paused.
     func goToEditPoint(forward: Bool) -> Bool {
         guard canPlay, let document else { return false }
         if isPlaying { pause() }
         let map = TimeMap(sequence: document.sequence)
-        let points = EditPoints(document: document, timeMap: map, markers: markerTimes).all
+        let points = EditPoints(document: document, timeMap: map, recorded: recordedMarkers).all
         guard let frame = KeyboardCommands.editPointFrame(
             from: playheadFrame, forward: forward, points: points, frameRate: document.frameRate,
             frameCount: map.frameCount(frameRate: document.frameRate))

@@ -204,7 +204,7 @@ extension TimelineInteraction {
     /// What a mark's drag snaps with, without a gesture: nothing changes while a stretch is only marked.
     private func plainBase(_ document: EditDocument) -> Base {
         let map = TimeMap(sequence: document.sequence)
-        let points = EditPoints(document: document, timeMap: map, markers: model?.markerTimes ?? []).all
+        let points = EditPoints(document: document, timeMap: map, recorded: model?.recordedMarkers ?? [:]).all
         return Base(document: document, map: map, points: points, project: nil, takeBounds: model?.takeBounds ?? [:])
     }
 

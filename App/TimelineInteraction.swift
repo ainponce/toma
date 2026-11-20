@@ -81,6 +81,10 @@ final class TimelineInteraction {
         /// imported clip trim its file, `fileDuration` ns long.
         case contentDuration(Base, clip: Clip, outputStart: Int64)
         case trimMedia(Base, clip: Clip, edge: ClipEdge, outputStart: Int64, fileDuration: Int64)
+        /// A marker's flag on the ruler (phase 3, `TimelineMarkers`): pressed, not yet dragged (a click takes the playhead
+        /// to it); then moved, in one step.
+        case pressedMarker(down: CGPoint, marker: VisibleMarker)
+        case moveMarker(Base, marker: VisibleMarker)
     }
 
     init(view: EditorTimelineView) {
@@ -204,6 +208,8 @@ final class TimelineInteraction {
         guard point.x >= TimelineLayout.headerWidth else { return }
         clearHover()
         let hit = hit(at: point)
+        // A marker's flag on the ruler (phase 3): pressed, double-clicked to name it (⌥ is the marks', as before).
+        if hit == .playhead, !event.modifierFlags.contains(.option), markerMouseDown(event, at: point) { return }
         if hit == .playhead {
             if event.modifierFlags.contains(.option) {
                 drag = .marks(anchor: snapped(output(at: point), event: event, base: nil))
@@ -307,6 +313,8 @@ final class TimelineInteraction {
             musicMouseDragged(music, event)
         case .contentDuration, .trimMedia:
             updateDrag(event)
+        case .pressedMarker, .moveMarker:
+            markerMouseDragged(event)
         }
     }
 
@@ -337,6 +345,8 @@ final class TimelineInteraction {
             musicMouseUp(music, event)
         case .contentDuration, .trimMedia:
             finish()
+        case .pressedMarker, .moveMarker:
+            markerMouseUp()
         }
     }
 
@@ -459,7 +469,7 @@ final class TimelineInteraction {
         guard model.isGesturing else { return nil }
         let map = TimeMap(sequence: document.sequence)
         let project = model.overlayProject
-        let points = EditPoints(document: document, timeMap: map, markers: model.markerTimes).all
+        let points = EditPoints(document: document, timeMap: map, recorded: model.recordedMarkers).all
         lastStep = nil
         return Base(document: document, map: map, points: points, project: project, takeBounds: model.takeBounds)
     }
@@ -755,6 +765,12 @@ final class TimelineInteraction {
             lastStep = nil
             model?.cancelGesture()
             view.setPreview(nil)
+        case .pressedMarker:
+            break
+        case .moveMarker:
+            lastStep = nil
+            model?.cancelGesture()
+            view.setPreview(nil)
         }
         drag = .none
         hideLabel()
@@ -850,6 +866,8 @@ final class TimelineInteraction {
         guard let model, view.content != nil else { return nil }
         let point = point(event)
         guard point.x >= TimelineLayout.headerWidth else { return nil }
+        // A marker's flag on the ruler (phase 3): Rename…, Delete.
+        if let menu = markerMenu(at: point) { return menu }
         let hit = hit(at: point)
         let τ = clamped(output(at: point))
         let menu = NSMenu()
