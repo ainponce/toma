@@ -504,8 +504,9 @@ extension CursorPath {
         private func simulatedCheckpoints(keeping kept: ArraySlice<State?>) -> (checkpoints: [State?], steps: Int) {
             var checkpoints = Array(kept)
             guard checkpoints.count <= lastStep / StepGrid.checkpointEvery else { return (checkpoints, 0) }
-            var simulation = kept.last.map { simulation(atStep: (kept.count - 1) * StepGrid.checkpointEvery, state: $0) }
-                ?? simulation(atStep: -1, state: nil)
+            // `self.`: before Swift 6.4, the name alone is the variable being declared, not the method.
+            var simulation = kept.last.map { self.simulation(atStep: (kept.count - 1) * StepGrid.checkpointEvery, state: $0) }
+                ?? self.simulation(atStep: -1, state: nil)
             checkpoints.reserveCapacity(lastStep / StepGrid.checkpointEvery + 1)
             let first = simulation.step
             while simulation.step < lastStep {

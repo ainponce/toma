@@ -832,7 +832,8 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
     ) -> (checkpoints: [ZoomCamera], steps: Int, splicedAt: Int?) {
         var checkpoints = Array(kept)
         guard checkpoints.count <= lastStep / StepGrid.checkpointEvery else { return (checkpoints, 0, nil) }
-        var run = kept.last.map { run(atCheckpoint: kept.count - 1, camera: $0) } ?? startingRun()
+        // `self.`: before Swift 6.4, the name alone is the variable being declared, not the method.
+        var run = kept.last.map { self.run(atCheckpoint: kept.count - 1, camera: $0) } ?? startingRun()
         checkpoints.reserveCapacity(lastStep / StepGrid.checkpointEvery + 1)
         let first = run.step
         while run.step < lastStep {

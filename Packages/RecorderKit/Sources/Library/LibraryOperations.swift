@@ -280,7 +280,7 @@ public final class LibraryOperations: Sendable {
     /// asked about. If that editor stays open (the user kept its export running), nothing moves: `.editorKeptOpen`.
     public func moveToTrash(_ url: URL) async -> Result<URL, LibraryFailure> {
         if app.isRecording() { return .failure(.recording) }
-        let place = await onDisk { [self] in place(ofFolder: url.deletingLastPathComponent()) }
+        let place = await onDisk { [self] in self.place(ofFolder: url.deletingLastPathComponent()) }
         guard place == .projects else { return .failure(.outsideProjectsFolder) }
         if app.hasUnsavedChanges(url) { return .failure(.unsavedChanges) }
         if app.isOpenHere(url), !(await app.close(url)) { return .failure(.editorKeptOpen) }
