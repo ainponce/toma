@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import ProjectFormat
+import Render
 
 /// Where a zoom block looks: at the cursor (`"follow"`), or at a point of the screen in fractions from 0 to 1
 /// (`{"x": 0.3, "y": 0.6}`).
@@ -166,12 +167,7 @@ public enum ProjectCommand: Codable, Equatable, Sendable {
         case "setBackground":
             let f = try fields(["background"])
             guard let value = f.value("background") else { throw f.missing("background") }
-            guard let background = try? value.decoded(as: Background.self) else {
-                throw APIError(
-                    .invalidCommand,
-                    "setBackground: background is {\"type\": \"gradient\" | \"color\" | \"wallpaper\" | \"image\" | \"desktop\", …}")
-            }
-            self = .setBackground(background)
+            self = .setBackground(try Self.background(value))
         case "applyStyle":
             self = .applyStyle(id: try fields(["id"]).string("id"))
         case "setCameraLayout":
@@ -202,6 +198,57 @@ public enum ProjectCommand: Codable, Equatable, Sendable {
             self = .transcribe(language: try f.optionalString("language"), replace: try f.optionalBool("replace") ?? false)
         default:
             throw APIError(.invalidCommand, "there is no command “\(name)”; the commands are \(Self.names.joined(separator: ", "))")
+        }
+    }
+
+    /// The `Background` of `setBackground`, read as strictly as a command (final review, area 1, M1): its `type` and only
+    /// that type's keys; colours of four numbers from 0 to 1 (`outOfRange` otherwise), a wallpaper Toma has.
+    static func background(_ json: JSONValue) throws(APIError) -> Background {
+        let kinds = "\"gradient\", \"color\", \"wallpaper\", \"image\" or \"desktop\""
+        guard case let .object(object) = json, case let .string(type)? = object["type"] else {
+            throw APIError(.invalidCommand, "setBackground: background is an object with “type”: \(kinds)")
+        }
+        func fields(_ keys: Set<String>) throws(APIError) -> CommandFields {
+            try CommandFields("setBackground", object, keys: keys.union(["type"]), key: "background")
+        }
+        func color(_ f: CommandFields, _ key: String) throws(APIError) -> RGBA {
+            guard let value = f.value(key) else { throw f.missing(key) }
+            guard case let .array(items) = value, items.count == 4 else {
+                throw APIError(.invalidCommand, "setBackground: background.\(key) is a colour, [r, g, b, a]")
+            }
+            var parts: [Double] = []
+            for item in items {
+                guard let part = item.double else {
+                    throw APIError(.invalidCommand, "setBackground: background.\(key) is a colour, [r, g, b, a]")
+                }
+                guard part.isFinite, (0...1).contains(part) else {
+                    throw APIError(.outOfRange, "setBackground: each part of background.\(key) is from 0 to 1")
+                }
+                parts.append(part)
+            }
+            return RGBA(parts[0], parts[1], parts[2], parts[3])
+        }
+        switch type {
+        case "gradient":
+            let f = try fields(["start", "end", "angle"])
+            return .gradient(start: try color(f, "start"), end: try color(f, "end"), angle: try f.number("angle"))
+        case "color":
+            return .color(try color(try fields(["color"]), "color"))
+        case "wallpaper":
+            let id = try fields(["wallpaper"]).string("wallpaper")
+            guard WallpaperPreset.preset(id: id) != nil else {
+                throw APIError(
+                    .invalidCommand,
+                    "setBackground: background.wallpaper is one of \(WallpaperPreset.all.map(\.id).joined(separator: ", "))")
+            }
+            return .wallpaper(id)
+        case "image":
+            return .image(file: try fields(["file"]).string("file"))
+        case "desktop":
+            _ = try fields([])
+            return .desktop
+        default:
+            throw APIError(.invalidCommand, "setBackground: background.type is \(kinds)")
         }
     }
 
