@@ -1621,6 +1621,11 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-4-5`, en orden: l
 
 ### 0. Preparación
 
+La app de las fases 4 y 5 está en `build/fase45/Toma.app` (Release, firma ad hoc; es la única copia registrada). Es una compilación nueva, así que macOS pide de nuevo los permisos: «Abrir Ajustes del Sistema» la vuelve a poner en la lista. Las de las fases 2 y 3 quedan comprimidas en `build/fase2/Toma-fase2.zip` y `build/fase3/Toma-fase3.zip`. Cuando una comprobación pide una de ellas, descomprimirla aparte (`ditto -x -k build/fase3/Toma-fase3.zip ~/Desktop/ && mv ~/Desktop/Toma.app ~/Desktop/Toma-fase3.app`), usarla, cerrarla y borrarla: con dos copias registradas, «Salir y volver a abrir» de Ajustes del Sistema puede abrir la que no es.
+
+1. **Antes de editar con la app nueva, guardar un proyecto de la fase 3.** Con la app de la fase 3, abrir un proyecto con dos tomas, editarlo, exportarlo y cerrarlo. Es el de las comprobaciones «un proyecto de una fase anterior».
+2. **La línea de comandos.** `build/fase45/Toma.app/Contents/Helpers/toma --version` dice `1.0`; Ajustes ▸ General ▸ «Instalar la línea de comandos» crea el enlace.
+
 ### 2. Detalle por área
 
 **IA local: «Información», la hoja de capítulos y el menú Marcadores** (I3)
