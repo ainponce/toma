@@ -448,6 +448,17 @@ public final class EditSession {
     /// version 1 or 2 package starts its upgrade to version 3, and the line waits for it, as those of the steps that come
     /// meanwhile do (`.pendingUpgrade`). The first line of a project of 1b goes with its `migrate` (`pendingMigration`).
     public func perform(_ step: EditStep) -> EditOutcome {
+        perform(step, joining: joinsBursts)
+    }
+
+    /// `perform(_:)` with `joiningBurst` false: the step is an undo of its own, never joined to the one before it, as
+    /// each command of the project API is (the control socket's too, which the app performs in its editor, whose own
+    /// gestures go on joining their bursts). With `true`, `perform(_:)`.
+    public func perform(_ step: EditStep, joiningBurst: Bool) -> EditOutcome {
+        perform(step, joining: joiningBurst && joinsBursts)
+    }
+
+    private func perform(_ step: EditStep, joining: Bool) -> EditOutcome {
         guard isEditable, !step.changes.isEmpty, let (next, json) = applied(step.changes) else { return .refused }
         if restartingLog {
             // The new log starts with a `create` of the document as it is then, this step included: an edited document,
@@ -465,7 +476,7 @@ public final class EditSession {
             history.record(create)
             lines.append(create)
         }
-        let group = history.groupForNext(step, at: at, joining: joinsBursts)
+        let group = history.groupForNext(step, at: at, joining: joining)
         let line = EditLogEntry.do(
             seq: history.nextSeq, group: group, label: step.label.rawValue, changes: step.changes, at: at.roundedToWholeSeconds)
         lines.append(line)
@@ -658,6 +669,14 @@ public final class EditSession {
     /// gives up (`.saveFailed`, shown in `notices`) nothing is applied. `.refused` if the project cannot be edited, or has
     /// all of it already.
     public func applyStyle(_ style: NamedStyle, imageDirectory: URL?) async -> (outcome: EditOutcome, imageMissing: Bool) {
+        await applyStyle(style, imageDirectory: imageDirectory, joiningBurst: true)
+    }
+
+    /// `applyStyle(_:imageDirectory:)` whose step, with `joiningBurst` false, is an undo of its own
+    /// (`perform(_:joiningBurst:)`).
+    public func applyStyle(
+        _ style: NamedStyle, imageDirectory: URL?, joiningBurst: Bool
+    ) async -> (outcome: EditOutcome, imageMissing: Bool) {
         guard isEditable else { return (.refused, false) }
         var style = style
         var imageMissing = false
@@ -676,7 +695,7 @@ public final class EditSession {
         }
         guard let takes = await shownTakes(), let step = StyleCommands.applyStyle(document, style, takes: takes)
         else { return (.refused, imageMissing) }
-        return (perform(step), imageMissing)
+        return (perform(step, joiningBurst: joiningBurst), imageMissing)
     }
 
     /// The takes `document`'s sequence shows (`LoadedProject.takesShown(by:)`) with their events, read on the session's

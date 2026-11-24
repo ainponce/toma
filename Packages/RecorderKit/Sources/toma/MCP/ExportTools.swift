@@ -132,7 +132,7 @@ struct ExportArguments: Sendable {
     }
 
     /// The export, holding `place` in the package's line until the project is read (the first progress comes once it
-    /// is), and the output's line until the file is written.
+    /// is), and the lines of the files it writes (`writes`) until they are written.
     private func exporting(
         kind: ExportRequest.Kind, place: PackageLocks.Ticket, context: MCPContext,
         progress: @escaping @Sendable (Double) -> Void
@@ -140,14 +140,33 @@ struct ExportArguments: Sendable {
         let request = ExportRequest(
             kind: kind, codec: codec ?? "h264", size: size, fps: fps, quality: quality ?? "standard", replacesEditorFiles: replace)
         let project = project, destination = destination, environment = context.environment, locks = context.locks
+        let files = Self.writes(destination, kind: kind)
         return try await locks.holding(place) { () async throws -> ExportResult in
-            try await locks.holding(locks.reserve(.output(destination))) { () async throws -> ExportResult in
+            try await Self.holding(files[...], locks) { () async throws -> ExportResult in
                 try await ProjectRunner.export(project, to: destination, request: request, environment: environment) { fraction in
                     // The project is read: the calls after this one on it go on.
                     locks.release(place)
                     progress(fraction)
                 }
             }
+        }
+    }
+
+    /// The files an export of `kind` to `destination` writes, by whose names two exports go one at a time: the video,
+    /// and for an external editor its `<name>.fcpxml` (and so its `<name>.toma-metadata.json`), which `demo.mp4` and
+    /// `demo.mov` share. Always taken in this order, the video's first, so two exports never wait for each other.
+    static func writes(_ destination: URL, kind: ExportRequest.Kind) -> [URL] {
+        guard kind == .externalEditor else { return [destination] }
+        return [destination, ExternalEditorExport.sidecarURLs(of: destination).fcpxml]
+    }
+
+    /// `body` once it is first in the line of each of `files`, in order.
+    private static func holding<T: Sendable>(
+        _ files: ArraySlice<URL>, _ locks: PackageLocks, _ body: @Sendable () async throws -> T
+    ) async throws -> T {
+        guard let file = files.first else { return try await body() }
+        return try await locks.holding(locks.reserve(.output(file))) { () async throws -> T in
+            try await holding(files.dropFirst(), locks, body)
         }
     }
 

@@ -802,8 +802,15 @@ final class EditorModel {
     /// earlier version's project is pending its upgrade, `.pendingUpgrade`, until the session says how it went).
     @discardableResult
     func perform(_ step: EditStep) -> EditOutcome {
+        perform(step, joiningBurst: true)
+    }
+
+    /// `perform(_:)`; with `joiningBurst` false the step is an undo of its own (`EditSession.perform(_:joiningBurst:)`):
+    /// a command of the control socket (`EditorModel+Control`), as each command of the project API is.
+    @discardableResult
+    func perform(_ step: EditStep, joiningBurst: Bool) -> EditOutcome {
         guard let session else { return .refused }
-        let outcome = session.perform(step)
+        let outcome = session.perform(step, joiningBurst: joiningBurst)
         if outcome != .refused, !editedHere {
             editedHere = true
             updateBanner()
@@ -1018,11 +1025,18 @@ final class EditorModel {
     /// `imageDirectory` first (waiting for a full disk to have room, as an import does). `(.refused, false)` if the project
     /// cannot be edited.
     func applyStyle(_ style: NamedStyle, imageDirectory: URL?) async -> (outcome: EditOutcome, imageMissing: Bool) {
+        await applyStyle(style, imageDirectory: imageDirectory, joiningBurst: true)
+    }
+
+    /// `applyStyle(_:imageDirectory:)` whose step, with `joiningBurst` false, is an undo of its own (the control socket's).
+    func applyStyle(
+        _ style: NamedStyle, imageDirectory: URL?, joiningBurst: Bool
+    ) async -> (outcome: EditOutcome, imageMissing: Bool) {
         guard let session, canEdit, !isApplyingStyle else { return (.refused, false) }
         // While its image waits for room on a full disk, the banner says so (`.waitingForSpace`).
         isApplyingStyle = true
         updateBanner()
-        let result = await session.applyStyle(style, imageDirectory: imageDirectory)
+        let result = await session.applyStyle(style, imageDirectory: imageDirectory, joiningBurst: joiningBurst)
         isApplyingStyle = false
         if result.outcome != .refused { editedHere = true }
         updateBanner()

@@ -57,15 +57,20 @@ no es de la API: `invalidCommand`); 3 el proyecto lo está editando otro proceso
 Si Toma tiene el proyecto abierto en el editor, tiene su `edit.lock`, y `toma` no escribe en el paquete: le pide a la app
 que haga el cambio, por su socket de control (`~/Library/Application Support/dev.toma.Toma/control.sock`, solo de tu
 usuario). `toma edit`, `toma undo` y `toma redo` (y `apply_commands`, `undo` y `redo` del MCP) se ven al instante en el
-editor, como si fueran gestos: Edición ▸ Deshacer los deshace, y el resultado dice `"via": "app"`. La respuesta llega
-cuando el cambio ya está en el disco.
+editor, como si fueran gestos: Edición ▸ Deshacer los deshace de a uno (cada comando es su propio paso, como sin la
+app), y el resultado dice `"via": "app"`. La respuesta llega cuando el cambio ya está en el disco.
 
 - `toma info`, `transcript`, `markers`, `chapters` y `export` le piden antes a la app que guarde lo que muestra, así leen
   y exportan el último cambio.
 - Por la app no se hacen `transcribe` ni un `setBackground` con una imagen de afuera del proyecto: dan `notAvailable`
   (hacerlo en Toma, o cerrar ahí el proyecto y volver a correr el comando).
-- Si el que tiene el `edit.lock` no es Toma (otro `toma`, otra Mac por una carpeta compartida) o Toma no contesta, sigue
-  siendo `locked`.
+- Mientras se arrastra algo en el editor (un bloque, un borde, la cámara), un comando no cambia nada y da `refused`
+  («…try again in a moment»): volver a correrlo cuando termine el gesto.
+- `locked` (código 3) quiere decir que no se hizo nada: el que tiene el `edit.lock` no es Toma (otro `toma`, otra Mac por
+  una carpeta compartida), o Toma no tiene ese proyecto abierto para editar. Se puede volver a intentar cuando lo suelte.
+- `refused` (código 1) con «Toma did not answer…» quiere decir que Toma está abierta pero no contestó a tiempo (30 s) o
+  cortó la conexión: el cambio pudo haberse hecho. Antes de repetirlo, leer el proyecto (`toma info`, `project_info`):
+  un `cut` repetido corta dos veces.
 
 ### Exportar
 
@@ -194,8 +199,9 @@ con `id: null`.
 - **La app.** Si Toma tiene el proyecto abierto, tiene su `edit.lock`: `apply_commands`, `undo` y `redo` se los pide a
   la app, que los hace en su editor (se ven al instante, se deshacen con Edición ▸ Deshacer y el resultado dice
   `"via": "app"`), y leer y exportar le piden antes que guarde lo que muestra (ver «Con el proyecto abierto en Toma»).
-  `transcribe` y una imagen de afuera para el fondo dan `notAvailable` por ese camino. Si el `edit.lock` lo tiene otro
-  proceso, `locked`.
+  `transcribe` y una imagen de afuera para el fondo dan `notAvailable` por ese camino, y un comando mientras se arrastra
+  algo en el editor, `refused`. Si el `edit.lock` lo tiene otro proceso, `locked` (no se hizo nada); si Toma no contesta,
+  `refused` (pudo haberse hecho: leer el proyecto antes de repetirlo).
 
 ### Sesión de ejemplo: Claude Code
 

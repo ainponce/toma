@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
-import ProjectFormat
 
 /// The operations of one go that the `toma` command and the MCP server make on a project (plan 4b, Task A4): each opens
 /// the package (`TomaProject`), does one thing and closes it, so nothing stays open nor locked between two calls. Reading
@@ -10,9 +9,15 @@ import ProjectFormat
 ///
 /// The app over its control socket (fases 4 y 5 design §6.4, plan 4b decision 19): a change, an undo or a redo of a
 /// project another process holds `edit.lock` of is asked of the app (`environment.controlSocket`), which applies it in
-/// its editor when it is the one with the project open (`via: app`); `locked` when it is not, or no app answers. Before a
-/// read or an export of a project someone holds `edit.lock` of, the app is asked to put what its editor shows on the
-/// disk first (`flush`), if it answers.
+/// its editor when it is the one with the project open (`via: app`). What the caller is told:
+/// - `locked` when nothing was asked of the app or it did nothing: no app listens, or the one that does has no editor of
+///   the project that can edit it. Nothing changed; it can be tried again once the other process lets go.
+/// - `refused` when the app was asked and did not answer in time or as it should: it may have made the change, so the
+///   message says to read the project before trying again (a `cut` tried twice cuts twice).
+///
+/// Before a read or an export, the app, if one listens, is asked to put what its editor of the project shows on the
+/// disk first (`flush`); without an app that is one failed `connect`, and `edit.lock` is never probed (a probe takes it
+/// for an instant, and an editor opening the project then would open it for viewing only).
 @MainActor public enum ProjectRunner {
     /// How long the app has to answer a change, an undo or a redo: 30 s.
     public static let appTimeout: Duration = .seconds(30)
@@ -149,11 +154,9 @@ import ProjectFormat
         }
     }
 
-    /// Asks the app to put what its editor shows of the project at `url` on the disk, when someone holds its `edit.lock`
-    /// and the app answers within `flushTimeout`; otherwise nothing.
+    /// Asks the app, if one listens, to put what its editor of the project at `url` shows on the disk, waiting
+    /// `flushTimeout` at most; an app without an editor of it answers at once, and without an app nothing waits.
     private static func askTheAppToFlush(_ url: URL, environment: APIEnvironment) async {
-        let lock = url.appending(path: "edit.lock", directoryHint: .notDirectory)
-        guard await Task.detached(operation: { RecordingLock.isHeld(at: lock) }).value else { return }
         _ = await askTheApp(ControlRequest(op: .flush, package: url.path, commands: nil), environment: environment, timeout: flushTimeout)
     }
 
@@ -170,11 +173,22 @@ import ProjectFormat
                 return nil
             case .timedOut:
                 return .failure(APIError(
-                    .refused, "Toma, which has the project open, did not answer in time: look there whether it was done"))
-            case .inUse, .system:
-                return .failure(APIError(.refused, "Toma, which has the project open, did not answer (\(error))"))
+                    .refused,
+                    "Toma did not answer within \(seconds(timeout)) s: it may have made the change; read the project "
+                        + "(toma info, project_info) before trying again"))
+            case let .system(code):
+                return .failure(APIError(
+                    .refused,
+                    "Toma did not answer (\(String(cString: strerror(code)))): it may have made the change; read the project "
+                        + "(toma info, project_info) before trying again"))
+            case .inUse:
+                return .failure(APIError(.refused, "Toma did not answer: read the project before trying again"))
             }
         }
+    }
+
+    private static func seconds(_ duration: Duration) -> Int {
+        Int(duration.components.seconds)
     }
 
     // MARK: - Private

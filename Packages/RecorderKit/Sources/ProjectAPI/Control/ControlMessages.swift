@@ -95,9 +95,10 @@ public enum ControlSocketError: Error, Equatable, Sendable {
     case inUse
     /// Something other than a socket of this user is at the path (a file, a folder, a link): it is left alone.
     case notASocket
-    /// Nobody listens on the path: no app, or one that is not running any more.
+    /// Nobody listens on the path, nor holds its lock: no app, or one that is not running any more.
     case noServer
-    /// No answer within the time given, or the request was not taken.
+    /// No answer within the time given, or a server holds the path's lock but did not take the connection in time
+    /// (it is busy).
     case timedOut
     /// A system call failed with this `errno` (`EBADMSG`: an answer that is not one; `EMSGSIZE`: a request or an answer
     /// too long; `EPERM`: a server of another user).
@@ -116,6 +117,27 @@ enum ControlWire {
 
     static func decode<T: Decodable>(_ type: T.Type, from line: Data) throws -> T {
         try JSONDecoder().decode(type, from: line)
+    }
+
+    /// The lock file of the server of the socket at `socket`: next to it, its name with `.lock` for its extension
+    /// (`control.lock` for `control.sock`).
+    static func lockPath(for socket: URL) -> String {
+        let name = socket.deletingPathExtension().lastPathComponent
+        return socket.deletingLastPathComponent().appending(path: name + ".lock", directoryHint: .notDirectory).path
+    }
+
+    /// Whether a server holds the lock at `lockPath` (it listens, or is about to): a shared lock tried for an instant,
+    /// which the server's exclusive one refuses. Never creates the file nor follows a link.
+    static func isServing(lockPath: String) -> Bool {
+        while true {
+            let fd = open(lockPath, O_RDONLY | O_SHLOCK | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+            if fd >= 0 {
+                close(fd)
+                return false
+            }
+            if errno == EINTR { continue }
+            return errno == EWOULDBLOCK
+        }
     }
 
     /// `path` as a `sockaddr_un`; `nil` if it does not fit (`ControlServer.maxPathBytes`).
