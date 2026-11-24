@@ -51,6 +51,19 @@ import Testing
         }
     }
 
+    /// Review M9: `demo.mp4` and `demo.mov` for an external editor write the same `demo.fcpxml`: their exports go one
+    /// at a time by it too. A video alone goes by its own file.
+    @Test func fcpxmlExportsGoOneAtATimeByTheirSidecars() {
+        let folder = URL(fileURLWithPath: "/tmp/out", isDirectory: true)
+        let mp4 = ExportArguments.writes(folder.appending(path: "demo.mp4"), kind: .externalEditor)
+        let mov = ExportArguments.writes(folder.appending(path: "Demo.mov"), kind: .externalEditor)
+        #expect(mp4.count == 2 && mov.count == 2)
+        #expect(mp4[1].lastPathComponent == "demo.fcpxml")
+        #expect(PackageKey.output(mp4[1]) == PackageKey.output(mov[1]))
+        #expect(PackageKey.output(mp4[0]) != PackageKey.output(mov[0]))
+        #expect(ExportArguments.writes(folder.appending(path: "demo.mp4"), kind: .video) == [folder.appending(path: "demo.mp4")])
+    }
+
     @Test func mcpExportFCPXMLGivesTheThreePaths() async throws {
         try await withTemporaryDirectory { dir in
             let url = try await CLIFixtures.package(in: dir)

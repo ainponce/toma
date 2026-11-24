@@ -88,7 +88,10 @@ extension EditorModel {
     /// - `sheet-working`: the sheet reading part 1 of 3, with a model that takes an hour;
     /// - `unavailable`: Apple Intelligence turned off, the Info tab and the sheet;
     /// - `no-transcript`: the Info tab and the sheet of a project without a transcript.
-    /// - `add`: the chapters proposed and added, then undone, said in `<TOMA_SHOWCASE_AI_PNG>-add.txt`.
+    /// - `add`: the chapters proposed and added, then undone, said in `<TOMA_SHOWCASE_AI_PNG>-add.txt`;
+    /// - `esc`: Esc on the sheet that only has «OK», said in `<…PNG>-esc.txt`;
+    /// - `draft-title`, `draft-summary`, `draft-tab`: text typed and left in its field, then the window closed or another
+    ///   tab shown, said in `<…PNG>-draft.txt` (and on disk).
     /// `TOMA_SHOWCASE_AI_DELAY=<seconds>`: how long the scripted model takes to answer (0).
     func showcaseAI(_ environment: [String: String]) async {
         guard let variant = environment["TOMA_SHOWCASE_AI"] else { return }
@@ -135,6 +138,46 @@ extension EditorModel {
             let text = "before \(before)\nproposed \(suggestions.chapters.count)\nafter add \(added.count)\n"
                 + added.joined(separator: "\n") + "\nafter one undo \(undone)\nsheet up \(window?.attachedSheet != nil)\n"
             if let path = environment["TOMA_SHOWCASE_AI_PNG"] { try? text.write(toFile: path + "-add.txt", atomically: true, encoding: .utf8) }
+        case "esc":
+            // Esc on the sheet that only has «OK» (Apple Intelligence off): whether it closed, into `<…PNG>-esc.txt`.
+            showcase(ScriptedTextModel(reason: .appleIntelligenceNotEnabled), tab: nil)
+            ai.proposeChapters()
+            try? await Task.sleep(for: .seconds(1))
+            let up = window?.attachedSheet != nil
+            if let sheet = window?.attachedSheet, let escape = NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: sheet.windowNumber,
+                context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)
+            {
+                _ = sheet.performKeyEquivalent(with: escape)
+            }
+            try? await Task.sleep(for: .seconds(1))
+            let text = "sheet up before esc \(up)\nsheet up after esc \(window?.attachedSheet != nil)\n"
+            if let path = environment["TOMA_SHOWCASE_AI_PNG"] { try? text.write(toFile: path + "-esc.txt", atomically: true, encoding: .utf8) }
+        case "draft-title", "draft-summary", "draft-tab":
+            // Text typed into the title (or the summary) with the focus left in it, then the window closed (or, with
+            // `draft-tab`, the Background tab shown): what the document has then, into `<…PNG>-draft.txt`.
+            showcase(ScriptedTextModel(), tab: .info)
+            try? await Task.sleep(for: .seconds(2))
+            let typed = variant == "draft-summary" ? "Resumen escrito y no guardado." : "Título escrito y no guardado"
+            guard let window, let content = window.contentView,
+                let view = variant == "draft-summary" ? Self.summaryView(in: content) : Self.titleField(in: content)
+            else { return }
+            window.makeFirstResponder(view)
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let editor = (view as? NSTextView) ?? (view as? NSTextField)?.currentEditor() as? NSTextView else { return }
+            editor.selectAll(nil)
+            editor.insertText(typed, replacementRange: editor.selectedRange())
+            try? await Task.sleep(for: .milliseconds(500))
+            var text = "focus kept \(window.firstResponder === editor)\n"
+            if variant == "draft-tab" {
+                panelTab = .background
+                try? await Task.sleep(for: .seconds(1))
+                text += "after tab: title \(document?.info?.title ?? "nil")\n"
+            } else {
+                window.close()
+                text += "after close: closed \(closed)\n"
+            }
+            if let path = environment["TOMA_SHOWCASE_AI_PNG"] { try? text.write(toFile: path + "-draft.txt", atomically: true, encoding: .utf8) }
         default:
             break
         }
@@ -143,6 +186,24 @@ extension EditorModel {
         guard let path = environment["TOMA_SHOWCASE_AI_PNG"] else { return }
         try? await Task.sleep(for: .seconds(3))
         if let sheet = window?.attachedSheet?.contentView { Self.showcasePNG(of: sheet, to: URL(filePath: path + "-sheet.png")) }
+    }
+
+    /// The Info tab's title field (by its placeholder).
+    private static func titleField(in view: NSView) -> NSView? {
+        if let field = view as? NSTextField, field.isEditable, field.placeholderString == String(localized: "A title for the video") {
+            return field
+        }
+        return view.subviews.lazy.compactMap { titleField(in: $0) }.first
+    }
+
+    /// The Info tab's summary (the panel's only editable text view that isn't a field's editor).
+    private static func summaryView(in view: NSView) -> NSView? {
+        if let text = view as? NSTextView, text.isEditable, !text.isFieldEditor, view.enclosingScrollView?.superview != nil,
+            text.string.hasPrefix("Un recorrido") || text.string.isEmpty
+        {
+            return text
+        }
+        return view.subviews.lazy.compactMap { summaryView(in: $0) }.first
     }
 
     /// `view` drawn into a PNG at `url`, over the window's background.

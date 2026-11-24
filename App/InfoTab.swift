@@ -81,11 +81,15 @@ struct InfoTab: View {
             if old == .title, new != .title { ai.setTitle(title) }
             if old == .summary, new != .summary { ai.setSummary(summary) }
         }
+        // What is typed is a draft of the model's until it is saved, so closing the editor, another tab, Share or Export
+        // save it (`EditorAI.commitDrafts`) even with the focus still in the field.
         .onChange(of: title) { _, text in
             if text.count > ProjectInfo.titleLimit { title = String(text.prefix(ProjectInfo.titleLimit)) }
+            if focus == .title { ai.draft(.title, title) }
         }
         .onChange(of: summary) { _, text in
             if text.count > ProjectInfo.summaryLimit { summary = String(text.prefix(ProjectInfo.summaryLimit)) }
+            if focus == .summary { ai.draft(.summary, summary) }
         }
         #if DEBUG
         .task { CaptionsShowcase.snapshotLater(model.window) }
@@ -234,12 +238,8 @@ struct InfoTab: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// What the focused field shows, saved (its step) before something else uses the document.
+    /// What is typed and not saved yet, saved (a step for each field) before something else uses the document.
     private func commit() {
-        switch focus {
-        case .title?: ai.setTitle(title)
-        case .summary?: ai.setSummary(summary)
-        case nil: break
-        }
+        ai.commitDrafts()
     }
 }

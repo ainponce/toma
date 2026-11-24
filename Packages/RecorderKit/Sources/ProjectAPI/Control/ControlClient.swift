@@ -10,13 +10,15 @@ public enum ControlClient {
     public static let maxResponseBytes = 4 << 20
 
     /// Sends `request` to the server at `path` and waits for its answer, `timeout` at most from the connection on.
-    /// - Throws: `pathTooLong`; `noServer` when nobody listens there (nothing was sent); `timedOut`; `system` (`EBADMSG`
+    /// - Throws: `pathTooLong`; `noServer` when nobody listens there nor holds its lock (nothing was sent); `timedOut`
+    ///   (also for a server too busy to take the connection in time); `system` (`EBADMSG`
     ///   for an answer that is not one, `EMSGSIZE` for a request longer than `ControlServer.maxRequestBytes`, `EPERM` for
     ///   a server of another user, `ECONNRESET` for one that closed without answering).
     public static func send(
         _ request: ControlRequest, to path: URL, timeout: Duration
     ) async throws(ControlSocketError) -> ControlResponse {
         guard let address = ControlWire.address(path.path) else { throw .pathTooLong }
+        let lockPath = ControlWire.lockPath(for: path)
         let line: Data
         do {
             line = try ControlWire.line(request)
@@ -27,7 +29,7 @@ public enum ControlClient {
         let result = await withCheckedContinuation { (continuation: CheckedContinuation<Result<ControlResponse, ControlSocketError>, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(returning: Result { () throws(ControlSocketError) -> ControlResponse in
-                    try exchange(line, with: address, timeout: timeout)
+                    try exchange(line, with: address, lockPath: lockPath, timeout: timeout)
                 })
             }
         }
@@ -35,17 +37,12 @@ public enum ControlClient {
     }
 
     /// The connection, the request and the answer, blocking.
-    private static func exchange(_ line: Data, with address: sockaddr_un, timeout: Duration) throws(ControlSocketError) -> ControlResponse {
+    private static func exchange(
+        _ line: Data, with address: sockaddr_un, lockPath: String, timeout: Duration
+    ) throws(ControlSocketError) -> ControlResponse {
         let deadline = ContinuousClock.now + timeout
-        let fd = try ControlWire.socket()
+        let fd = try connected(to: address, lockPath: lockPath, deadline: deadline)
         defer { close(fd) }
-        if let code = ControlWire.connect(fd, to: address) {
-            switch code {
-            case ENOENT, ECONNREFUSED: throw .noServer
-            case ENOTSOCK: throw .notASocket
-            default: throw .system(code)
-            }
-        }
         var uid = uid_t(), gid = gid_t()
         guard getpeereid(fd, &uid, &gid) == 0 else { throw .system(errno) }
         guard uid == geteuid() else { throw .system(EPERM) }
@@ -69,6 +66,27 @@ public enum ControlClient {
         case .failure(.tooLong): throw .system(EMSGSIZE)
         case .failure(.closed): throw .system(ECONNRESET)
         case let .failure(.failed(code)): throw .system(code)
+        }
+    }
+
+    /// A connection to the server at `address`. Refused, or with no socket there, while a server holds the path's lock
+    /// (`ControlWire.isServing`): it is busy (its queue of connections is full) or starting, and it is tried again until
+    /// `deadline`; without the lock, nobody listens: `noServer`.
+    private static func connected(
+        to address: sockaddr_un, lockPath: String, deadline: ContinuousClock.Instant
+    ) throws(ControlSocketError) -> Int32 {
+        while true {
+            let fd = try ControlWire.socket()
+            guard let code = ControlWire.connect(fd, to: address) else { return fd }
+            close(fd)
+            switch code {
+            case ENOENT, ECONNREFUSED:
+                guard ControlWire.isServing(lockPath: lockPath) else { throw .noServer }
+                guard ContinuousClock.now < deadline else { throw .timedOut }
+                usleep(20_000)
+            case ENOTSOCK: throw .notASocket
+            default: throw .system(code)
+            }
         }
     }
 }

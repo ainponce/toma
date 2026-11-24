@@ -51,7 +51,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ Vuelve a intentarlo después de la próxima grabación."
+            "value" : "%@ Se vuelve a intentar después de la próxima grabación."
           }
         }
       }
@@ -10166,7 +10166,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Compartir sube el video a tu almacenamiento: R2, S3, B2 o MinIO."
+            "value" : "Compartir sube el video al almacenamiento propio: R2, S3, B2 o MinIO."
           }
         }
       }

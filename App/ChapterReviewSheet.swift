@@ -229,6 +229,7 @@ struct ChapterReviewSheet: View {
         }
     }
 
+    /// «Aceptar» closes the sheet with Return, and with Esc too: a button of its own takes Esc, unseen behind it.
     private var okButton: some View {
         Button {
             ai.cancelReview()
@@ -237,6 +238,12 @@ struct ChapterReviewSheet: View {
                 .frame(minWidth: 64)
         }
         .keyboardShortcut(.defaultAction)
+        .background {
+            Button("Cancel") { ai.cancelReview() }
+                .keyboardShortcut(.cancelAction)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
     }
 
     /// «Agregar 1 capítulo», «Agregar 12 capítulos»; «Agregar capítulos» (dimmed) with none checked.

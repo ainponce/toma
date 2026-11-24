@@ -659,6 +659,8 @@ extension EditorModel {
     /// `<project>.mp4`, `.mov` (ProRes) or `.gif` in the project's folder; what is edited while it exports is not in the file.
     func openExportSheet() {
         guard canExport, let window, window.attachedSheet == nil, let session = panelSession, let project = exportProject else { return }
+        // The title and the summary typed in the Info tab, saved before the export reads them.
+        ai.commitDrafts()
         let choices = ExportChoices(
             document: session.document, project: project, marks: timelineMarks, playhead: playheadNanoseconds,
             remembered: SettingsStore().settings.export, contentRatio: contentRatio(of: session.document), analysis: analysis,
