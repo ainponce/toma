@@ -158,8 +158,6 @@ import Testing
             for _ in 0..<3 {
                 #expect(try await ControlClient.send(.ping, to: path).handled)
             }
-            // Answered while the silent one still waits (its 3 s are not up).
-            #expect(isOpen(silent), "the silent client was dropped before the others were answered")
             #expect(readAll(silent, within: .seconds(10)).isEmpty)
             #expect(ContinuousClock.now - started >= .milliseconds(2900))
             // One that sends half a line and stops, the same.
@@ -168,6 +166,23 @@ import Testing
             _ = Array(#"{"op":"pi"#.utf8).withUnsafeBytes { Darwin.write(slow, $0.baseAddress!, $0.count) }
             #expect(readAll(slow, within: .seconds(10)).isEmpty)
             #expect(called.withLock { $0 } == 3)
+        }
+    }
+
+    /// A client that says nothing never holds up the others: they are answered while it still waits (with a time long
+    /// enough that a loaded Mac never reaches it first).
+    @Test func othersAreAnsweredWhileOneSaysNothing() async throws {
+        try await withShortDirectory { dir in
+            let path = dir.appending(path: "control.sock")
+            let server = ControlServer(path: path, requestTimeout: .seconds(60)) { _ in .done }
+            try server.start()
+            defer { server.stop() }
+            let silent = try connected(to: path)
+            defer { close(silent) }
+            for _ in 0..<3 {
+                #expect(try await ControlClient.send(.ping, to: path, timeout: .seconds(30)).handled)
+            }
+            #expect(isOpen(silent), "the silent client was dropped before the others were answered")
         }
     }
 
