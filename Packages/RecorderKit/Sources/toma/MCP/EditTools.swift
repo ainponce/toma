@@ -17,7 +17,8 @@ struct ApplyCommandsTool: MCPTool {
         which failed (failedIndex, from 0) and why (error). A command that leaves things as they were is no error \
         (changed: false). The commands: \(ProjectCommand.names.joined(separator: ", ")). While the project is open in \
         Toma, Toma makes them in its editor, where they show at once (via: app; transcribe and a background image from \
-        outside the project are notAvailable then); fails with "locked" while another process edits the project.
+        outside the project are notAvailable then); fails with "locked" while another process edits the project. If \
+        Toma does not answer in time (refused), it may still make them: read project_info before trying again.
         """
     }
     var inputSchema: JSONValue {

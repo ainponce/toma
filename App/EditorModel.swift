@@ -403,6 +403,8 @@ final class EditorModel {
     private(set) var missingVideo: [ClosedRange<Double>] = []
     @ObservationIgnored private var missingVideoCheck: MissingVideoCheck?
     @ObservationIgnored private var openTask: Task<Void, Never>?
+    /// Looks at the lock of a project another process held as it opened, until it is free (`watchTheLock`).
+    @ObservationIgnored var editAgainTask: Task<Void, Never>?
     @ObservationIgnored private var applyTask: Task<Void, Never>?
     @ObservationIgnored private var exportTask: Task<Void, Never>?
     @ObservationIgnored private var exportFinishedTask: Task<Void, Never>?
@@ -537,6 +539,7 @@ final class EditorModel {
         access = session.access
         onAccessChanged()
         session.onChange = { [weak self] in self?.sessionChanged() }
+        watchTheLock()
         if firstSeen == nil { firstSeen = session.packageURL.standardizedFileURL }
         noteLocation(session.packageURL)
         if let shown = Self.unshowable(session.access) {
@@ -1063,6 +1066,7 @@ final class EditorModel {
         if access != session.access {
             access = session.access
             onAccessChanged()
+            watchTheLock()
         }
         if let shown = Self.unshowable(session.access) {
             show(shown)
@@ -1734,6 +1738,7 @@ final class EditorModel {
         if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
         preferencesObserver = nil
         openTask?.cancel()
+        editAgainTask?.cancel()
         followCursorTask?.cancel()
         // An export sheet still over the window ends: its GIF preview and estimate stop, and the project it holds goes.
         endExportSheet()

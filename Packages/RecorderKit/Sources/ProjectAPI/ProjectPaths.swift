@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
+import ProjectFormat
 
 /// The rules of the paths the API is given (fases 4 y 5 design §6.3), the same for the command line, the MCP server and
 /// the control socket: a package is a folder named `.toma` that holds a `manifest.json`, neither of them a link; a path
@@ -46,6 +47,10 @@ public enum ProjectPaths {
         }
         guard url.pathExtension.lowercased() == "toma" else {
             throw APIError(.notAProject, "\(url.path) is not a Toma project: its name does not end in .toma")
+        }
+        // The Replay's working package, which it prunes and deletes: never a project (fases 4 y 5 design §10.2).
+        if ReplayScratch.isScratch(ProjectPackage(url: url)) {
+            throw APIError(.notAProject, "\(url.path) is the Replay's working package, which Toma deletes: save the Replay to edit it")
         }
         let manifest = url.appending(path: "manifest.json", directoryHint: .notDirectory)
         guard lstat(manifest.path, &info) == 0 else { throw APIError(.notAProject, "\(url.path) has no manifest.json") }

@@ -55,6 +55,7 @@ enum CLIOutput {
             report.music.isEmpty
                 ? ["none"] : report.music.map { "\($0.source) \(time($0.start))–\(time($0.end)), \(number($0.gain)) dB" }))
         rows.append(("transcript", [report.transcript.map { "\($0.language), \(count($0.words, "word"))" } ?? "none"]))
+        if let warnings = report.warnings, !warnings.isEmpty { rows.append(("warnings", warnings)) }
         return report.name + "\n" + table(rows)
     }
 
@@ -94,7 +95,8 @@ enum CLIOutput {
     static func command(_ result: CommandResult) -> String {
         let done = result.changed ? (result.label ?? "done") : "no change"
         let created = result.created.map { ", created \($0)" } ?? ""
-        return "\(result.command): \(done)\(created), output \(time(result.duration))\n"
+        let warnings = (result.warnings ?? []).map { "  warning: \($0)\n" }.joined()
+        return "\(result.command): \(done)\(created), output \(time(result.duration))\n" + warnings
     }
 
     /// `toma export`: where the file is and what it is.

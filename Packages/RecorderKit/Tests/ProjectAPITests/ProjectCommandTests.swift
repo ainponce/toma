@@ -142,3 +142,25 @@ struct TestSupportFailure: Error, CustomStringConvertible {
     var description: String
     init(_ description: String) { self.description = description }
 }
+
+@Test func aBackgroundIsReadStrictly() throws {
+    func error(_ background: String) -> APIError? {
+        do throws(APIError) {
+            let text = ##"{"command":"setBackground","background":"## + background + "}"
+            _ = try ProjectCommand.list(from: Data(text.utf8))
+            return nil
+        } catch {
+            return error
+        }
+    }
+    let bogus = try #require(error(#"{"type":"color","color":[1,0,0,1],"bogus":1}"#))
+    #expect(bogus.code == .invalidCommand && bogus.message.contains("bogus"))
+    #expect(error(#"{"type":"color","color":[2,-1,0,1]}"#)?.code == .outOfRange)
+    #expect(error(#"{"type":"color","color":[1,0,0]}"#)?.code == .invalidCommand)
+    #expect(error(#"{"color":[1,0,0,1]}"#)?.code == .invalidCommand)
+    let wallpaper = try #require(error(#"{"type":"wallpaper","wallpaper":"nope-9"}"#))
+    #expect(wallpaper.code == .invalidCommand && wallpaper.message.contains("aurora-1"))
+    #expect(error(#"{"type":"desktop","file":"x"}"#)?.code == .invalidCommand)
+    #expect(error(#"{"type":"gradient","start":[1,0,0,1],"end":[0,0,1,1],"angle":90}"#) == nil)
+    #expect(error(#"{"type":"wallpaper","wallpaper":"aurora-1"}"#) == nil)
+}

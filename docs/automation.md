@@ -49,6 +49,12 @@ Todos (menos `mcp`) aceptan `--json`: la salida estándar tiene entonces exactam
 `{"error": {"code": "…", "message": "…"}}`. Sin `--json`, un texto para leer; `edit` escribe una línea por comando a
 medida que lo guarda.
 
+Lo que el documento escrito tiene y la lectura deja afuera (un archivo de música o de una anotación fuera de `assets/`,
+una regla del documento rota, un `edit.json` ilegible, un `edit-log.jsonl` dañado) no pasa en silencio: `validate` lo da
+como problema (no válido), `info` y el resultado de `export` lo dicen en `warnings`, `edit` rechaza (`refused`) lo que
+Toma abre de solo lectura, y el primer comando que deja aparte un `edit.json` o un registro dañados lo dice en el
+`warnings` de su resultado.
+
 **Códigos de salida:** 0 bien; 1 un error; 2 un error de uso (argumentos que no son los del subcomando, o un comando que
 no es de la API: `invalidCommand`); 3 el proyecto lo está editando otro proceso que no es Toma (`locked`).
 
@@ -71,6 +77,12 @@ app), y el resultado dice `"via": "app"`. La respuesta llega cuando el cambio ya
 - `refused` (código 1) con «Toma did not answer…» quiere decir que Toma está abierta pero no contestó a tiempo (30 s) o
   cortó la conexión: el cambio pudo haberse hecho. Antes de repetirlo, leer el proyecto (`toma info`, `project_info`):
   un `cut` repetido corta dos veces.
+- Si el que tiene el `edit.lock` no es Toma (otro `toma`, otra Mac por una carpeta compartida), o no hay una Toma que
+  conteste, sigue siendo `locked`. Si Toma contesta pero no a tiempo (30 s), es `refused`: puede que igual lo haga, así
+  que leer el proyecto (`info`, `project_info`) antes de volver a mandarlo, o se hace dos veces.
+- Un proyecto con una toma que se está grabando (o que un cierre inesperado dejó a medio grabar y Toma todavía no
+  recuperó) se puede leer, y `info` lo dice en `warnings`, pero editarlo y exportarlo dan `locked` (salida 3): en el disco
+  está solo lo grabado hasta ese momento. `list_projects` lo dice en `problem`.
 
 ### Exportar
 

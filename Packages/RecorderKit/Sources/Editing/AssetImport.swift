@@ -158,6 +158,12 @@ public enum AssetImport {
     /// read, `.refused(.notALUT)` for one whose content is not a 3D LUT; otherwise `.accepted`, a converted image with its
     /// PNG, so it is converted once however many times `place` is tried. A clip or a sound is accepted here: it is judged
     /// by `mediaRefusal`, which waits for AVFoundation.
+    /// Whether `importAsset` would take the file at `url` as an image (`screened`), without writing anything: the project
+    /// API asks before a command opens a session for it. Reads and decodes it: never on the main thread.
+    package static func takesAsAnImage(_ url: URL) -> Bool {
+        if case .accepted = screened(url, as: .image) { true } else { false }
+    }
+
     static func screened(_ url: URL, as kind: AssetKind) -> Screening {
         switch kind {
         case .video, .audio:

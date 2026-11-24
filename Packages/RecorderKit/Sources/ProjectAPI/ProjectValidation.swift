@@ -50,22 +50,37 @@ enum ProjectValidation {
                 skippedEventLines: 0, missingFiles: [])
         }
         let loaded = project.project, document = project.document, documentVersion = project.documentVersion
+        let findings = project.findings
         await project.close()
-        let found = await Task.detached { Self.check(loaded, document: document) }.value
+        let found = await Task.detached { Self.check(loaded, document: document, findings: findings) }.value
         return ValidationReport(
             valid: found.problems.isEmpty && found.missing.isEmpty, formatVersion: loaded.manifest.formatVersion,
             documentVersion: documentVersion, problems: found.problems, skippedEventLines: found.skipped,
             missingFiles: found.missing)
     }
 
-    /// What is wrong with `project` and its `document`, read from the disk.
+    /// What is wrong with `project` and its `document`, read from the disk: the rules the document breaks as it is
+    /// written (not as it is shown, which leaves out what breaks them) and what Toma sets aside as it opens (`findings`).
     private nonisolated static func check(
-        _ project: LoadedProject, document: EditDocument
+        _ project: LoadedProject, document: EditDocument, findings: ReadFindings
     ) -> (problems: [String], skipped: Int, missing: [String]) {
-        var problems = DocumentRules.problems(in: document).map(sentence)
+        var problems = findings.problems.map(\.sentence)
+        if findings.undrawableValues {
+            problems.append("the document has a frame rate or a clip speed Toma cannot draw: Toma opens it read-only")
+        }
+        if findings.keepsSnapshotApart {
+            problems.append("edit.json cannot be read: Toma sets it aside and starts again from the recording, without its edits")
+        }
         let package = project.package
+        var damaged = false
         if project.manifest.formatVersion >= 3, let log = try? EditLogReader.read(package.editLogURL), let line = log.damagedLine {
             problems.append("line \(line + 1) of edit-log.jsonl is damaged: Toma reads the log up to the line before it")
+            damaged = true
+        }
+        if findings.rewritesLog, !damaged {
+            problems.append(
+                "edit-log.jsonl does not match its document: Toma reads it up to its last good line, and sets it aside and "
+                    + "rewrites it at the first edit")
         }
         var skipped = 0
         var missing: [String] = []
@@ -124,9 +139,12 @@ enum ProjectValidation {
         return Int(version)
     }
 
-    /// A rule of the document a document breaks, in a sentence.
-    private nonisolated static func sentence(_ problem: DocumentProblem) -> String {
-        switch problem {
+}
+
+extension DocumentProblem {
+    /// The rule of the document this is, broken, in a sentence.
+    var sentence: String {
+        switch self {
         case let .contentNotAPoint(clip):
             "clip \(clip) has content but is not a point of its take"
         case let .outOfOrder(clip):

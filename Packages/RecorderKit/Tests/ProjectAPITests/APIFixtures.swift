@@ -90,7 +90,7 @@ enum APIFixtures {
     /// A take of `seconds` of one display (10 fps) and a microphone, with `marker` events at `markerSeconds`, in a new
     /// package `<name>.toma` of `formatVersion`. Written off the main actor.
     @concurrent static func package(
-        in dir: URL, name: String = "Fixture", formatVersion: Int = Manifest.currentFormatVersion
+        in dir: URL, name: String = "Fixture", formatVersion: Int = Manifest.currentFormatVersion, status: TakeStatus = .complete
     ) async throws -> LoadedProject {
         let builder = try TakeBuilder(in: dir, name: name, formatVersion: formatVersion)
         let frame = Rect(x: 0, y: 0, width: 640, height: 360)
@@ -103,7 +103,7 @@ enum APIFixtures {
         try builder.addEvents(
             [InputEvent(t: base.adding(seconds: -0.01), kind: .displayGeometry(displayID: 1, frame: frame, scale: 1))]
                 + markerSeconds.map { InputEvent(t: base.adding(seconds: $0), kind: .marker) })
-        return try builder.write()
+        return try builder.write(status: status)
     }
 
     /// `package(in:name:)` with its transcript in the document, added as the app adds one (a `transcript.create` step of

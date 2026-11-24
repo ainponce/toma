@@ -12673,6 +12673,17 @@
         }
       }
     },
+    "This is the Replay's working copy" : {
+      "comment" : "Opening, from Finder, the package where the Replay records: it is not a project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es la copia de trabajo de la Repetición"
+          }
+        }
+      }
+    },
     "This language isn't on this Mac yet. It's downloaded once, from Apple." : {
       "comment" : "The Captions tab: the chosen language's model is not installed",
       "localizations" : {
@@ -13173,6 +13184,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Toma clásico"
+          }
+        }
+      }
+    },
+    "Toma deletes it as the Replay goes on. Save the Replay to edit what it recorded." : {
+      "comment" : "Opening, from Finder, the package where the Replay records: it is not a project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toma la borra a medida que la Repetición avanza. Guardar la Repetición para editar lo que grabó."
           }
         }
       }

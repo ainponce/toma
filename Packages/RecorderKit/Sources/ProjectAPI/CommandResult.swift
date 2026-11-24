@@ -19,9 +19,13 @@ public struct CommandResult: Codable, Equatable, Sendable {
     /// The label of what an undo would undo now; `nil` with nothing to undo.
     public var undo: String?
     public var via: Via
+    /// What else happened, in English, a sentence each: the opening for this command set aside an `edit.json` it could
+    /// not read, or a damaged log. `nil` (left out of the JSON) with nothing to say.
+    public var warnings: [String]?
 
     public init(
-        command: String, changed: Bool, label: String?, created: String?, duration: Double, undo: String?, via: Via
+        command: String, changed: Bool, label: String?, created: String?, duration: Double, undo: String?, via: Via,
+        warnings: [String]? = nil
     ) {
         self.command = command
         self.changed = changed
@@ -30,6 +34,7 @@ public struct CommandResult: Codable, Equatable, Sendable {
         self.duration = duration
         self.undo = undo
         self.via = via
+        self.warnings = warnings
     }
 }
 
