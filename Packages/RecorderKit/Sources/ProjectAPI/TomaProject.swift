@@ -72,7 +72,7 @@ import ProjectFormat
     /// Opens the package at `url` (a folder `.toma`, checked as `ProjectPaths` does) for reading or editing.
     ///
     /// A take the manifest says is being recorded (`TakeStatus.recording`: the recorder is writing it, or a crash left it
-    /// so and Toma recovers it when it opens the project) is only read: editing it is `locked`, as exporting it is, since
+    /// so, until the user recovers it in Toma) is only read: editing it is `locked`, as exporting it is, since
     /// the first document of its project would hold only what was recorded so far (the library does not open it either).
     public static func open(_ url: URL, mode: Mode, environment: APIEnvironment = .standard) async throws -> TomaProject {
         try ProjectPaths.checkPackage(url)
@@ -180,8 +180,8 @@ import ProjectFormat
         return APIError(
             .locked,
             "\(names) \(takes.count == 1 ? "is" : "are") being recorded, or a crash left \(takes.count == 1 ? "it" : "them") "
-                + "recording and Toma recovers \(takes.count == 1 ? "it" : "them") when it opens the project: what is on disk is "
-                + "only what was recorded so far; edit or export it once the recording ends")
+                + "recording (open the project in Toma and choose Recover): what is on disk is only what was recorded so far; "
+                + "edit or export it once the recording ends or the take is recovered")
     }
 
     // MARK: - Reading
