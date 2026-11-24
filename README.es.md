@@ -7,8 +7,8 @@ edita y exporta, sin suscripción y sin que nada salga de la Mac.
 
 ![El editor de Toma](docs/images/editor.png)
 
-> **Estado: versión previa.** Todo lo de abajo está construido y con pruebas automáticas (unas 4.000), pero todavía no
-> hay una versión firmada para descargar: por ahora se compila desde el código. Faltan pruebas de uso real.
+> **Estado: versión previa.** Todo lo de abajo está construido y con pruebas automáticas (unas 4.000), pero faltan
+> pruebas de uso real: puede haber detalles sin pulir, y conviene reportarlos.
 
 ## Qué hace
 
@@ -45,12 +45,9 @@ edita y exporta, sin suscripción y sin que nada salga de la Mac.
 
 ## Instalar
 
-Todavía no hay un DMG publicado: por ahora, [compilar desde el código](#compilar-desde-el-código). Cuando lo haya:
-
-1. Bajar `Toma-<versión>.dmg` de la página de [Releases](../../releases).
+1. Bajar `Toma-<versión>.dmg` de la página de [Releases](../../releases/latest).
 2. Abrir el DMG y arrastrar Toma a Aplicaciones.
-3. Abrir Toma. La primera vez macOS no la deja abrir, porque Toma no está notarizada por Apple (el proyecto no paga la cuenta de desarrollador de Apple). El aviso dice:
-
+3. Abrir Toma. La primera vez macOS no la deja abrir, porque Toma no está notarizada por Apple (el proyecto no paga la cuenta de desarrollador de Apple): avisa que no puede comprobar que Toma esté libre de software malicioso.
 4. Ir a Ajustes del Sistema → Privacidad y seguridad. En la sección Seguridad aparece un mensaje sobre Toma: elegir "Abrir igualmente" y confirmar. Hace falta una sola vez.
 
 Toma se firma siempre con el mismo certificado propio del proyecto ("Toma Project Signing"), para que macOS la reconozca como la misma app en cada versión y no vuelva a pedir los permisos de grabación de pantalla y micrófono al actualizar (a confirmar en la verificación 1 de [docs/release.md](docs/release.md#verificaciones-del-dueño)).
@@ -71,7 +68,7 @@ Toma busca actualizaciones con [Sparkle](https://sparkle-project.org): una vez p
 
 Una copia compilada desde el código se actualiza compilando de nuevo: `git pull && make install`. Pero desde que la clave pública de Sparkle está en `Config/Identity.xcconfig`, esa copia también corre Sparkle y puede actualizarse sola a la versión del DMG, firmada con el certificado del proyecto. La copia compilada no está firmada con ese certificado, así que esa vez macOS la ve como otra app y vuelve a pedir los permisos, una sola vez: las versiones siguientes ya vienen firmadas igual (a confirmar en la verificación 1).
 
-En la fase 0 las actualizaciones apuntan a un servidor de prueba local; el feed público llega con el primer release público. Ver [docs/release.md](docs/release.md).
+Las actualizaciones salen de las Releases de este repositorio: la app lee `releases/latest/download/appcast.xml`. Ver [docs/release.md](docs/release.md).
 
 ## No Molestar durante las grabaciones
 

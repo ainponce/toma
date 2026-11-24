@@ -7,9 +7,8 @@ and exports, with no subscription and nothing leaving your Mac.
 
 ![Toma's editor](docs/images/editor.png)
 
-> **Status: pre-release.** Everything below is built and covered by automated tests (about 4,000), but there is no
-> signed download yet: for now you build it from source. It still needs real-world use, so expect rough edges and
-> please report them.
+> **Status: pre-release.** Everything below is built and covered by automated tests (about 4,000), but it still needs
+> real-world use, so expect rough edges and please report them.
 
 The app's interface is in English and Spanish; the screenshots here show it in Spanish.
 
@@ -45,6 +44,19 @@ The app's interface is in English and Spanish; the screenshots here show it in S
 - **Open:** GPL-3.0-or-later, with a documented project format ([docs/format](docs/format/README.md), in Spanish).
 - **No subscription, no cloud:** nothing leaves the Mac except what you upload, when you ask, to your own storage.
 - **No take is ever lost:** it is the design's first priority.
+
+## Install
+
+1. Download `Toma-<version>.dmg` from [Releases](../../releases/latest).
+2. Open the DMG and drag Toma to Applications.
+3. Open Toma. The first time, macOS won't open it, because Toma isn't notarized by Apple (the project doesn't pay for
+   an Apple developer account): it says it can't check that Toma is free of malware.
+4. Go to System Settings → Privacy & Security. Under Security there is a message about Toma: choose "Open Anyway" and
+   confirm. You only do this once.
+
+Every version is signed with the project's own certificate ("Toma Project Signing"), so macOS sees the same app across
+updates and shouldn't ask again for the screen recording, microphone and camera permissions. Toma updates itself with
+[Sparkle](https://sparkle-project.org), from this repository's releases.
 
 ## Build from source
 

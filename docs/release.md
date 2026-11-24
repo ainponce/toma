@@ -3,7 +3,7 @@
 Toma se distribuye gratis, sin la cuenta paga de desarrollador de Apple (spec §7.6):
 
 - **Firma con un certificado propio estable**, "Toma Project Signing": autofirmado, de firma de código, válido 10 años. Todas las versiones se firman con él, así que el requisito designado de la app (`identifier "dev.toma.Toma" and certificate leaf = H"…"`) no cambia entre versiones y macOS debería conservar los permisos al actualizar. Sin notarización: la primera apertura de un DMG descargado pide "Abrir igualmente".
-- **DMG en GitHub Releases**, marcado como prerelease durante la fase 0.
+- **DMG en GitHub Releases**, como release normal (no prerelease): el feed de la app es `releases/latest/download/appcast.xml`, y "latest" saltea las prereleases.
 - **Actualizaciones con Sparkle 2**, firmadas con una clave EdDSA propia. El feed es `SPARKLE_FEED_URL` y la clave pública `SPARKLE_PUBLIC_KEY`, los dos en `Config/Identity.xcconfig` (cada `//` escrito como `/$()/`).
 - **Compilar desde el código** con `make install`.
 
@@ -61,10 +61,12 @@ El workflow `.github/workflows/release.yml` corre en el entorno `release` (el du
 2. Importa el certificado a un llavero temporal (`security create-keychain`, `security import`, `security set-key-partition-list -S apple-tool:,apple:,codesign:`) e intenta confiar en él para firma de código en ese runner. El `.p12` decodificado se borra al terminar ese paso, falle o no, y otra vez en el paso final. `security import` recibe la contraseña del `.p12` solo como argumento (`-P`): mientras corre, otro proceso del runner podría verla con `ps`; en el log no aparece porque es un secreto.
 3. Trae el `appcast.xml` y los DMG del release anterior a `dist/` (historial y deltas).
 4. Corre `bash scripts/release.sh 0.0.2` con `DOWNLOAD_PREFIX=https://github.com/<repo>/releases/download/v0.0.2/`, `SOURCE_CODE_URL` (el repositorio) y `SPARKLE_ED_PRIVATE_KEY`, que `release.sh` saca del entorno antes de correr nada. Después bloquea el llavero temporal (`security lock-keychain`): ningún paso siguiente firma.
-5. Crea el release `v0.0.2` como prerelease con `dist/*.dmg`, `dist/*.delta` y `appcast.xml`: todo lo que el appcast nombra, con la URL de este release.
+5. Crea el release `v0.0.2` (normal, no prerelease) con `dist/*.dmg`, `dist/*.delta` y `appcast.xml`: todo lo que el appcast nombra, con la URL de este release.
 6. Borra el llavero temporal.
 
-**Feed de la fase 0.** `SPARKLE_FEED_URL` apunta a `http://localhost:8000/appcast.xml`: las versiones de la fase 0 son solo para el dueño y se actualizan desde un servidor local (verificación 1). El appcast que publica el workflow queda listo para cuando exista un feed público. Antes del primer release público hay que elegir una URL estable para el feed (GitHub Pages, por ejemplo; `releases/latest/download/` no sirve mientras las versiones sean prerelease) y escribirla en `Config/Identity.xcconfig`.
+**Feed.** Desde 0.1.0, `SPARKLE_FEED_URL` es `https://github.com/ainponce/toma/releases/latest/download/appcast.xml`: el `appcast.xml` del último release normal. Por eso cada release lleva su `appcast.xml` y nunca se marca como prerelease, y `SOURCE_CODE_URL` es el repositorio.
+
+**Mientras GitHub no tenga Xcode 27** el workflow no puede compilar (ver `docs/backlog.md`), así que las releases se compilan y publican desde la Mac del dueño, con los comandos de la sección siguiente.
 
 ### Si `codesign` en CI rechaza el certificado
 
@@ -73,7 +75,7 @@ Un certificado autofirmado solo sirve para firmar si el sistema confía en él. 
 ```sh
 gh release download v0.0.1 --dir dist --pattern appcast.xml --pattern '*.dmg'   # el release anterior, si dist/ no lo tiene
 DOWNLOAD_PREFIX=https://github.com/<repo>/releases/download/v0.0.2/ bash scripts/release.sh 0.0.2
-gh release create v0.0.2 --prerelease --title "Toma 0.0.2" dist/*.dmg dist/*.delta dist/appcast.xml
+gh release create v0.0.2 --title "Toma 0.0.2" dist/*.dmg dist/*.delta dist/appcast.xml
 ```
 
 Resultado en CI: **pendiente** (primera corrida del workflow).

@@ -14,9 +14,9 @@ STYLE_TYPE_IDENTIFIER = dev.toma.style
 STYLE_FILE_EXTENSION = tomastyle
 // Sparkle: the update feed, and the EdDSA public key that generate_keys prints (docs/release.md). Without
 // the key the app starts without its updater.
-SPARKLE_FEED_URL = http:/$()/localhost:8000/appcast.xml
-SPARKLE_PUBLIC_KEY =
+SPARKLE_FEED_URL = https:/$()/github.com/ainponce/toma/releases/latest/download/appcast.xml
+SPARKLE_PUBLIC_KEY = TZ7kHat+mcQSSo5TQQK7lODKDpUzblXyHfEhkPuOjt0=
 // The repository the source code of a release is published at (GPLv3 §6), for example
 // https:/$()/github.com/<owner>/<repo>. The release workflow sets it from the repository it runs in; a
 // build without it says so in Acknowledgements.
-SOURCE_CODE_URL =
+SOURCE_CODE_URL = https:/$()/github.com/ainponce/toma

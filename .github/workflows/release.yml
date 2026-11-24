@@ -109,7 +109,7 @@ jobs:
         if: always()
         run: security lock-keychain "$RUNNER_TEMP/toma-signing.keychain-db" || true
 
-      - name: Publish the prerelease
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -118,8 +118,10 @@ jobs:
           [ -f "dist/Toma-$version.dmg" ] || { echo "::error::dist/Toma-$version.dmg is missing"; exit 1; }
           # Every file the appcast points to: this version's DMG, the earlier ones it still lists, and the deltas.
           files=(dist/*.dmg dist/*.delta dist/appcast.xml)
-          gh release create "$GITHUB_REF_NAME" --prerelease --verify-tag --title "Toma $version" \
-            --notes "Versión de prueba de la fase 0. Cómo instalarla y abrirla la primera vez: https://github.com/$GITHUB_REPOSITORY#instalar" \
+          # A normal release, never a prerelease: the app's feed is releases/latest/download/appcast.xml, and
+          # "latest" skips prereleases.
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "Toma $version" \
+            --notes "How to install it and open it the first time: https://github.com/$GITHUB_REPOSITORY#install" \
             "${files[@]}"
 
       - name: Delete the temporary keychain and certificate files
