@@ -17,7 +17,8 @@ public struct ProjectListing: Codable, Equatable, Sendable {
     public var documentVersion: Int?
     /// When its manifest or its edit files last changed.
     public var modified: Date?
-    /// Why it cannot be read (an `APIError`'s description); `nil` for one that reads.
+    /// Why it cannot be read, or edited and exported (an `APIError`'s description: a take still being recorded is
+    /// `locked`); `nil` for one that reads.
     public var problem: String?
 
     public init(path: String, name: String, duration: Double?, documentVersion: Int?, modified: Date?, problem: String?) {
@@ -80,9 +81,12 @@ public struct ProjectListing: Codable, Equatable, Sendable {
         do {
             try ProjectPaths.checkPackage(url)
             let (project, outline) = try EditSession.readOutline(url, take: nil, context: context)
+            // A take being recorded: what it lasts so far, and why it cannot be edited nor exported yet.
+            let recording = project.takes.filter { $0.status == .recording }.map(\.id)
             return ProjectListing(
                 path: url.path, name: name, duration: outline.outputSeconds,
-                documentVersion: hasEditFiles(project) ? outline.diskVersion : nil, modified: modified, problem: nil)
+                documentVersion: hasEditFiles(project) ? outline.diskVersion : nil, modified: modified,
+                problem: recording.isEmpty ? nil : TomaProject.beingRecorded(recording).description)
         } catch {
             return ProjectListing(
                 path: url.path, name: name, duration: nil, documentVersion: nil, modified: modified,

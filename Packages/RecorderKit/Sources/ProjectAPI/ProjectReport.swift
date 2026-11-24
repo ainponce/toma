@@ -30,11 +30,15 @@ public struct ProjectReport: Codable, Equatable, Sendable {
     public var style: StyleReport
     public var music: [MusicReport]
     public var transcript: TranscriptSummary?
+    /// What the project is in that what is shown here does not say, in English, a sentence each: a take still being
+    /// recorded, an edit document Toma sets aside or opens read-only. `nil` (left out of the JSON) with nothing to say.
+    public var warnings: [String]?
 
     public init(
         path: String, name: String, mode: TomaProject.Mode, formatVersion: Int, documentVersion: Int?, info: ProjectInfo?,
         duration: Double, frameRate: Int, aspect: String, takes: [TakeReport], sequence: [ClipReport], markers: [MarkerReport],
-        chapters: [ChapterReport], zoom: ZoomReport, style: StyleReport, music: [MusicReport], transcript: TranscriptSummary?
+        chapters: [ChapterReport], zoom: ZoomReport, style: StyleReport, music: [MusicReport], transcript: TranscriptSummary?,
+        warnings: [String]? = nil
     ) {
         self.path = path
         self.name = name
@@ -53,6 +57,7 @@ public struct ProjectReport: Codable, Equatable, Sendable {
         self.style = style
         self.music = music
         self.transcript = transcript
+        self.warnings = warnings
     }
 }
 

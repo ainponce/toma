@@ -55,6 +55,7 @@ enum CLIOutput {
             report.music.isEmpty
                 ? ["none"] : report.music.map { "\($0.source) \(time($0.start))–\(time($0.end)), \(number($0.gain)) dB" }))
         rows.append(("transcript", [report.transcript.map { "\($0.language), \(count($0.words, "word"))" } ?? "none"]))
+        if let warnings = report.warnings, !warnings.isEmpty { rows.append(("warnings", warnings)) }
         return report.name + "\n" + table(rows)
     }
 

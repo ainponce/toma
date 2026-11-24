@@ -66,6 +66,9 @@ cuando el cambio ya está en el disco.
   (hacerlo en Toma, o cerrar ahí el proyecto y volver a correr el comando).
 - Si el que tiene el `edit.lock` no es Toma (otro `toma`, otra Mac por una carpeta compartida) o Toma no contesta, sigue
   siendo `locked`.
+- Un proyecto con una toma que se está grabando (o que un cierre inesperado dejó a medio grabar y Toma todavía no
+  recuperó) se puede leer, y `info` lo dice en `warnings`, pero editarlo y exportarlo dan `locked` (salida 3): en el disco
+  está solo lo grabado hasta ese momento. `list_projects` lo dice en `problem`.
 
 ### Exportar
 

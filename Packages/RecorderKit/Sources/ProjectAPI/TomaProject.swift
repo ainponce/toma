@@ -40,6 +40,8 @@ import ProjectFormat
     }
 
     private var storage: Storage
+    /// The takes the manifest says are being recorded (`TakeStatus.recording`) as the project opened.
+    let recordingTakes: [String]
     /// The `documentVersion` of the edit document on disk as the project opened; `nil` without one.
     private let openedDocumentVersion: Int?
     private let diskHistory: DiskHistory
@@ -50,17 +52,23 @@ import ProjectFormat
     private(set) var closed = false
 
     private init(
-        url: URL, mode: Mode, environment: APIEnvironment, storage: Storage, openedDocumentVersion: Int?, diskHistory: DiskHistory
+        url: URL, mode: Mode, environment: APIEnvironment, storage: Storage, openedDocumentVersion: Int?, diskHistory: DiskHistory,
+        recordingTakes: [String]
     ) {
         self.url = url
         self.mode = mode
         self.environment = environment
         self.storage = storage
+        self.recordingTakes = recordingTakes
         self.openedDocumentVersion = openedDocumentVersion
         self.diskHistory = diskHistory
     }
 
     /// Opens the package at `url` (a folder `.toma`, checked as `ProjectPaths` does) for reading or editing.
+    ///
+    /// A take the manifest says is being recorded (`TakeStatus.recording`: the recorder is writing it, or a crash left it
+    /// so and Toma recovers it when it opens the project) is only read: editing it is `locked`, as exporting it is, since
+    /// the first document of its project would hold only what was recorded so far (the library does not open it either).
     public static func open(_ url: URL, mode: Mode, environment: APIEnvironment = .standard) async throws -> TomaProject {
         try ProjectPaths.checkPackage(url)
         let context = environment.editContext
@@ -77,11 +85,13 @@ import ProjectFormat
         }.value
         switch read {
         case let .success((project, document, version, history, locked)):
+            let recording = project.takes.filter { $0.status == .recording }.map(\.id)
+            if mode == .edit, !recording.isEmpty { throw beingRecorded(recording) }
             if locked { throw apiError(ReadOnlyReason.openElsewhere) }
             return TomaProject(
                 url: url, mode: mode, environment: environment,
                 storage: mode == .read ? .read(project, document) : .editing(project, document), openedDocumentVersion: version,
-                diskHistory: history)
+                diskHistory: history, recordingTakes: recording)
         case let .failure(error):
             throw apiError(error)
         }
@@ -118,6 +128,21 @@ import ProjectFormat
         return openedDocumentVersion
     }
 
+    /// What the project is in that its document does not say, a sentence each (`ProjectReport.warnings`).
+    var warnings: [String] {
+        recordingTakes.isEmpty ? [] : [Self.beingRecorded(recordingTakes).message]
+    }
+
+    /// `locked` for a project whose takes `takes` are being recorded.
+    nonisolated static func beingRecorded(_ takes: [String]) -> APIError {
+        let names = takes.joined(separator: ", ")
+        return APIError(
+            .locked,
+            "\(names) \(takes.count == 1 ? "is" : "are") being recorded, or a crash left \(takes.count == 1 ? "it" : "them") "
+                + "recording and Toma recovers \(takes.count == 1 ? "it" : "them") when it opens the project: what is on disk is "
+                + "only what was recorded so far; edit or export it once the recording ends")
+    }
+
     // MARK: - Reading
 
     public func report() async -> ProjectReport {
@@ -135,7 +160,8 @@ import ProjectFormat
             chapters: chapters.map { ChapterReport(start: Reports.seconds($0.start), title: $0.title) },
             zoom: Reports.zoom(document, map: map),
             style: StyleReport(style: (try? JSONValue(encoding: document.style)) ?? .null, cameraLayout: document.camera.layout.kind.rawValue),
-            music: Reports.music(document), transcript: Reports.transcriptSummary(document))
+            music: Reports.music(document), transcript: Reports.transcriptSummary(document),
+            warnings: warnings.isEmpty ? nil : warnings)
     }
 
     /// The transcript, every word with where the output says it; `nil` without one.

@@ -79,6 +79,8 @@ extension TomaProject {
         to destination: URL, format: ExportFormat, progress: (@Sendable (Double) -> Void)?
     ) async throws -> ExportResult {
         guard !closed else { throw APIError(.refused, "the project is closed") }
+        // Only what was recorded so far: the export would be cut where the recording is now.
+        guard recordingTakes.isEmpty else { throw Self.beingRecorded(recordingTakes) }
         let (fileExtension, codec): (String, ExportCodec?) =
             switch format {
             case let .video(settings), let .externalEditor(settings): (settings.codec.fileExtension, settings.codec)
