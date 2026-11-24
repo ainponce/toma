@@ -101,11 +101,21 @@ struct InfoTab: View {
     private var titleField: some View {
         VStack(alignment: .leading, spacing: 6) {
             fieldHeader("Title", field: .title, work: .title, suggest: ai.suggestTitle, label: "Suggest Title")
-            TextField(text: $title, prompt: Text("A title for the video")) {
+            // Up to three lines, so a title of the length YouTube shows (70 characters) is read whole in the panel's
+            // 260 pt: on one line the field cut it short with no sign of it. Return still saves it.
+            TextField(text: $title, prompt: Text("A title for the video"), axis: .vertical) {
                 Text("Title")
             }
             .labelsHidden()
-            .textFieldStyle(.roundedBorder)
+            .textFieldStyle(.plain)
+            .lineLimit(1...3)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color(nsColor: .textBackgroundColor)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(focus == .title ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.14))
+            )
             .focused($focus, equals: .title)
             .onSubmit { ai.setTitle(title) }
             .accessibilityLabel(Text("Title"))
