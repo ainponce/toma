@@ -163,6 +163,8 @@ final class EditorShare {
         if isShowcase { return }
         #endif
         guard canStart, let model, let session = model.panelSession, let project = model.exportProject else { return }
+        // The title and the summary typed in the Info tab, saved before the page reads them.
+        model.ai.commitDrafts()
         let document = session.document
         let settings = SettingsStore().settings
         let preferences = settings.share

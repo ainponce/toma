@@ -109,6 +109,8 @@ struct EditorPanel: View {
         .onChange(of: model.selection) { _, selection in
             if let wanted = EditorPanelTab.tab(for: selection, in: model.document), tabs.contains(wanted) { model.panelTab = wanted }
         }
+        // Another tab: what is typed in Info and not saved yet is saved, as leaving its field does.
+        .onChange(of: tab) { model.ai.commitDrafts() }
         .onChange(of: model.hasCamera) { _, has in
             if !has, tab == .camera { model.panelTab = .background }
         }
