@@ -165,7 +165,8 @@ private struct Seam3Drawer: @unchecked Sendable {
         ShaderSource.captionsMetal,
     ]
     let phase3 = [ShaderSource.mediaClipMetal, ShaderSource.calmZoomMetal, ShaderSource.annotationsMetal, ShaderSource.titleCardMetal]
-    #expect(ShaderSource.metal == ShaderSource.coreMetal + (phase2 + phase3).joined())
+    // Phase 4 adds the alpha codecs' part last (4c).
+    #expect(ShaderSource.metal == ShaderSource.coreMetal + (phase2 + phase3).joined() + ShaderSource.alphaMetal)
     // The base adds no shader of its own: phase 3's parts are their milestones' (3a's and 3b's), empty in the base until
     // each fills its own (3b's calm zoom, Z3; 3a's title card, A8, annotations, A6, and imported clip, A9).
     #expect(phase3.allSatisfy { !$0.isEmpty })

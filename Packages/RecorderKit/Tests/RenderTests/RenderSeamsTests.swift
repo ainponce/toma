@@ -192,7 +192,8 @@ private struct SeamDrawer: @unchecked Sendable {
     ]
     // Phase 3 adds its layers after phase 2's, in their draw order (`RenderSeams3Tests`).
     let phase3 = [ShaderSource.mediaClipMetal, ShaderSource.calmZoomMetal, ShaderSource.annotationsMetal, ShaderSource.titleCardMetal]
-    #expect(ShaderSource.metal == ShaderSource.coreMetal + (layers + phase3).joined())
+    // Phase 4 adds the alpha codecs' part last (the preview's checkerboard and the lens that keeps its alpha, 4c).
+    #expect(ShaderSource.metal == ShaderSource.coreMetal + (layers + phase3).joined() + ShaderSource.alphaMetal)
     // The base adds no shader of its own: the library is phase 1's, and each layer's part is its milestone's, all of them
     // written by now (the device frame's and the camera look's, 2b's; privacy's and the keys', 2c's; the captions', 2a's).
     #expect(layers.allSatisfy { !$0.isEmpty })
