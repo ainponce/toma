@@ -377,6 +377,11 @@ import ProjectFormat
                 return try await style(id, appliedTo: scope) != nil
             case let .setBackground(.image(file)):
                 try Self.checkOutsideImage(file)
+                // Not an image: refused before the session opens, which would write a new project's first document.
+                let source = URL(fileURLWithPath: file)
+                guard await Task.detached(operation: { AssetImport.takesAsAnImage(source) }).value else {
+                    throw APIError(.refused, "\(file) is not an image Toma can use (PNG, JPEG, HEIC, TIFF, GIF or PDF)")
+                }
                 return true
             default:
                 return true
