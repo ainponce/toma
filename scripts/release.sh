@@ -86,8 +86,10 @@ rm -rf "$archive" "$bundle" "$dmg" "$staging"
 mkdir -p "$out"
 source_setting=()
 if [[ -n ${SOURCE_CODE_URL:-} ]]; then source_setting=(SOURCE_CODE_URL="$SOURCE_CODE_URL"); fi
+# Apple silicon only (spec §12). project.yml says so for the app's target, but the packages' targets take
+# their architectures from this command line: without ARCHS they build for Intel too, where Float16 doesn't exist.
 xcodebuild archive -quiet -project Toma.xcodeproj -scheme Toma -configuration Release -derivedDataPath build \
-  -archivePath "$archive" -destination 'generic/platform=macOS' "${package_flags[@]}" \
+  -archivePath "$archive" -destination 'generic/platform=macOS' "${package_flags[@]}" ARCHS=arm64 \
   CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$identity" \
   MARKETING_VERSION="$version" CURRENT_PROJECT_VERSION="$build_number" ${source_setting[@]+"${source_setting[@]}"}
 ditto "$archive/Products/Applications/$app.app" "$bundle"
