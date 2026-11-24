@@ -24,15 +24,16 @@ final class LiveTakeHooks: TakeHooks {
 
     /// The shortcut and the covers at the same time; the take records the covers. An iPhone's take records nothing of
     /// the Mac's screen: its desktop is left as it is. Meanwhile the Replay lets a save in progress finish and deletes its
-    /// ring: it is gone before the countdown's seconds run, so before the take's sources start.
+    /// ring, so it is gone before the countdown's seconds run and the take's sources start; it is waited for
+    /// `ReplayController.takeWaitLimit` at most, and then goes on its own: a take never waits longer for it.
     func takeWillStart(_ request: TakeRequest) async -> TakePreparation {
-        async let replaySuspended: Void = replay.suspendForTake()
+        async let replaySuspended = replay.suspendForTake()
         async let focused = focus.takeWillStart(request)
         let coversDesktop = store.settings.hideDesktopIcons && request.selection.mode != .device
         let coverIDs = coversDesktop ? await covers.show() : []
         var preparation = await focused
         preparation.includedWindowIDs += coverIDs
-        await replaySuspended
+        _ = await replaySuspended
         return preparation
     }
 
@@ -52,7 +53,8 @@ final class LiveTakeHooks: TakeHooks {
         }
     }
 
-    /// Also after a start that ended without a take: the Replay starts afresh if it is on.
+    /// Also after a start that ended without a take: the Replay starts afresh a few seconds later if it is on
+    /// (`ReplayController.resumeAfterTake`).
     func takeDidEnd() async {
         covers.hide()
         await focus.takeDidEnd()

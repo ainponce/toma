@@ -11219,6 +11219,17 @@
         }
       }
     },
+    "The Replay is off. %@" : {
+      "comment" : "The capsule under the island when the Replay stops by itself, or its shortcut is pressed while it is off: why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La Repetición está apagada. %@"
+          }
+        }
+      }
+    },
     "The bucket doesn't exist at this endpoint." : {
       "comment" : "Share: the storage has no bucket of that name",
       "localizations" : {

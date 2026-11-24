@@ -18,7 +18,11 @@ import os
 /// deletes whatever a forced quit left, never offered for recovery.
 ///
 /// A problem that stops it (`problem`: the encoder, the disk, sources that do not start) leaves it on in the settings
-/// (`isEnabled`) and off until the next take, the user turning it on again, or the next launch.
+/// (`isEnabled`) and off until the next take, the user turning it on again, or the next launch; `onHeldOff` tells the app.
+///
+/// A take never waits for it long: a start no longer wanted is undone as soon as its sources have started (before the
+/// wallpapers), the ring starts again only `resumeDelay` after a take (not at all if another one starts meanwhile), and
+/// `suspendForTake` returns within its time limit while the ring finishes going on its own.
 @MainActor @Observable
 public final class ReplayController {
     public enum Phase: Equatable, Sendable {
@@ -65,8 +69,13 @@ public final class ReplayController {
 
     /// A save made a project: the island says «Saved: last 30 s». Set by the app delegate.
     @ObservationIgnored public var onSaved: (SavedTake) -> Void = { _ in }
-    /// `phase` changed: the app registers the shortcuts again (`HotKeyBindings.activeActions`).
+    /// `phase` changed.
     @ObservationIgnored public var phaseChanged: () -> Void = {}
+    /// A problem stopped it, or kept it from starting, and holds it off (`problem`): the app says so. Not a save's problem.
+    @ObservationIgnored public var onHeldOff: (Problem) -> Void = { _ in }
+
+    /// How long `suspendForTake` waits for the ring to go by default: a take never waits longer.
+    public static let takeWaitLimit = Duration.seconds(5)
 
     private nonisolated static let logger = Logger(subsystem: "dev.toma.Toma", category: "Replay")
 
@@ -111,11 +120,20 @@ public final class ReplayController {
     @ObservationIgnored private var locked = false
     /// A problem stopped it: off until the next take, the user turning it on again, or the next launch.
     @ObservationIgnored private var heldOff = false
+    /// A take ended less than `resumeDelay` ago: the ring waits, in case another one starts.
+    @ObservationIgnored private var afterTake = false
+    /// Ends `afterTake` once `resumeDelay` has passed.
+    @ObservationIgnored private var resuming: Task<Void, Never>?
+    /// How long after a take the ring waits before it starts again.
+    @ObservationIgnored private let resumeDelay: Duration
 
-    public init(probe: any PermissionProbe, environment: ReplayEnvironment, store: SettingsStore) {
+    /// `resumeDelay`: how long after a take the ring waits before it starts again, so recording again (or re-recording)
+    /// right after a take pays no start and teardown of a ring nobody uses.
+    public init(probe: any PermissionProbe, environment: ReplayEnvironment, store: SettingsStore, resumeDelay: Duration = .seconds(5)) {
         self.probe = probe
         self.environment = environment
         self.store = store
+        self.resumeDelay = resumeDelay
         preferences = store.settings.replay
     }
 
@@ -230,39 +248,67 @@ public final class ReplayController {
     // MARK: - Takes, and quitting
 
     /// A take is about to start (before its countdown): a save in progress finishes, then the ring is deleted. Returns
-    /// once it is gone; nothing starts again until `resumeAfterTake()`.
-    public func suspendForTake() async {
+    /// once it is gone (`true`), or once `timeLimit` has passed (`false`): the take goes ahead, and the ring goes on its
+    /// own. Nothing starts again until `resumeAfterTake()`.
+    @discardableResult public func suspendForTake(timeLimit: Duration = ReplayController.takeWaitLimit) async -> Bool {
         takeInProgress = true
+        endAfterTake()
         reconcile()
-        await driver?.value
+        guard let driver else { return true }
+        do {
+            try await withTimeLimit(timeLimit) { await driver.value }
+            return true
+        } catch {
+            Self.logger.notice("A take starts while the Replay is still going: \(String(describing: error), privacy: .public)")
+            return false
+        }
     }
 
-    /// The take is over: if it is on, the ring starts afresh, also after a problem had stopped it.
+    /// The take is over: if it is on, the ring starts afresh `resumeDelay` from now (unless another take starts first),
+    /// also after a problem had stopped it.
     public func resumeAfterTake() {
         takeInProgress = false
         heldOff = false
+        endAfterTake()
+        afterTake = true
+        let delay = resumeDelay
+        resuming = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            resuming = nil
+            afterTake = false
+            reconcile()
+        }
         reconcile()
     }
 
     /// Toma quits: the ring is deleted (once a save in progress has finished) and nothing starts again. The setting stays.
     public func shutDown() async {
         isShutDown = true
+        endAfterTake()
         activity?.cancel()
         activity = nil
         reconcile()
         await driver?.value
     }
 
+    /// No ring is waiting for the time after a take any more.
+    private func endAfterTake() {
+        resuming?.cancel()
+        resuming = nil
+        afterTake = false
+    }
+
     // MARK: - The ring
 
     /// Whether the ring should record now.
     private var wantsRing: Bool {
-        ready && !isShutDown && preferences.enabled && !heldOff && !takeInProgress && !asleep && !locked
+        ready && !isShutDown && preferences.enabled && !heldOff && !takeInProgress && !afterTake && !asleep && !locked
     }
 
     /// The phase without a ring.
     private var restingPhase: Phase {
-        let waits = takeInProgress || asleep || locked
+        let waits = takeInProgress || afterTake || asleep || locked
         return ready && !isShutDown && preferences.enabled && !heldOff && waits ? .suspended : .off
     }
 
@@ -309,13 +355,23 @@ public final class ReplayController {
 
         var outcome = await attempt(selection, settings.quick, granted: granted)
         // A broken camera, microphone or system audio must not keep the screen from being recorded: once more, the screen
-        // alone.
-        if case .sourcesFailed = outcome, selection.camera != .off || selection.microphone != .off || selection.systemAudio != .off {
+        // alone, if it is still wanted.
+        if case .sourcesFailed = outcome, wantsRing, selection.camera != .off || selection.microphone != .off || selection.systemAudio != .off {
             Self.logger.notice("Could not start the Replay's sources; again with the screen alone")
             selection.camera = .off
             selection.microphone = .off
             selection.systemAudio = .off
             outcome = await attempt(selection, settings.quick, granted: granted.subtracting([.microphone, .camera, .systemAudio]))
+        }
+        // No longer wanted while it started (a take, the lock, sleep, turned off, quitting): undone at once, before the
+        // wallpapers, and no problem held.
+        guard wantsRing else {
+            if case .started(let ring, _, _) = outcome {
+                Self.logger.notice("The Replay started when it was no longer wanted: deleted at once")
+                await ring.coordinator.stopAndDiscard()
+                await ring.warnings.value
+            }
+            return
         }
         switch outcome {
         case .started(let ring, let package, let kinds):
@@ -404,6 +460,7 @@ public final class ReplayController {
         self.problem = problem
         heldOff = true
         setPhase(.off)
+        onHeldOff(problem)
     }
 
     /// Deletes `ring` once a save in progress has finished; nothing if it went by itself meanwhile.
@@ -426,11 +483,14 @@ public final class ReplayController {
         guard ring?.coordinator === coordinator else { return }
         ring = nil
         recordedKinds = []
-        switch end {
-        case .diskFull: problem = .diskFull
-        }
+        let problem: Problem =
+            switch end {
+            case .diskFull: .diskFull
+            }
+        self.problem = problem
         heldOff = true
         reconcile()
+        onHeldOff(problem)
     }
 
     /// Gives the ring N, after the changes before.

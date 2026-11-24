@@ -55,6 +55,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         tabs.selectedTabViewItemIndex = SettingsPane.share.index
     }
 
+    /// Shows the Replay pane (the island's capsule that says why the Replay is off).
+    func showReplayPane() {
+        tabs.selectedTabViewItemIndex = SettingsPane.replay.index
+    }
+
     #if DEBUG
     /// `-TomaShowcase settings <general|recording|shortcuts|share>`: the window on that pane. `recording-keys`: the Recording
     /// pane with "Record Keys to Show Them" on and Input Monitoring not allowed, made up (nothing is saved or asked);

@@ -18,6 +18,12 @@ struct ReplayLook: Equatable {
         case .off, .starting, .suspended: false
         }
     }
+
+    /// Save Replay is a shortcut: while it records, and while it is on in the settings but a problem holds it off, so
+    /// the shortcut says why there is nothing to save instead of doing nothing.
+    var answersShortcut: Bool {
+        records || (isEnabled && phase == .off && problem.map(ReplayText.holdsItOff) == true)
+    }
 }
 
 extension ReplayController {
@@ -78,6 +84,13 @@ enum ReplayText {
                 localized: "Less than a second was recorded: nothing was saved.",
                 comment: "The Replay's last save: it had less than a second")
         }
+    }
+
+    /// It stopped, or could not start, and stays off: «The Replay is off. The disk is almost full.»
+    static func off(_ problem: ReplayController.Problem) -> String {
+        String(
+            localized: "The Replay is off. \(ReplayText.problem(problem))",
+            comment: "The capsule under the island when the Replay stops by itself, or its shortcut is pressed while it is off: why")
     }
 
     /// A problem that keeps it off until the next recording, the user turning it on again, or the next launch.

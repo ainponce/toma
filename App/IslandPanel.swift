@@ -34,6 +34,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     /// Opens a project in the editor (a saved Replay's «Open»); set by the app delegate.
     var openProject: (URL) -> Void = { _ in }
 
+    /// Opens Settings ▸ Replay (a click on the capsule that says why the Replay is off); set by the app delegate.
+    var openReplaySettings: () -> Void = {}
+
     /// While a system permission prompt (drawn by another process, at the top center) is up, the island
     /// goes down to `.normal` so it is never over it (Tasks 16a, 16e and 15): the microphone's, which a take's
     /// start waits for, the camera's, which turning the camera on waits for, and system audio's, which turning
@@ -246,7 +249,12 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         }
         // The Replay recording the last 30 s, made up (fases 4 y 5 design §10.4): `replay`, the wings at rest; `replay-pill`,
         // the pill of a screen without a notch (this one's notch left out); `replay-open`, the open island with its row;
-        // `replay-saved`, «Saved: Last 30 s».
+        // `replay-saved`, «Saved: Last 30 s»; `replay-off`, stopped by a full disk, with the capsule that says so.
+        if variant == "replay-off" {
+            model.showcaseReplay = ReplayLook(isEnabled: true, seconds: 30, phase: .off, problem: .diskFull)
+            replayHeldOff(.diskFull)
+            return
+        }
         if variant.hasPrefix("replay") {
             model.showcaseReplay = ReplayLook(isEnabled: true, seconds: 30, phase: .on(since: .now), problem: nil)
             if variant == "replay-pill" {
@@ -520,6 +528,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         isReplaying = replaying
         retargetOutline()
         showOrHide()
+        updateZones()
     }
 
     /// The Replay's last seconds are saved, off the main thread: the island says so (`replaySaved`), or says why nothing
@@ -527,10 +536,36 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     func saveReplay() {
         Task {
             guard await replay.save() == nil, let problem = replay.problem else { return }
-            capsule.show(CapsuleItem(
-                symbol: NoticePresentation.attention.symbol, text: ReplayText.problem(problem),
-                tint: NoticePresentation.attention.tint))
+            // Off with a problem (the shortcut stays while it is on in the settings): why there is nothing to save.
+            if replay.phase == .off {
+                replayHeldOff(problem)
+            } else {
+                capsule.show(CapsuleItem(
+                    symbol: NoticePresentation.attention.symbol, text: ReplayText.problem(problem),
+                    tint: NoticePresentation.attention.tint))
+            }
         }
+    }
+
+    /// The Replay stopped by itself, or could not start, and stays off (`ReplayController.onHeldOff`): the capsule under
+    /// the island says why for `IslandMachine.noticeDuration`, and a click on it opens Settings ▸ Replay. Never during a
+    /// take, which has the island to itself (the Replay does not run then).
+    func replayHeldOff(_ problem: ReplayController.Problem) {
+        switch machine.state {
+        case .countdown, .recording, .recordingOpen, .notice, .saving: return
+        case .rest, .peek, .open, .choosing, .saved: break
+        }
+        var item = CapsuleItem(
+            symbol: NoticePresentation.attention.symbol, text: ReplayText.off(problem), tint: NoticePresentation.attention.tint)
+        item.action = { [weak self] in self?.openReplaySettings() }
+        item.duration = IslandMachine.noticeDuration
+        capsule.show(item)
+    }
+
+    /// At rest with the Replay's wings under a notch, the island lets the mouse through to the menu bar beside the notch:
+    /// only the notch answers, by its zone (`IslandHoverZones`), as it does on a screen the island is not on.
+    private var passesMouseThrough: Bool {
+        machine.state == .rest && isReplaying && model.top.notch != nil
     }
 
     /// A save of the Replay made a project: «Saved: Last 30 s» with Open, as a take saved shows (`.saved`), from rest, a
@@ -958,11 +993,19 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     /// On the notch screen it is on, the island stands in for that screen's zone, whose panel leaves the
     /// screen: a pointer over that zone is over the island. Also when the zone is entered after it was
-    /// covered (the island arriving from another screen), since its panel can no longer say it was left.
+    /// covered (the island arriving from another screen), since its panel can no longer say it was left. Not while it
+    /// lets the mouse through (`passesMouseThrough`): then the zone is there, under it.
     private func updateZones() {
-        let covered: UInt32? = model.top.notch == nil ? nil : displayID
+        let passes = passesMouseThrough
+        if panel.ignoresMouseEvents != passes { panel.ignoresMouseEvents = passes }
+        let covered: UInt32? = model.top.notch == nil || passes ? nil : displayID
         if let covered { presence.islandCovers(.zone(covered)) }
         guard covered != zones.covered else { return }
+        // The zone of the notch takes over from the island, which hears the pointer no more: where the pointer is now.
+        if passes, presence.inside.contains(.island) {
+            _ = presence.exited(.island)
+            if IslandGeometry.hoverZone(on: model.top).contains(NSEvent.mouseLocation) { _ = presence.entered(.zone(displayID)) }
+        }
         zones.setCovered(covered)
     }
 
@@ -1073,7 +1116,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     /// The island grew under a pointer that did not move, or shrank away from it: no tracking event says so.
     private func outlineSettled() {
-        guard panel.isVisible, !isHiding else { return }
+        // Letting the mouse through, the island is not where the pointer is said to be.
+        guard panel.isVisible, !isHiding, !passesMouseThrough else { return }
         let inside = panel.frame.contains(NSEvent.mouseLocation)
         if inside != presence.inside.contains(.island) {
             inside ? pointer(entered: .island) : pointer(exited: .island)
