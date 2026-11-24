@@ -274,6 +274,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return alert.runModal() == .alertSecondButtonReturn
     }
 
+    /// "This is the Replay's working copy · Save the Replay to edit what it recorded." for the Replay's working package,
+    /// opened from Finder.
+    private func showReplayScratchRefusal() {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = String(
+            localized: "This is the Replay's working copy",
+            comment: "Opening, from Finder, the package where the Replay records: it is not a project")
+        alert.informativeText = String(
+            localized: "Toma deletes it as the Replay goes on. Save the Replay to edit what it recorded.",
+            comment: "Opening, from Finder, the package where the Replay records: it is not a project")
+        NSApp.activate()
+        alert.runModal()
+    }
+
     private func confirmCancellingExport() -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -754,6 +769,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// left in is read and applied (its frame, its panel).
     func showEditor(for url: URL, take: String?) {
         let key = url.standardizedFileURL
+        // The Replay's working package, which it prunes and deletes (fases 4 y 5 design §10.2): never opened as a project.
+        if ReplayScratch.isScratch(ProjectPackage(url: key)) {
+            showReplayScratchRefusal()
+            return
+        }
         if let editor = openEditor(of: key) {
             // Hidden while its re-record is recorded: it comes back once that ends.
             if editor === rerecordingEditor, editor.isHiddenForRerecord { return }

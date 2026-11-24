@@ -106,3 +106,24 @@ private func code(_ body: () throws -> URL) -> APIErrorCode? {
         }
     }
 }
+
+@MainActor @Test func theReplaysWorkingPackageIsNotAProject() async throws {
+    try await withTemporaryDirectory { dir in
+        let environment = APIFixtures.environment(in: dir)
+        // A package with the Replay's marker, as `ReplayScratch.create` leaves one, and a project next to it.
+        let scratch = try await APIFixtures.package(in: dir, name: "current", status: .recording).package
+        try Data("Toma's Replay working package.\n".utf8).write(to: scratch.url.appending(path: ReplayScratch.markerName))
+        #expect(ReplayScratch.isScratch(scratch))
+        _ = try await APIFixtures.package(in: dir, name: "Project")
+        let before = try treeHash(scratch.url)
+
+        #expect(code { try ProjectPaths.package(scratch.url.path, relativeTo: dir) } == .notAProject)
+        for mode in [TomaProject.Mode.read, .edit] {
+            let error = await APIFixtures.apiError { _ = try await TomaProject.open(scratch.url, mode: mode, environment: environment) }
+            #expect(error?.code == .notAProject, "\(mode)")
+            #expect(error?.message.contains("Replay") == true)
+        }
+        #expect(try await ProjectRunner.listProjects(in: dir, environment: environment).map(\.name) == ["Project"])
+        #expect(try treeHash(scratch.url) == before)
+    }
+}

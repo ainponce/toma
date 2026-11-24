@@ -64,7 +64,8 @@ public struct ProjectListing: Codable, Equatable, Sendable {
             guard lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { continue }
             let ext = (name as NSString).pathExtension
             if ext.caseInsensitiveCompare(ProjectPackage.fileExtension) == .orderedSame, name.count > ext.count + 1 {
-                packages.append(url)
+                // The Replay's working package is never a project.
+                if !ReplayScratch.isScratch(ProjectPackage(url: url)) { packages.append(url) }
             } else if depth == 0, name.caseInsensitiveCompare("Trash") == .orderedSame {
                 continue
             } else if depth < maxDepth {
