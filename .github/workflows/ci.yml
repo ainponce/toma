@@ -19,8 +19,13 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - name: Select Xcode 27.2
-        run: sudo xcode-select -s /Applications/Xcode_27.2.app
+      - name: Select Xcode (27.2 if the runner has it, otherwise its newest)
+        run: |
+          ls -d /Applications/Xcode*.app
+          xcode=/Applications/Xcode_27.2.app
+          [ -d "$xcode" ] || xcode=$(ls -d /Applications/Xcode_[0-9]*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
       - run: swift --version
       - name: Check the workflows
         run: bash scripts/check-workflows.sh
@@ -53,6 +58,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - name: Select Xcode 27.2
-        run: sudo xcode-select -s /Applications/Xcode_27.2.app
+      - name: Select Xcode (27.2 if the runner has it, otherwise its newest)
+        run: |
+          ls -d /Applications/Xcode*.app
+          xcode=/Applications/Xcode_27.2.app
+          [ -d "$xcode" ] || xcode=$(ls -d /Applications/Xcode_[0-9]*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
       - run: make tsan
