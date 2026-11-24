@@ -170,7 +170,9 @@ import ProjectFormat
                 return nil
             case .timedOut:
                 return .failure(APIError(
-                    .refused, "Toma, which has the project open, did not answer in time: look there whether it was done"))
+                    .refused,
+                    "Toma, which has the project open, did not answer in time and may still do it: read the project (project_info) "
+                        + "before trying again, or it may be done twice"))
             case .inUse, .system:
                 return .failure(APIError(.refused, "Toma, which has the project open, did not answer (\(error))"))
             }

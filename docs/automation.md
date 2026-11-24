@@ -70,8 +70,9 @@ cuando el cambio ya está en el disco.
   y exportan el último cambio.
 - Por la app no se hacen `transcribe` ni un `setBackground` con una imagen de afuera del proyecto: dan `notAvailable`
   (hacerlo en Toma, o cerrar ahí el proyecto y volver a correr el comando).
-- Si el que tiene el `edit.lock` no es Toma (otro `toma`, otra Mac por una carpeta compartida) o Toma no contesta, sigue
-  siendo `locked`.
+- Si el que tiene el `edit.lock` no es Toma (otro `toma`, otra Mac por una carpeta compartida), o no hay una Toma que
+  conteste, sigue siendo `locked`. Si Toma contesta pero no a tiempo (30 s), es `refused`: puede que igual lo haga, así
+  que leer el proyecto (`info`, `project_info`) antes de volver a mandarlo, o se hace dos veces.
 - Un proyecto con una toma que se está grabando (o que un cierre inesperado dejó a medio grabar y Toma todavía no
   recuperó) se puede leer, y `info` lo dice en `warnings`, pero editarlo y exportarlo dan `locked` (salida 3): en el disco
   está solo lo grabado hasta ese momento. `list_projects` lo dice en `problem`.
