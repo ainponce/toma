@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 name: CI
 
+# By hand for now (Actions ▸ CI ▸ Run workflow): Toma needs Xcode 27, for the Foundation Models API of its on-device
+# AI, and GitHub's macOS runners have Xcode 26 at most. With Xcode 27 on the runners, this goes back to
+# `push:` and `pull_request:`.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
