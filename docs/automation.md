@@ -49,6 +49,12 @@ Todos (menos `mcp`) aceptan `--json`: la salida estándar tiene entonces exactam
 `{"error": {"code": "…", "message": "…"}}`. Sin `--json`, un texto para leer; `edit` escribe una línea por comando a
 medida que lo guarda.
 
+Lo que el documento escrito tiene y la lectura deja afuera (un archivo de música o de una anotación fuera de `assets/`,
+una regla del documento rota, un `edit.json` ilegible, un `edit-log.jsonl` dañado) no pasa en silencio: `validate` lo da
+como problema (no válido), `info` y el resultado de `export` lo dicen en `warnings`, `edit` rechaza (`refused`) lo que
+Toma abre de solo lectura, y el primer comando que deja aparte un `edit.json` o un registro dañados lo dice en el
+`warnings` de su resultado.
+
 **Códigos de salida:** 0 bien; 1 un error; 2 un error de uso (argumentos que no son los del subcomando, o un comando que
 no es de la API: `invalidCommand`); 3 el proyecto lo está editando otro proceso que no es Toma (`locked`).
 

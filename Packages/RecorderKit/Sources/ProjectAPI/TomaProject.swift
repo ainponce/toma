@@ -42,6 +42,10 @@ import ProjectFormat
     private var storage: Storage
     /// The takes the manifest says are being recorded (`TakeStatus.recording`) as the project opened.
     let recordingTakes: [String]
+    /// What reading the project found beyond its document (`EditSession.readDocumentWithFindings`).
+    let findings: ReadFindings
+    /// What the opening of the session did that the next result tells: an `edit.json` or a log set aside.
+    private var openingWarnings: [String] = []
     /// The `documentVersion` of the edit document on disk as the project opened; `nil` without one.
     private let openedDocumentVersion: Int?
     private let diskHistory: DiskHistory
@@ -53,13 +57,14 @@ import ProjectFormat
 
     private init(
         url: URL, mode: Mode, environment: APIEnvironment, storage: Storage, openedDocumentVersion: Int?, diskHistory: DiskHistory,
-        recordingTakes: [String]
+        recordingTakes: [String], findings: ReadFindings
     ) {
         self.url = url
         self.mode = mode
         self.environment = environment
         self.storage = storage
         self.recordingTakes = recordingTakes
+        self.findings = findings
         self.openedDocumentVersion = openedDocumentVersion
         self.diskHistory = diskHistory
     }
@@ -72,26 +77,34 @@ import ProjectFormat
     public static func open(_ url: URL, mode: Mode, environment: APIEnvironment = .standard) async throws -> TomaProject {
         try ProjectPaths.checkPackage(url)
         let context = environment.editContext
-        let read = await Task.detached { () -> Result<(LoadedProject, EditDocument, Int?, DiskHistory, Bool), any Error> in
+        let read = await Task.detached {
+            () -> Result<(LoadedProject, EditDocument, Int?, ReadFindings, DiskHistory, Bool), any Error> in
             Result {
-                let (project, document, diskVersion) = try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context)
+                let (project, document, diskVersion, findings) = try EditSession.readDocumentWithFindings(
+                    url, take: nil, context: context)
                 let editing = mode == .edit
                 return (
-                    project, document, Self.hasEditFiles(project) ? diskVersion : nil,
+                    project, document, Self.hasEditFiles(project) ? diskVersion : nil, findings,
                     editing ? Self.diskHistory(of: project) : DiskHistory(),
                     // Asked about, never taken nor made (`RecordingLock.isHeld`), as `EditSession` asks about it.
                     editing && RecordingLock.isHeld(at: project.package.editLockURL))
             }
         }.value
         switch read {
-        case let .success((project, document, version, history, locked)):
+        case let .success((project, document, version, findings, history, locked)):
             let recording = project.takes.filter { $0.status == .recording }.map(\.id)
             if mode == .edit, !recording.isEmpty { throw beingRecorded(recording) }
             if locked { throw apiError(ReadOnlyReason.openElsewhere) }
+            // What the editor opens read-only, the API does not edit either: said with what it found.
+            if mode == .edit, let refusal = findings.refusal {
+                let found = Self.documentWarnings(findings)
+                throw APIError(
+                    .refused, apiError(refusal).message + (found.isEmpty ? "" : ": " + found.joined(separator: "; ")))
+            }
             return TomaProject(
                 url: url, mode: mode, environment: environment,
                 storage: mode == .read ? .read(project, document) : .editing(project, document), openedDocumentVersion: version,
-                diskHistory: history, recordingTakes: recording)
+                diskHistory: history, recordingTakes: recording, findings: findings)
         case let .failure(error):
             throw apiError(error)
         }
@@ -128,9 +141,37 @@ import ProjectFormat
         return openedDocumentVersion
     }
 
-    /// What the project is in that its document does not say, a sentence each (`ProjectReport.warnings`).
+    /// What the project is in that its document does not say, a sentence each (`ProjectReport.warnings`): a take being
+    /// recorded, and what the editor would open read-only for, set aside or rewrite (`documentWarnings`).
     var warnings: [String] {
-        recordingTakes.isEmpty ? [] : [Self.beingRecorded(recordingTakes).message]
+        (recordingTakes.isEmpty ? [] : [Self.beingRecorded(recordingTakes).message]) + Self.documentWarnings(findings)
+    }
+
+    /// What `findings` say of the document on disk as it is read, shown and exported, a sentence each.
+    nonisolated static func documentWarnings(_ findings: ReadFindings) -> [String] {
+        var warnings: [String] = []
+        if !findings.problems.isEmpty {
+            warnings.append(
+                "the document breaks Toma's rules, so it is read, shown and exported without what breaks them and Toma opens it "
+                    + "read-only: " + findings.problems.map(\.sentence).joined(separator: "; "))
+        }
+        if findings.undrawableValues {
+            warnings.append(
+                "the document has a frame rate or a clip speed Toma cannot draw: it is read, shown and exported with the nearest "
+                    + "one, and Toma opens it read-only")
+        }
+        if findings.keepsSnapshotApart {
+            warnings.append(
+                "edit.json cannot be read: the project is read and exported without its edits, and its first edit sets edit.json "
+                    + "aside (edit.json.damaged-…) and starts again from the recording")
+        }
+        if findings.rewritesLog {
+            let upTo = findings.recoveredUpTo.map { " up to " + $0.formatted(.iso8601) } ?? ""
+            warnings.append(
+                "edit-log.jsonl is damaged or does not match its document: the project is read and exported as it was edited\(upTo), "
+                    + "and its first edit sets the log aside and rewrites it up to there")
+        }
+        return warnings
     }
 
     /// `locked` for a project whose takes `takes` are being recorded.
@@ -288,6 +329,17 @@ import ProjectFormat
             throw APIError(.refused, "the project is closed")
         }
         storage = .edit(session)
+        // The opening did what the read found it would: the result of this command says so.
+        if findings.keepsSnapshotApart {
+            openingWarnings.append(
+                "edit.json could not be read: it was set aside (edit.json.damaged-…) and the project started again from the "
+                    + "recording, without its edits")
+        }
+        if findings.rewritesLog {
+            openingWarnings.append(
+                "edit-log.jsonl was damaged or did not match its document: it was set aside and rewritten up to "
+                    + (findings.recoveredUpTo?.formatted(.iso8601) ?? "its last good line") + "; what came after it is lost")
+        }
         return session
     }
 
@@ -525,9 +577,13 @@ import ProjectFormat
         case .editing: diskHistory.undo?.rawValue
         case .read: nil
         }
+        // What the opening set aside is told once, by the first result after it.
+        let warnings = openingWarnings
+        openingWarnings = []
         return CommandResult(
             command: command, changed: changed, label: label, created: created,
-            duration: TimeMap(sequence: document.sequence).durationSeconds, undo: undo, via: .project)
+            duration: TimeMap(sequence: document.sequence).durationSeconds, undo: undo, via: .project,
+            warnings: warnings.isEmpty ? nil : warnings)
     }
 
     // MARK: - Errors

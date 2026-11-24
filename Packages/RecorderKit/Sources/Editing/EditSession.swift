@@ -87,6 +87,38 @@ public enum ReadOnlyReason: Equatable, Sendable {
     case inTrash
 }
 
+/// What reading a project without the lock found beyond the document it shows (`EditSession.readDocumentWithFindings`):
+/// what the editor would open read-only for, or set aside or rewrite as it opens for editing. Nothing of it is written
+/// by the read.
+package struct ReadFindings: Equatable, Sendable {
+    /// Why the editor would open it read-only (`unsafeEditFiles` for a document no render can draw as it is written).
+    package var refusal: ReadOnlyReason?
+    /// The rules the document breaks as it is written (`DocumentRules.problems`): what is shown leaves out or holds what
+    /// breaks one, except a sequence out of order and a title or summary too long, which are shown as they are.
+    package var problems: [DocumentProblem]
+    /// The document as written has a frame rate or a clip speed no render draws: it is shown with the nearest one.
+    package var undrawableValues: Bool
+    /// `edit.json` cannot be read and nothing else holds the edit: the take is shown without it, and the first edit
+    /// keeps it apart (`edit.json.damaged-…`) and starts again.
+    package var keepsSnapshotApart: Bool
+    /// The log is damaged or does not match its document: what is shown is the edit up to `recoveredUpTo`, and the first
+    /// edit keeps the log apart and rewrites it up to there.
+    package var rewritesLog: Bool
+    package var recoveredUpTo: Date?
+
+    package init(
+        refusal: ReadOnlyReason? = nil, problems: [DocumentProblem] = [], undrawableValues: Bool = false,
+        keepsSnapshotApart: Bool = false, rewritesLog: Bool = false, recoveredUpTo: Date? = nil
+    ) {
+        self.refusal = refusal
+        self.problems = problems
+        self.undrawableValues = undrawableValues
+        self.keepsSnapshotApart = keepsSnapshotApart
+        self.rewritesLog = rewritesLog
+        self.recoveredUpTo = recoveredUpTo
+    }
+}
+
 /// What a session has to tell (design §5.9).
 public enum EditNotice: Equatable, Sendable {
     /// A version 1 or 2 project without edits (or a version 3 one upgraded from them, without a log yet) keeps its look.
@@ -316,10 +348,21 @@ public final class EditSession {
     package nonisolated static func readDocumentWithDiskVersion(
         _ url: URL, take: String?, context: EditContext, readingEvents read: @escaping LoadedProject.EventsReader
     ) throws -> (LoadedProject, EditDocument, diskVersion: Int) {
+        let (project, document, diskVersion, _) = try readDocumentWithFindings(url, take: take, context: context, readingEvents: read)
+        return (project, document, diskVersion)
+    }
+
+    /// `readDocumentWithDiskVersion(_:take:context:)`, and what that read found beyond the document it shows
+    /// (`ReadFindings`): what an editable opening would open read-only for, set aside or rewrite. For the project API,
+    /// which tells it (fases 4 y 5, final review I2).
+    package nonisolated static func readDocumentWithFindings(
+        _ url: URL, take: String?, context: EditContext,
+        readingEvents read: @escaping LoadedProject.EventsReader = LoadedProject.takeEvents
+    ) throws -> (LoadedProject, EditDocument, diskVersion: Int, findings: ReadFindings) {
         let project = try readOnlyProject(url, take: take, readingEvents: read)
         let files = try readOnlyEditFiles(of: project)
-        let (document, diskVersion) = try readOnlyDocument(of: project, files: files, context: context)
-        return (try shown(project, by: document, take: take), document, diskVersion)
+        let (document, diskVersion, findings) = try readOnlyDocument(of: project, files: files, context: context)
+        return (try shown(project, by: document, take: take), document, diskVersion, findings)
     }
 
     /// What the library shows of the document `readDocumentWithDiskVersion(_:take:context:)` reads (design §6.8): its
@@ -351,7 +394,7 @@ public final class EditSession {
                 return (project, outline)
             }
         }
-        let (document, diskVersion) = try readOnlyDocument(of: project, files: files, context: context)
+        let (document, diskVersion, _) = try readOnlyDocument(of: project, files: files, context: context)
         return (try shown(project, by: document, take: take), DocumentOutline(document, diskVersion: diskVersion))
     }
 
@@ -393,16 +436,21 @@ public final class EditSession {
     /// one), and the version it is written in on disk. Its events are read only for a document that comes from them.
     private nonisolated static func readOnlyDocument(
         of project: LoadedProject, files: EditFiles?, context: EditContext
-    ) throws -> (EditDocument, diskVersion: Int) {
+    ) throws -> (EditDocument, diskVersion: Int, findings: ReadFindings) {
         guard let files else {
             try project.readEvents()
-            return (.legacy(for: project), EditDocument.currentVersion)
+            return (.legacy(for: project), EditDocument.currentVersion, ReadFindings())
         }
         let resolution = try Resolution.of(project, files: files, context: context) { project in
             try project.readEvents()
             return project
         }
-        return (resolution.shown, resolution.diskVersion)
+        let written = resolution.written ?? resolution.document
+        let findings = ReadFindings(
+            refusal: resolution.refusal, problems: DocumentRules.problems(in: written),
+            undrawableValues: !written.drawsItsValues, keepsSnapshotApart: resolution.keepsSnapshotApart,
+            rewritesLog: resolution.rewritesLog, recoveredUpTo: resolution.recoveredUpTo)
+        return (resolution.shown, resolution.diskVersion, findings)
     }
 
     /// Where the package is now (`F_GETPATH` of its folder), for what goes by path (importing an asset, the export, the
@@ -1713,6 +1761,8 @@ private struct Resolution: Sendable {
     /// The `logSequence` of `edit.json`, when it names a line the log keeps.
     var snapshotSeq: Int?
     var refusal: ReadOnlyReason?
+    /// The document as it is written, when `document` is what a render can draw of it (`drawable`); `nil` otherwise.
+    var written: EditDocument?
     /// The `documentVersion` `document` is written in on disk (1c design §13.2): the replay's (`EditReplay.version`), the
     /// snapshot's it starts from, or the current one for a legacy or new document.
     var diskVersion = EditDocument.currentVersion
@@ -1787,6 +1837,7 @@ private struct Resolution: Sendable {
         if files.unsafe != nil { resolution.refusal = .unsafeEditFiles }
         if !resolution.document.isDrawable {
             // Task 5: a document edited by hand never reaches a render it would stop; it is only shown.
+            resolution.written = resolution.document
             resolution.document = resolution.document.drawable
             resolution.refusal = resolution.refusal ?? .unsafeEditFiles
         }
@@ -2017,8 +2068,12 @@ extension EditDocument {
     /// every rule of the document of phase 3 (`DocumentRules.problems(in:)`, base plan decision 6), so a step that breaks
     /// one is refused.
     fileprivate var isDrawable: Bool {
+        drawsItsValues && DocumentRules.problems(in: self).isEmpty
+    }
+
+    /// Its frame rate is one a render draws, and every clip's speed is in `ClipSpeed.range`.
+    fileprivate var drawsItsValues: Bool {
         Self.frameRates.contains(frameRate) && sequence.allSatisfy { $0.content != nil || ClipSpeed.range.contains($0.speed) }
-            && DocumentRules.problems(in: self).isEmpty
     }
 
     /// This document with its frame rate the nearest allowed one and its speeds as `TimeMap` reads them

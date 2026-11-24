@@ -95,7 +95,8 @@ enum CLIOutput {
     static func command(_ result: CommandResult) -> String {
         let done = result.changed ? (result.label ?? "done") : "no change"
         let created = result.created.map { ", created \($0)" } ?? ""
-        return "\(result.command): \(done)\(created), output \(time(result.duration))\n"
+        let warnings = (result.warnings ?? []).map { "  warning: \($0)\n" }.joined()
+        return "\(result.command): \(done)\(created), output \(time(result.duration))\n" + warnings
     }
 
     /// `toma export`: where the file is and what it is.

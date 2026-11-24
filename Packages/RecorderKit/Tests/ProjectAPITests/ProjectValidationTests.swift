@@ -76,3 +76,85 @@ import Testing
         }
     }
 }
+
+/// What a read leaves out of the document as written, or would set aside, is said: by `validate`, `info`, the export
+/// and the first edit (final review, area 1, I2).
+@Suite struct WhatTheReadLeavesOutTests {
+    /// `project` with `document` written as the log's `create` and the snapshot.
+    private func write(_ document: EditDocument, into package: ProjectPackage) throws {
+        var document = document
+        document.logSequence = 1
+        let line = try EditLogEntry.create(seq: 1, document: document, app: APIFixtures.app)
+            .jsonLine(writingDocumentAt: EditDocument.currentVersion)
+        try DurableFile.writeAtomically(Data((line + "\n").utf8), to: package.editLogURL)
+        try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(document), to: package.editURL)
+    }
+
+    @MainActor @Test func aDocumentThatBreaksARuleIsNotValidAndSaysWhatIsLeftOut() async throws {
+        try await withTemporaryDirectory { dir in
+            let environment = APIFixtures.environment(in: dir)
+            let project = try await APIFixtures.package(in: dir)
+            let ids = APIFixtures.IDs()
+            var document = NewDocument.make(project: project, defaultStyle: .toma, makeID: { ids.make($0) })
+            // Music of a file outside `assets/`: the read leaves it out, and the editor opens the project read-only.
+            document.music.items = [MusicCommands.newItem(id: "mu-00000001", source: "Music/x.m4a", output: 0..<APIFixtures.ns(5))]
+            try write(document, into: project.package)
+            let url = project.package.url
+
+            let validation = await ProjectRunner.validate(url, environment: environment)
+            #expect(!validation.valid)
+            #expect(validation.problems.contains { $0.contains("Music/x.m4a") })
+            let report = try await ProjectRunner.report(url, environment: environment)
+            #expect(report.music.isEmpty)
+            #expect(report.warnings?.contains { $0.contains("Music/x.m4a") && $0.contains("read-only") } == true)
+            let edit = await ProjectRunner.apply([.setTitle("x")], to: url, environment: environment)
+            #expect(edit.error?.code == .refused)
+            #expect(edit.error?.message.contains("Music/x.m4a") == true)
+            let export = try await ProjectRunner.export(
+                url, to: dir.appending(path: "out.gif"), request: ExportRequest(kind: .gif, size: 480, fps: 10),
+                environment: environment, progress: nil)
+            #expect(export.warnings.contains { $0.contains("Music/x.m4a") })
+        }
+    }
+
+    @MainActor @Test func anUnreadableSnapshotIsNotValidAndItsSettingAsideIsSaid() async throws {
+        try await withTemporaryDirectory { dir in
+            let environment = APIFixtures.environment(in: dir)
+            let package = try await APIFixtures.package(in: dir).package
+            try Data(#"{"documentVersion":5, garbage"#.utf8).write(to: package.editURL)
+
+            let validation = await ProjectRunner.validate(package.url, environment: environment)
+            #expect(!validation.valid)
+            #expect(validation.problems.contains { $0.hasPrefix("edit.json cannot be read") })
+            let report = try await ProjectRunner.report(package.url, environment: environment)
+            #expect(report.warnings?.contains { $0.hasPrefix("edit.json cannot be read") } == true)
+
+            let edit = await ProjectRunner.apply([.setTitle("Again"), .setSummary("Then")], to: package.url, environment: environment)
+            #expect(edit.error == nil)
+            #expect(edit.results.first?.warnings?.first?.contains("set aside") == true)
+            #expect(edit.results.last?.warnings == nil)
+            let names = try FileManager.default.contentsOfDirectory(atPath: package.url.path)
+            #expect(names.contains { $0.hasPrefix("edit.json.damaged-") })
+        }
+    }
+
+    @MainActor @Test func aDamagedLogIsSaidAsItIsReadAndRewritten() async throws {
+        try await withTemporaryDirectory { dir in
+            let environment = APIFixtures.environment(in: dir)
+            let url = try await APIFixtures.transcribed(in: dir, environment: environment)
+            _ = await ProjectRunner.apply([.setTitle("Before")], to: url, environment: environment)
+            let handle = try FileHandle(forWritingTo: ProjectPackage(url: url).editLogURL)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data("{\"type\":\"do\",garbage\n".utf8))
+            try handle.close()
+
+            let report = try await ProjectRunner.report(url, environment: environment)
+            #expect(report.info?.title == "Before")
+            #expect(report.warnings?.contains { $0.hasPrefix("edit-log.jsonl is damaged") } == true)
+            #expect(await !ProjectRunner.validate(url, environment: environment).valid)
+            let edit = await ProjectRunner.apply([.setTitle("After")], to: url, environment: environment)
+            #expect(edit.results.first?.warnings?.first?.hasPrefix("edit-log.jsonl was damaged") == true)
+            #expect(try await ProjectRunner.report(url, environment: environment).warnings == nil)
+        }
+    }
+}

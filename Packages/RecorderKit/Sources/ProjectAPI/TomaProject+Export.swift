@@ -94,9 +94,12 @@ extension TomaProject {
         let report = progress ?? { _ in }
         do {
             // The exporters end with exactly 1, once the file is in place.
-            return try await Self.export(
+            var result = try await Self.export(
                 project: project, document: document, format: format, caches: caches, workers: workers, to: destination,
                 progress: report)
+            // What is exported is the document as it is read: what it leaves out of the one written is said.
+            result.warnings = Self.documentWarnings(findings) + result.warnings
+            return result
         } catch {
             // Nobody else waits for the jobs of these workers.
             await workers.jobs.cancelAll()
