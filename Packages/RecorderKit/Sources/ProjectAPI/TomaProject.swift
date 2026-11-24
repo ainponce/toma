@@ -321,8 +321,10 @@ import ProjectFormat
 
     /// Waits for what the session handed to the disk (an upgrade to version 3 included) and says what kept it from being
     /// saved: another process that took the package first (`locked`), or a disk that refused it (`refused`: the change
-    /// waits in memory and is tried again while the project is open).
-    private func settle(_ session: EditSession, reopened: Int) async throws(APIError) {
+    /// waits in memory and is tried again while the project is open). It throws only `APIError`, untyped: with
+    /// `async throws(APIError)` the optimizer of Swift 6.4.2 crashes splitting the coroutines of whoever inlines it, and no
+    /// Release build of the module comes out.
+    private func settle(_ session: EditSession, reopened: Int) async throws {
         _ = await session.flushed()
         try checkEditable(session)
         if session.reopenings > reopened {
