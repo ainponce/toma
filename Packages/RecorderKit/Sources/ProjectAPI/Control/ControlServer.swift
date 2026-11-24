@@ -12,9 +12,13 @@ import os
 /// hearing of it; the other connections are answered meanwhile (each its own, at most `maxConnections` at once). No
 /// network: `AF_UNIX` only.
 ///
-/// `start()` never removes what it did not make: a file, a folder or a link at the path is `notASocket`, and a socket
-/// another server (another copy of the app) answers on is `inUse`; a socket nobody answers on, left by a crash, is
-/// replaced. `stop()` removes the socket only while it is still its own (the same inode).
+/// One server per path: it holds `flock` on the file next to the socket named like it with `.lock`
+/// (`control.lock` for `control.sock`, `ControlWire.lockPath`) for as long as it listens, and the kernel lets go of it
+/// when the process ends, crash included. `start()` without that lock is `inUse` (another copy of the app listens, even
+/// one too busy to accept): nothing is probed nor removed. With it, a socket of this user at the path is a crash's and
+/// is replaced; anything else there (a file, a folder, a link, another user's socket) is `notASocket` and never
+/// removed. `stop()` removes the socket only while it is still its own (the same inode), then lets go of the lock; the
+/// lock file stays (removing it would let two servers lock two files of one name).
 public final class ControlServer: Sendable {
     /// A request's most bytes, its `\n` included: 1 MiB.
     public static let maxRequestBytes = 1 << 20
@@ -38,6 +42,8 @@ public final class ControlServer: Sendable {
 
     private struct Listening {
         var source: any DispatchSourceRead
+        /// The open lock file (`ControlWire.lockPath`), locked: closed, it lets go, once the socket is removed.
+        var lock: Int32
         /// The socket file this server made: removed by `stop()` only while it is still there.
         var device: dev_t
         var inode: ino_t
@@ -65,17 +71,28 @@ public final class ControlServer: Sendable {
         stop()
     }
 
-    /// Listens on `path`: the socket is made there with mode `0600` (its folder is the caller's: the app's is `0700`).
-    /// A socket of this user nobody answers on is removed first; anything else there is left as it is. Starting a server
-    /// that is listening does nothing.
-    /// - Throws: `pathTooLong`, `notASocket` (a file, a folder, a link, or a socket of another user at the path), `inUse`
-    ///   (another server answers there), `system` (the call that failed).
+    /// Listens on `path`, holding the lock of its server (`ControlWire.lockPath`): the socket is made there with mode
+    /// `0600` (its folder is the caller's: the app's is `0700`). A socket of this user left there is removed first;
+    /// anything else there is left as it is. Starting a server that is listening does nothing.
+    /// - Throws: `pathTooLong`, `inUse` (another server holds the lock), `notASocket` (a file, a folder, a link, or a
+    ///   socket of another user at the path, or a lock file that is not a file of this user), `system` (the call that
+    ///   failed).
     public func start() throws(ControlSocketError) {
         guard listening.withLock({ $0 == nil }) else { return }
         let file = path.path
         guard let address = ControlWire.address(file) else { throw .pathTooLong }
-        try Self.clearStale(file, address: address)
+        let lock = try Self.lock(ControlWire.lockPath(for: path))
+        do throws(ControlSocketError) {
+            try Self.clearStale(file)
+            try bindAndListen(at: file, address: address, lock: lock)
+        } catch {
+            close(lock)
+            throw error
+        }
+    }
 
+    /// Binds and listens at `file` (`address`), holding `lock`.
+    private func bindAndListen(at file: String, address: sockaddr_un, lock: Int32) throws(ControlSocketError) {
         let fd = try ControlWire.socket()
         var bound = address
         let result = withUnsafePointer(to: &bound) { pointer in
@@ -84,7 +101,7 @@ public final class ControlServer: Sendable {
         guard result == 0 else {
             let code = errno
             close(fd)
-            // Another server bound it since it was looked at.
+            // Something bound it since it was looked at, without the lock.
             throw code == EADDRINUSE ? .inUse : .system(code)
         }
         // Before anyone could connect (`listen`), and the socket made by `bind` has no write permission for the others
@@ -101,7 +118,7 @@ public final class ControlServer: Sendable {
             fileDescriptor: fd, queue: DispatchQueue(label: "dev.toma.ControlServer.accept", qos: .userInitiated))
         source.setEventHandler { [weak self] in self?.acceptAll(fd) }
         source.setCancelHandler { close(fd) }
-        listening.withLock { $0 = Listening(source: source, device: info.st_dev, inode: info.st_ino) }
+        listening.withLock { $0 = Listening(source: source, lock: lock, device: info.st_dev, inode: info.st_ino) }
         source.resume()
     }
 
@@ -119,29 +136,48 @@ public final class ControlServer: Sendable {
         {
             unlink(path.path)
         }
+        // After the socket is gone: the next server finds nothing of this one's.
+        close(stopping.lock)
     }
 
     // MARK: - Private
 
-    /// Removes a socket of this user at `file` that nobody answers on; leaves anything else.
-    private static func clearStale(_ file: String, address: sockaddr_un) throws(ControlSocketError) {
+    /// Takes the lock of the server of a path (`ControlWire.lockPath`): `inUse` while another server holds it. A
+    /// client's look at it (`ControlWire.isServing`, a shared lock for an instant) is waited out for a moment.
+    private static func lock(_ lockPath: String) throws(ControlSocketError) -> Int32 {
+        var tries = 0
+        while true {
+            let fd = open(lockPath, O_CREAT | O_RDWR | O_EXLOCK | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            if fd >= 0 {
+                var info = stat()
+                guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == geteuid() else {
+                    close(fd)
+                    throw .notASocket
+                }
+                return fd
+            }
+            switch errno {
+            case EWOULDBLOCK where tries < 10:
+                tries += 1
+                usleep(20_000)
+            case EWOULDBLOCK: throw .inUse
+            case EINTR: continue
+            case ELOOP, EISDIR: throw .notASocket
+            case let code: throw .system(code)
+            }
+        }
+    }
+
+    /// With the lock held, nobody else listens at `file`: a socket of this user there is a crash's, and is removed.
+    /// Anything else is left as it is.
+    private static func clearStale(_ file: String) throws(ControlSocketError) {
         var info = stat()
         guard lstat(file, &info) == 0 else {
             guard errno == ENOENT else { throw .system(errno) }
             return
         }
         guard info.st_mode & S_IFMT == S_IFSOCK, info.st_uid == geteuid() else { throw .notASocket }
-        let probe = try ControlWire.socket()
-        let failure = ControlWire.connect(probe, to: address)
-        close(probe)
-        switch failure {
-        case nil: throw .inUse
-        case ECONNREFUSED?:
-            // A crash's: nobody listens on it.
-            guard unlink(file) == 0 || errno == ENOENT else { throw .system(errno) }
-        case ENOENT?: return
-        case let code?: throw .system(code)
-        }
+        guard unlink(file) == 0 || errno == ENOENT else { throw .system(errno) }
     }
 
     /// Takes every connection waiting, each answered on its own.
@@ -149,8 +185,14 @@ public final class ControlServer: Sendable {
         while true {
             let client = accept(fd, nil, nil)
             if client < 0 {
-                if errno == EINTR { continue }
-                return  // EAGAIN: none left; anything else: the next event tries again.
+                switch errno {
+                case EINTR: continue
+                case EMFILE, ENFILE:
+                    // No descriptor to take it with: the event would come back at once and spin. A pause, then again.
+                    pauseAccepting()
+                default: break  // EAGAIN: none left; anything else: the next event tries again.
+                }
+                return
             }
             _ = fcntl(client, F_SETFD, FD_CLOEXEC)
             var on: Int32 = 1
@@ -168,6 +210,14 @@ public final class ControlServer: Sendable {
             }
             connections.async { [self] in serve(client) }
         }
+    }
+
+    /// Stops taking connections for `acceptPause` (the process is out of descriptors), then takes them again.
+    private func pauseAccepting() {
+        guard let source = listening.withLock({ $0?.source }) else { return }
+        Self.logger.error("Control socket: out of file descriptors; connections wait")
+        source.suspend()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .milliseconds(100)) { source.resume() }
     }
 
     /// One connection, from its peer's check to its answer; closed in every case.

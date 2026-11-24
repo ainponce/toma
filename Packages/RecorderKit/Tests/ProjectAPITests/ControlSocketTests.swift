@@ -158,8 +158,6 @@ import Testing
             for _ in 0..<3 {
                 #expect(try await ControlClient.send(.ping, to: path).handled)
             }
-            // Answered while the silent one still waits (its 3 s are not up).
-            #expect(isOpen(silent), "the silent client was dropped before the others were answered")
             #expect(readAll(silent, within: .seconds(10)).isEmpty)
             #expect(ContinuousClock.now - started >= .milliseconds(2900))
             // One that sends half a line and stops, the same.
@@ -168,6 +166,23 @@ import Testing
             _ = Array(#"{"op":"pi"#.utf8).withUnsafeBytes { Darwin.write(slow, $0.baseAddress!, $0.count) }
             #expect(readAll(slow, within: .seconds(10)).isEmpty)
             #expect(called.withLock { $0 } == 3)
+        }
+    }
+
+    /// A client that says nothing never holds up the others: they are answered while it still waits (with a time long
+    /// enough that a loaded Mac never reaches it first).
+    @Test func othersAreAnsweredWhileOneSaysNothing() async throws {
+        try await withShortDirectory { dir in
+            let path = dir.appending(path: "control.sock")
+            let server = ControlServer(path: path, requestTimeout: .seconds(60)) { _ in .done }
+            try server.start()
+            defer { server.stop() }
+            let silent = try connected(to: path)
+            defer { close(silent) }
+            for _ in 0..<3 {
+                #expect(try await ControlClient.send(.ping, to: path, timeout: .seconds(30)).handled)
+            }
+            #expect(isOpen(silent), "the silent client was dropped before the others were answered")
         }
     }
 
@@ -227,6 +242,58 @@ import Testing
             }
             #expect(answers.count == 20)
             for (n, index) in answers { #expect(index == n) }
+        }
+    }
+
+    /// Review M1: one server per path by the lock next to it (`control.lock`), never by probing the socket. A server
+    /// whose socket went away (or is too busy to accept) still has the path: another one is `inUse` and removes nothing;
+    /// once it stops, the lock file stays and the next one starts.
+    @Test func theLockNotAProbeSaysWhoServes() async throws {
+        try await withShortDirectory { dir in
+            let path = dir.appending(path: "control.sock"), lock = dir.appending(path: "control.lock")
+            let first = ControlServer(path: path) { _ in .done }
+            try first.start()
+            #expect(FileManager.default.fileExists(atPath: lock.path))
+            // Its socket gone: a probe would say nobody serves, but the lock says it does.
+            unlink(path.path)
+            let second = ControlServer(path: path) { _ in .done }
+            #expect(throws: ControlSocketError.inUse) { try second.start() }
+            #expect(!FileManager.default.fileExists(atPath: path.path))
+            // A client is told that a server is there but does not take it: after its time, not at once.
+            let started = ContinuousClock.now
+            #expect(await socketError { _ = try await ControlClient.send(.ping, to: path, timeout: .milliseconds(300)) } == .timedOut)
+            #expect(ContinuousClock.now - started >= .milliseconds(250))
+            first.stop()
+            #expect(FileManager.default.fileExists(atPath: lock.path))
+            #expect(await socketError { _ = try await ControlClient.send(.ping, to: path) } == .noServer)
+            try second.start()
+            defer { second.stop() }
+            #expect(try await ControlClient.send(.ping, to: path).handled)
+        }
+    }
+
+    /// A crash leaves the socket and the lock file, unlocked (the kernel let go of it): the next server takes both.
+    @Test func aCrashsSocketAndLockAreTakenOver() async throws {
+        try await withShortDirectory { dir in
+            let path = dir.appending(path: "control.sock")
+            close(try boundSocket(at: path))
+            FileManager.default.createFile(atPath: dir.appending(path: "control.lock").path, contents: nil)
+            let server = ControlServer(path: path) { _ in .done }
+            try server.start()
+            defer { server.stop() }
+            #expect(try await ControlClient.send(.ping, to: path).handled)
+        }
+    }
+
+    /// A lock file that is a link, or a folder, is not this server's: nothing is followed nor removed.
+    @Test func aLockThatIsALinkIsNotTaken() async throws {
+        try await withShortDirectory { dir in
+            let path = dir.appending(path: "control.sock"), target = dir.appending(path: "elsewhere")
+            try Data("x".utf8).write(to: target)
+            try FileManager.default.createSymbolicLink(at: dir.appending(path: "control.lock"), withDestinationURL: target)
+            #expect(throws: ControlSocketError.notASocket) { try ControlServer(path: path) { _ in .done }.start() }
+            #expect(try Data(contentsOf: target) == Data("x".utf8))
+            #expect(!FileManager.default.fileExists(atPath: path.path))
         }
     }
 

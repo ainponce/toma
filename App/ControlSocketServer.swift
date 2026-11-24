@@ -27,17 +27,27 @@ import os
         }
     }
 
-    /// Listens, the socket's folder made with `0700` if it is not there. Says in the log why it cannot.
+    /// Listens, in the socket's folder of `0700` (made, or set so, if it is a folder of the user's; anything else there and
+    /// it does without). Says in the log why it cannot.
     func start() {
         guard server == nil else { return }
         let path = ControlServer.defaultPath
-        let folder = path.deletingLastPathComponent()
-        if mkdir(folder.path, 0o700) != 0, errno != EEXIST {
-            Self.logger.error("Cannot make \(folder.path, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
-            return
-        }
+        guard Self.prepareFolder(path.deletingLastPathComponent()) else { return }
         let server = ControlServer(path: path) { [weak self] request in
-            await self?.answer(request) ?? .notHandled
+            guard request.op != .ping else { return .done }
+            // The path the client gave is looked at off the main actor: a volume that hangs never holds the interface.
+            let package = request.package
+            let found = await Task.detached { () -> Result<ControlPackageID, APIError> in
+                do throws(APIError) {
+                    return .success(try ControlHandling.packageID(package))
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+            switch found {
+            case let .success(id): return await self?.answer(request, package: id) ?? .notHandled
+            case let .failure(error): return .refused(error)
+            }
         }
         do {
             try server.start()
@@ -53,15 +63,29 @@ import os
         server = nil
     }
 
-    private func answer(_ request: ControlRequest) async -> ControlResponse {
-        guard request.op != .ping else { return .done }
-        let id: ControlPackageID
-        do throws(APIError) {
-            id = try ControlHandling.packageID(request.package)
-        } catch {
-            return .refused(error)
-        }
+    private func answer(_ request: ControlRequest, package id: ControlPackageID) async -> ControlResponse {
         guard let model = editor(of: id) else { return .notHandled }
         return await model.control(request)
+    }
+
+    /// `folder` as the socket's: made with `0700`, or a folder of this user's (never a link) set to `0700`. `false`, said
+    /// in the log, otherwise.
+    private static func prepareFolder(_ folder: URL) -> Bool {
+        if mkdir(folder.path, 0o700) == 0 { return true }
+        guard errno == EEXIST else {
+            logger.error("Cannot make \(folder.path, privacy: .public): \(String(cString: strerror(errno)), privacy: .public)")
+            return false
+        }
+        var info = stat()
+        guard lstat(folder.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR, info.st_uid == geteuid() else {
+            logger.error("\(folder.path, privacy: .public) is not a folder of this user: the control socket is not listened on")
+            return false
+        }
+        guard info.st_mode & 0o777 != 0o700 else { return true }
+        guard chmod(folder.path, 0o700) == 0 else {
+            logger.error("Cannot set \(folder.path, privacy: .public) to 0700: \(String(cString: strerror(errno)), privacy: .public)")
+            return false
+        }
+        return true
     }
 }

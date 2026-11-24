@@ -17,9 +17,11 @@ import ProjectFormat
     public var takeBounds: @MainActor () -> [String: ClosedRange<HostTime>]
     /// Whether the editor can change the project now (`EditorModel.canEdit`): it is open and holds `edit.lock`.
     public var canEdit: @MainActor () -> Bool
-    /// One step, as the editor's gestures make it (`EditorModel.perform`).
+    /// One step, as the editor's gestures make it (`EditorModel.perform`), but always an undo of its own: never joined to
+    /// the step before it (`joiningBurst: false`), as each command of the API is, also when two come within a second.
     public var perform: @MainActor (EditStep) -> EditOutcome
-    /// The row Style's "Apply" (`EditorModel.applyStyle`): the style, its image brought into the package first.
+    /// The row Style's "Apply" (`EditorModel.applyStyle`): the style, its image brought into the package first; an undo
+    /// of its own, as `perform`'s.
     public var applyStyle: @MainActor (NamedStyle, URL?) async -> EditOutcome
     /// The user's named styles (`StyleLibrary.defaultDirectory` in the app), for `applyStyle{id}`.
     public var stylesFolder: URL
@@ -27,13 +29,17 @@ import ProjectFormat
     public var tomaStyleName: String
     /// A new id: `makeID("m-")` is `m-` and 8 random hex digits.
     public var makeID: @Sendable (String) -> String
+    /// Whether the user is in the middle of a gesture in the editor (`EditorModel.isGesturing`: a drag on the preview, the
+    /// timeline or a bar of the panel), whose step is made on the document as it was when it began: a request then
+    /// changes nothing and is `refused`, to be tried again.
+    public var isGesturing: @MainActor () -> Bool
 
     public init(
         session: EditSession, project: @escaping @MainActor () -> LoadedProject,
         takeBounds: @escaping @MainActor () -> [String: ClosedRange<HostTime>], canEdit: @escaping @MainActor () -> Bool,
         perform: @escaping @MainActor (EditStep) -> EditOutcome,
         applyStyle: @escaping @MainActor (NamedStyle, URL?) async -> EditOutcome, stylesFolder: URL, tomaStyleName: String,
-        makeID: @escaping @Sendable (String) -> String
+        makeID: @escaping @Sendable (String) -> String, isGesturing: @escaping @MainActor () -> Bool = { false }
     ) {
         self.session = session
         self.project = project
@@ -44,15 +50,16 @@ import ProjectFormat
         self.stylesFolder = stylesFolder
         self.tomaStyleName = tomaStyleName
         self.makeID = makeID
+        self.isGesturing = isGesturing
     }
 
     /// `session` alone, as an editor without anything of its own: its project, the takes' bounds read from their events,
-    /// its `perform` and `applyStyle`, editable while the session is.
+    /// its `perform` and `applyStyle` (each an undo of its own), editable while the session is.
     public init(session: EditSession, stylesFolder: URL, makeID: @escaping @Sendable (String) -> String) {
         self.init(
             session: session, project: { session.project }, takeBounds: { [:] },
-            canEdit: { session.access == .editable }, perform: { session.perform($0) },
-            applyStyle: { await session.applyStyle($0, imageDirectory: $1).outcome }, stylesFolder: stylesFolder,
+            canEdit: { session.access == .editable }, perform: { session.perform($0, joiningBurst: false) },
+            applyStyle: { await session.applyStyle($0, imageDirectory: $1, joiningBurst: false).outcome }, stylesFolder: stylesFolder,
             tomaStyleName: "Toma's Style", makeID: makeID)
     }
 }
@@ -147,25 +154,30 @@ public enum ControlHandling {
             case .unchanged:
                 return result(command.name, changed: false, label: nil, created: nil, session: session)
             case let .step(step, created):
+                // No `await` from here to `perform`: what was checked is what the step applies to.
+                try checkNotGesturing(editor)
+                let before = session.document.logSequence
                 guard editor.perform(step) != .refused else {
                     try checkEditable(editor)
                     throw APIError(.refused, "the change would leave a document Toma cannot draw")
                 }
-                try await settle(editor)
+                try await settle(editor, line: line(of: session, after: before))
                 return result(command.name, changed: true, label: step.label.rawValue, created: created, session: session)
             case .needsSession:
                 guard case let .applyStyle(id) = command else {
                     throw APIError(.notAvailable, "\(command.name) is not done through Toma while it has the project open")
                 }
                 let (style, imageDirectory) = try await namedStyle(id, editor: editor)
-                guard StyleCommands.applyStyle(scope.document, style, takes: scope.takes) != nil else {
-                    return result(command.name, changed: false, label: nil, created: nil, session: session)
-                }
+                // Planning the zoom again reads every event: off the main actor.
+                let changes = await Task.detached { StyleCommands.applyStyle(scope.document, style, takes: scope.takes) != nil }.value
+                guard changes else { return result(command.name, changed: false, label: nil, created: nil, session: session) }
+                try checkNotGesturing(editor)
+                let before = session.document.logSequence
                 guard await editor.applyStyle(style, imageDirectory) != .refused else {
                     try checkEditable(editor)
                     throw APIError(.refused, "the style could not be applied")
                 }
-                try await settle(editor)
+                try await settle(editor, line: line(of: session, after: before))
                 return result(command.name, changed: true, label: EditLabel.styleApply.rawValue, created: nil, session: session)
             }
         }
@@ -179,11 +191,13 @@ public enum ControlHandling {
         let possible = back ? session.canUndo : session.canRedo
         let nothing = APIError(.refused, back ? "there is nothing to undo" : "there is nothing to redo")
         guard possible, let label else { throw nothing }
+        try checkNotGesturing(editor)
+        let before = session.document.logSequence
         guard (back ? session.undo() : session.redo()) != .refused else {
             try checkEditable(editor)
             throw nothing
         }
-        try await settle(editor)
+        try await settle(editor, line: line(of: session, after: before))
         return result(back ? "undo" : "redo", changed: true, label: label.rawValue, created: nil, session: session)
     }
 
@@ -218,16 +232,36 @@ public enum ControlHandling {
         return (found, library.imageDirectory(of: found))
     }
 
-    /// Waits for what the editor handed to the disk, and says what kept it from being saved.
-    @MainActor private static func settle(_ editor: ControlEditor) async throws(APIError) {
+    /// The `seq` of the log line the request's step was handed over as: the document's `logSequence` once it is done,
+    /// if it moved from `before` (a step, an undo and a redo each get the next line). `nil` when it did not get a line
+    /// of its own: while the session starts a new log, which takes it with its `create`.
+    @MainActor private static func line(of session: EditSession, after before: Int) -> Int? {
+        let seq = session.document.logSequence
+        return seq > before ? seq : nil
+    }
+
+    /// Waits for what the editor handed to the disk, and says what kept the request's own step from being saved: its
+    /// line (`line`) is not among those on the disk (`EditSession.flushed()` gives the last one). What the user does in
+    /// the editor meanwhile, a line after it still on its way, is not this request's: never a `refused` for a change
+    /// that is saved (it would be made twice if tried again). Without a line of its own, any change not on the disk.
+    @MainActor private static func settle(_ editor: ControlEditor, line: Int?) async throws(APIError) {
         let session = editor.session
-        _ = await session.flushed()
+        let onDisk = await session.flushed()
         try checkEditable(editor)
-        if session.hasUnsavedChanges {
+        let saved = if let line { onDisk >= line } else { !session.hasUnsavedChanges }
+        if !saved {
             throw APIError(
                 .refused,
                 "Toma made the change but could not save it yet (the disk refused it); it keeps it and tries again while the project is open")
         }
+    }
+
+    /// `refused` while the user is in the middle of a gesture in the editor: nothing is done.
+    @MainActor private static func checkNotGesturing(_ editor: ControlEditor) throws(APIError) {
+        guard editor.isGesturing() else { return }
+        throw APIError(
+            .refused,
+            "the project is being changed by hand in Toma (a drag is under way): nothing was done; try again in a moment")
     }
 
     @MainActor private static func checkEditable(_ editor: ControlEditor) throws(APIError) {
