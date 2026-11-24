@@ -502,10 +502,12 @@ public actor ReplayCoordinator: ReplaySource {
     /// first (a save never sees a record without its file), then its file; and each event file whose next one opened
     /// before then, after folding its events into `eventState`. The tick less makes up for the tick a segment waits to be
     /// deleted: on disk there is never more than N + `pruneMargin` + a segment (the design's N + 20 s); a save needs only
-    /// what ended after N ago.
+    /// what ended after N ago. The tick never takes a margin below zero; a margin already below it (the tests', to delete
+    /// inside N without waiting N) is taken as it is.
     private func prune() {
         guard freezes == 0, let ring, let store = ring.store else { return }
-        let margin = max(0, configuration.pruneMargin.seconds - Self.ringTick(of: configuration).seconds)
+        let configured = configuration.pruneMargin.seconds
+        let margin = configured > 0 ? max(0, configured - Self.ringTick(of: configuration).seconds) : configured
         let threshold = clock().adding(seconds: -(Double(configuration.seconds) + margin))
         let takeID = ReplayScratch.takeID
         let old = Set(store.manifest.takes.first { $0.id == takeID }?.tracks.flatMap { track in
