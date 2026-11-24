@@ -215,6 +215,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         KeyEditor.shared.follow(model)
         // The library or the Finder may have renamed it, or restored it from the trash, meanwhile.
         model.packageMayHaveMoved()
+        // Another process may have let go of its edit.lock meanwhile.
+        model.editAgainIfFree()
     }
 
     /// The window shows the package where it is now: its name (the Window menu's) and its proxy icon.

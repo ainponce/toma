@@ -1773,3 +1773,4 @@ Contra la Toma.app de la rama, con Grabación de pantalla dada a esa copia. La R
 - Con la Repetición grabando la cámara, cambiar la forma o el tamaño de la burbuja (isla abierta, cámara prendida) y guardar: el proyecto tiene la burbuja con la forma nueva desde el cambio.
 - Límite conocido, para anotar si molesta: con las alas de la Repetición, pasar el puntero por el notch angosta la isla a «Nueva grabación» (el ancho de siempre).
 - Anotar en `docs/performance.md` la CPU de Toma en Monitor de Actividad con la Repetición prendida, pantalla 4K a 60 fps, sin cámara y con cámara.
+- Con un `toma edit Demo.toma --file lote.json` largo (o `transcribe`) en marcha, abrir el proyecto en Toma: abre de solo lectura («This project is open in another app…»); al terminar `toma`, en unos 3 s (o al traer la ventana al frente) el editor pasa a editable solo, con los cambios de `toma` en pantalla y en Edición ▸ Deshacer.

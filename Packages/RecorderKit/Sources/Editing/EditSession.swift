@@ -246,6 +246,8 @@ public final class EditSession {
     private var lastKnownURL: URL
     /// How many times the package was opened again from the disk after another process changed it (Task 12b).
     package private(set) var reopenings = 0
+    /// `openAgainIfFree` is under way: one at a time.
+    private var openingAgain = false
     /// `document` and its JSON as the last step, undo or redo left them: the next one starts from that JSON instead of
     /// encoding the whole document again (`applied(_:)`), as long as `document` is still that one.
     private var documentJSON: (document: EditDocument, json: JSONValue)?
@@ -788,6 +790,35 @@ public final class EditSession {
             lock?.release(inDirectory: folder.descriptor)
             folder.close()
         }
+    }
+
+    // MARK: - Opening again
+
+    /// A session read-only because another process held `edit.lock` as it opened (`.openElsewhere`), or took it first
+    /// (`.otherAppStartedEditing`), opens again, editable, once the lock is free (fases 4 y 5, final review I3: the `toma`
+    /// command or the MCP server held it a moment): the document and its history as the disk has them now, as a package
+    /// another process changed opens again (Task 12b), told by `onChange`. `true` if it is editable now; `false`, and
+    /// nothing changes, while the lock is held, once the session is closed, or for any other reason it is read-only. The
+    /// lock is first only asked about (`RecordingLock.isHeld`, which never makes the file), off the main actor.
+    public func openAgainIfFree() async -> Bool {
+        guard !isClosed, !openingAgain, access == .readOnly(.openElsewhere) || access == .readOnly(.otherAppStartedEditing)
+        else { return false }
+        openingAgain = true
+        defer { openingAgain = false }
+        let lockURL = ProjectPackage(url: packageURL).editLockURL
+        guard (try? await Self.run(on: files, { RecordingLock.isHeld(at: lockURL) })) == false else { return false }
+        let (folder, take, caches, context) = (folder, project.take.id, projectCaches, context)
+        guard let opened = try? await Opening.reopen(folder, take: take, caches: caches, context: context) else { return false }
+        guard !isClosed, opened.access == .editable else {
+            // Closed meanwhile, or another process took the lock first: what the opening holds goes.
+            await opened.journal?.close()
+            if let lock = opened.lock { try? await Self.run(on: files) { lock.release(inDirectory: folder.descriptor) } }
+            return false
+        }
+        adopt(opened)
+        revision += 1
+        onChange?()
+        return true
     }
 
     // MARK: - Lines
