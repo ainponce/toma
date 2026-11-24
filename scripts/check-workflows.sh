@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Checks the GitHub workflows: each starts with the SPDX header and sets `permissions:`, every `uses:` names a
+# Checks the GitHub workflows: each parses as YAML, starts with the SPDX header and sets `permissions:`, every `uses:` names a
 # full 40-hex commit SHA (a tag can be moved to other code), and every actions/checkout step has
 # `persist-credentials: false` (otherwise the job's token stays in .git/config for every later step).
 #   bash scripts/check-workflows.sh
@@ -15,6 +15,8 @@ problem() {
 }
 
 for workflow in .github/workflows/*.yml; do
+  # It parses as YAML: a step's name with ": " in it needs quotes, or GitHub starts no job at all.
+  ruby -ryaml -e 'YAML.load_file(ARGV[0])' "$workflow" 2>/dev/null || problem "$workflow: not valid YAML"
   [[ $(head -1 "$workflow") == "# SPDX-License-Identifier: GPL-3.0-or-later" ]] || problem "$workflow: no SPDX header on its first line"
   grep -qE '^permissions:' "$workflow" || problem "$workflow: no top-level permissions"
   while IFS= read -r line; do

@@ -32,7 +32,7 @@ jobs:
         run: swift test --package-path Packages/RecorderKit --filter hevcAndH264EncodersAreAvailable
       - run: make test
       - run: make crash-test
-      - name: Benchmarks (no targets: the runners are not the reference Macs, design §10.2)
+      - name: "Benchmarks (no targets: the runners are not the reference Macs, design §10.2)"
         run: |
           swift build --package-path Packages/RecorderKit -c release --product recorder-dev
           Packages/RecorderKit/.build/release/recorder-dev bench-preview --synthetic --width 1920 --height 1080
