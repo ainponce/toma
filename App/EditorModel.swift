@@ -1712,6 +1712,8 @@ final class EditorModel {
     /// the session closes, without applying anything (cancelling its task would apply Toma's gradient instead).
     func close() {
         guard !closed else { return }
+        // What is typed in the Info tab and not saved yet is saved first, as leaving its field does.
+        ai.commitDrafts()
         writeWindowState()
         stopAutosave()
         closed = true

@@ -63,6 +63,8 @@ final class EditorAI {
     @ObservationIgnored private var serial = 0
     /// How many times «Suggest» was pressed in each field since the editor opened: the next one's `variation`.
     @ObservationIgnored private var suggested: [Field: Int] = [:]
+    /// What the Info tab's fields show and haven't saved yet (typed with the focus on them): `commitDrafts()` saves it.
+    @ObservationIgnored private var drafts: [Field: String] = [:]
     @ObservationIgnored private var sheet: NSWindow?
     @ObservationIgnored private var activation: NSObjectProtocol?
     @ObservationIgnored private var closed = false
@@ -309,17 +311,34 @@ final class EditorAI {
         work = .idle
     }
 
-    /// The project's title, as typed (`InfoCommands.setTitle`, one step); nothing if it does not change.
+    /// The project's title, as typed (`InfoCommands.setTitle`, one step); nothing if it does not change. Its draft is
+    /// gone.
     func setTitle(_ text: String) {
+        drafts[.title] = nil
         guard let model, model.canEdit, let document = model.document, let step = InfoCommands.setTitle(document, text) else { return }
         model.perform(step)
     }
 
-    /// The project's summary, as typed (`InfoCommands.setSummary`, one step); nothing if it does not change.
+    /// The project's summary, as typed (`InfoCommands.setSummary`, one step); nothing if it does not change. Its draft
+    /// is gone.
     func setSummary(_ text: String) {
+        drafts[.summary] = nil
         guard let model, model.canEdit, let document = model.document, let step = InfoCommands.setSummary(document, text)
         else { return }
         model.perform(step)
+    }
+
+    /// The Info tab's `field` shows `text`, typed and not saved yet: what `commitDrafts()` saves.
+    func draft(_ field: Field, _ text: String) {
+        drafts[field] = text
+    }
+
+    /// What is typed in the Info tab and not saved yet, saved as leaving its field does (a step for each field): before
+    /// the editor closes (⌘W, ⌘Q), the panel shows another tab, and Share or Export read the document's `info`.
+    func commitDrafts() {
+        let pending = drafts
+        if let title = pending[.title] { setTitle(title) }
+        if let summary = pending[.summary] { setSummary(summary) }
     }
 
     // MARK: - YouTube
@@ -336,6 +355,8 @@ final class EditorAI {
     /// «Copy Description for YouTube»: `youTubeDescription` on the clipboard, said by VoiceOver. Whether there was one.
     @discardableResult
     func copyYouTubeDescription() -> Bool {
+        // The summary typed in the Info tab, saved before it is read (the Markers menu takes no focus).
+        commitDrafts()
         let text = youTubeDescription
         guard !text.isEmpty else { return false }
         NSPasteboard.general.clearContents()

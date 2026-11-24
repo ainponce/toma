@@ -1773,3 +1773,4 @@ Contra la Toma.app de la rama, con Grabación de pantalla dada a esa copia. La R
 - Con la Repetición grabando la cámara, cambiar la forma o el tamaño de la burbuja (isla abierta, cámara prendida) y guardar: el proyecto tiene la burbuja con la forma nueva desde el cambio.
 - Límite conocido, para anotar si molesta: con las alas de la Repetición, pasar el puntero por el notch angosta la isla a «Nueva grabación» (el ancho de siempre).
 - Anotar en `docs/performance.md` la CPU de Toma en Monitor de Actividad con la Repetición prendida, pantalla 4K a 60 fps, sin cámara y con cámara.
+- Escribir un título o un resumen en «Información» y, sin salir del campo, cerrar la ventana con ⌘W (o salir con ⌘Q), cambiar de pestaña, tocar «Compartir» o «Exportar»: al reabrir (o en la página compartida) está lo escrito, y Edición ▸ Deshacer lo saca en un paso. En la hoja de capítulos sin capítulos (solo «Aceptar»), Esc la cierra. (final-fix-3b)
