@@ -13,7 +13,9 @@ public struct ReplayEventState: Equatable, Sendable {
     private var cursorImage: InputEvent?
     /// A `cursor` at the position of the last `cursor`, `mouseDown`, `mouseUp` or `scroll`.
     private var position: InputEvent?
-    private var focus: InputEvent?
+    /// The last `focus` of each kind: the element and the text caret are followed apart (`focusZoom-1`).
+    private var focusElement: InputEvent?
+    private var focusCaret: InputEvent?
     private var cameraStyleChange: InputEvent?
 
     /// The state before any event: the take's camera style (`TakeRecord.cameraStyle`).
@@ -35,8 +37,11 @@ public struct ReplayEventState: Equatable, Sendable {
             case let .cursor(x, y), let .mouseDown(_, x, y), let .mouseUp(_, x, y), let .scroll(_, _, x, y):
                 // A button down is not state: a click is drawn only from its own `mouseDown`.
                 Self.keepLatest(InputEvent(t: event.t, kind: .cursor(x: x, y: y)), in: &position)
-            case .focus:
-                Self.keepLatest(event, in: &focus)
+            case let .focus(_, _, _, _, kind):
+                switch kind {
+                case .element: Self.keepLatest(event, in: &focusElement)
+                case .caret: Self.keepLatest(event, in: &focusCaret)
+                }
             case let .cameraStyle(style):
                 if Self.keepLatest(event, in: &cameraStyleChange) { cameraStyle = style }
             case .segmentStarted, .streamInterrupted, .paused, .resumed, .deviceChanged, .marker, .droppedSamples,
@@ -51,17 +56,18 @@ public struct ReplayEventState: Equatable, Sendable {
     public var events: [InputEvent] {
         let all = Array(displays.keys.sorted().compactMap { displays[$0] })
             + windows.keys.sorted().compactMap { windows[$0] }
-            + [cameraStyleChange, cursorImage, position, focus].compactMap { $0 }
+            + [cameraStyleChange, cursorImage, position, focusElement, focusCaret].compactMap { $0 }
         return all.sortedByTime()
     }
 
     /// The state as events at `t`, in this order: `displayGeometry` of each display (by `displayID`), `windowGeometry`
-    /// of each window (by track), `cursorImage`, `cursor` and `focus`, each only if the events had one. The camera's
-    /// style is not among them: a take says its first one in `TakeRecord.cameraStyle`.
+    /// of each window (by track), `cursorImage`, `cursor` and `focus` (the last element's, then the last caret's), each
+    /// only if the events had one. The camera's style is not among them: a take says its first one in
+    /// `TakeRecord.cameraStyle`.
     public func reEmitted(at t: HostTime) -> [InputEvent] {
         let state = displays.keys.sorted().compactMap { displays[$0] }
             + windows.keys.sorted().compactMap { windows[$0] }
-            + [cursorImage, position, focus].compactMap { $0 }
+            + [cursorImage, position, focusElement, focusCaret].compactMap { $0 }
         return state.map { InputEvent(t: t, kind: $0.kind) }
     }
 

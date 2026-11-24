@@ -45,7 +45,7 @@ struct PipelineContext: Sendable {
     /// failed for lack of space is retried at once, after the reserve is given back.
     ///
     /// With `segmentRotation` (the Replay's working package, never recovered) the change is only staged in memory
-    /// (`ManifestStore.stage`): the Replay writes it every `syncInterval`, off the capture queues.
+    /// (`ManifestStore.stage`): the Replay writes it, off the capture queues.
     func updateTrack(_ trackID: String, _ change: (inout TrackRecord) -> Void) {
         let body = { (manifest: inout Manifest) in
             guard let take = manifest.takes.firstIndex(where: { $0.id == takeID }),
@@ -461,7 +461,8 @@ actor TrackPipeline: CaptureSink {
             pipeline.state.finishing[number] = nil
             pipeline.state.errors.append(contentsOf: failures)
         }
-        // `rotate()` answers once the segment is durable and the manifest says how it ended.
+        // `rotate()` answers once the segment's file is finished and the manifest says how it ended (durable in a take; in
+        // the Replay's working package, synced by its freeze).
         let rotated = segment.startHostTime != nil ? segment.index : nil
         for waiter in segment.rotationWaiters { waiter.resume(returning: rotated) }
     }

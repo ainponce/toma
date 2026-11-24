@@ -127,6 +127,42 @@ private func lines(of events: [InputEvent]) throws -> Data {
         }
     }
 
+    /// The Replay's working package is never recovered: its writer writes as always and never syncs (no barrier on a
+    /// tick, no full sync when it rotates or closes). A durable writer, as always, does.
+    @Test(arguments: [true, false])
+    func onlyADurableWriterSyncs(durable: Bool) throws {
+        try withTemporaryDirectory { dir in
+            let first = dir.appendingPathComponent("events-0001.jsonl")
+            let second = dir.appendingPathComponent("events-0002.jsonl")
+            let syncs = Mutex((barrier: 0, full: 0))
+            let io = EventLogIO(
+                write: EventLogIO.system.write,
+                barrierSync: { fd in
+                    syncs.withLock { $0.barrier += 1 }
+                    try EventLogIO.system.barrierSync(fd)
+                },
+                fullSync: { fd in
+                    syncs.withLock { $0.full += 1 }
+                    try EventLogIO.system.fullSync(fd)
+                })
+            // Long intervals: only the test's calls run, and every tick is a sync tick.
+            let writer = try EventLogWriter(
+                url: first, flushInterval: .seconds(3600), syncInterval: .seconds(3600), io: io, durable: durable)
+            writer.append(marker(1))
+            writer.tick()
+            try writer.rotate(to: second)
+            writer.append(marker(2))
+            writer.tick()
+            try writer.close()
+
+            #expect(try Data(contentsOf: first) == lines(of: [marker(1)]))
+            #expect(try Data(contentsOf: second) == lines(of: [marker(2)]))
+            let counted = syncs.withLock { $0 }
+            #expect(counted.barrier == (durable ? 2 : 0))
+            #expect(counted.full == (durable ? 2 : 0))
+        }
+    }
+
     @Test func urlNamesTheNewFile() throws {
         try withTemporaryDirectory { dir in
             let first = dir.appendingPathComponent("events-0001.jsonl")

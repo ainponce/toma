@@ -566,6 +566,27 @@ private enum SaverFixture {
         }
     }
 
+    /// A forced quit between a save's rename and its unlock leaves `.save.lock` in the saved project's root: it goes once
+    /// its lock is free, and the project stays as it is.
+    @Test func aStraySaveLockInASavedProjectGoesWhenItsLockIsFree() async throws {
+        try await withTemporaryDirectory { dir in
+            let projects = SaverFixture.projects(dir)
+            let fixture = try await ReplayFixture(in: dir, seconds: 8)
+            let done = try await ReplaySaver.save(from: fixture.source, SaverFixture.request(dir, seconds: 3, name: "Done"))
+            let stray = done.projectURL.appending(path: ReplaySaver.lockName, directoryHint: .notDirectory)
+            let holder = open(stray.path, O_CREAT | O_RDWR | O_EXLOCK | O_NONBLOCK | O_CLOEXEC, 0o644)
+            #expect(holder >= 0)
+            let before = SaverFixture.names(in: done.projectURL)
+
+            #expect(ReplaySaver.removeAbandonedSaves(in: projects).isEmpty)
+            #expect(SaverFixture.exists(stray))
+            close(holder)
+            #expect(ReplaySaver.removeAbandonedSaves(in: projects) == [stray])
+            #expect(SaverFixture.names(in: done.projectURL) == before.filter { $0 != ReplaySaver.lockName })
+            #expect(try LoadedProject.load(done.projectURL).take.status == .complete)
+        }
+    }
+
     @Test func prunedFirstSegmentsAreNotNeeded() async throws {
         try await withTemporaryDirectory { dir in
             let fixture = try await ReplayFixture(in: dir, seconds: 8, pruned: 2)

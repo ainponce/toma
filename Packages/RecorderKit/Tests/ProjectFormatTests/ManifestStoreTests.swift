@@ -307,5 +307,10 @@ private final class ReaderCounters: Sendable {
         try store.stage { $0.takes[0].status = .recording }
         try store.update { $0.takes[0].tracks = [] }
         #expect(try onDisk().takes.first?.status == .recording)
+        // The Replay's write without a sync writes the same.
+        try store.stage { $0.takes[0].status = .complete }
+        try store.flushPendingWithoutSyncing()
+        #expect(try onDisk() == store.manifest)
+        #expect(!FileManager.default.fileExists(atPath: package.manifestURL.path + ".tmp"))
     }
 }

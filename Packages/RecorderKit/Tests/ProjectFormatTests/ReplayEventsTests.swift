@@ -80,6 +80,8 @@ private let hash2 = String(repeating: "2", count: 32)
             InputEvent(t: start, kind: .windowGeometry(track: "window-4242", frame: window2, onScreen: false)),
             InputEvent(t: start, kind: cursorImage(hash2)),
             InputEvent(t: start, kind: .cursor(x: 50, y: 60)),
+            // The last focus of each kind, the element's first: the zoom follows both.
+            InputEvent(t: start, kind: .focus(x: 1, y: 2, width: 3, height: 4, kind: .element)),
             InputEvent(t: start, kind: .focus(x: 640.5, y: -40, width: 2, height: 18, kind: .caret)),
             event(11, .cursor(x: 70, y: 80)),
             event(12, .marker),
@@ -268,7 +270,7 @@ private let hash2 = String(repeating: "2", count: 32)
         ])
     }
 
-    @Test func lastFocusIsReEmittedOnlyIfThereIsOne() throws {
+    @Test func lastFocusOfEachKindIsReEmittedOnlyIfThereIsOne() throws {
         let cut = try cut()
         let without = ReplayEvents.saved([event(2, .cursor(x: 1, y: 1))], carried: [], initialCameraStyle: nil, cut: cut)
         #expect(without.events == [InputEvent(t: cut.start, kind: .cursor(x: 1, y: 1))])
@@ -279,6 +281,31 @@ private let hash2 = String(repeating: "2", count: 32)
                 event(3, .focus(x: 5, y: 6, width: 2, height: 18, kind: .caret)),
             ],
             carried: [], initialCameraStyle: nil, cut: cut)
-        #expect(focused.events == [InputEvent(t: cut.start, kind: .focus(x: 5, y: 6, width: 2, height: 18, kind: .caret))])
+        #expect(focused.events == [
+            InputEvent(t: cut.start, kind: .focus(x: 1, y: 2, width: 3, height: 4, kind: .element)),
+            InputEvent(t: cut.start, kind: .focus(x: 5, y: 6, width: 2, height: 18, kind: .caret)),
+        ])
+    }
+
+    /// The element and the text caret are kept apart, the latest of each by time across folds, and re-emitted element
+    /// first whichever came last.
+    @Test func bothFocusKindsAreKeptApart() {
+        var state = ReplayEventState(cameraStyle: nil)
+        state.fold([
+            event(3, .focus(x: 1, y: 1, width: 10, height: 10, kind: .element)),
+            event(5, .focus(x: 4, y: 4, width: 2, height: 18, kind: .caret)),
+        ])
+        state.fold([
+            event(6, .focus(x: 2, y: 2, width: 20, height: 20, kind: .element)),
+            event(4, .focus(x: 9, y: 9, width: 2, height: 18, kind: .caret)),
+        ])
+        #expect(state.events == [
+            event(5, .focus(x: 4, y: 4, width: 2, height: 18, kind: .caret)),
+            event(6, .focus(x: 2, y: 2, width: 20, height: 20, kind: .element)),
+        ])
+        #expect(state.reEmitted(at: at(9)) == [
+            event(9, .focus(x: 2, y: 2, width: 20, height: 20, kind: .element)),
+            event(9, .focus(x: 4, y: 4, width: 2, height: 18, kind: .caret)),
+        ])
     }
 }
