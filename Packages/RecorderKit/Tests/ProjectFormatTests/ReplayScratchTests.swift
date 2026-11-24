@@ -101,30 +101,74 @@ private func addTakeFolder(to package: ProjectPackage, held: Bool) throws -> Hel
         }
     }
 
-    @Test func leftoversGoButALiveScratchStays() throws {
+    @Test func onlyTheScratchAndItsHalfDeletedFoldersGo() throws {
         try withTemporaryDirectory { dir in
             let live = try ReplayScratch.create(in: dir, app: testApp, now: Date())
             let lock = try addTakeFolder(to: live, held: true)
-            let oldPackage = dir.appendingPathComponent("old.toma", isDirectory: true)
+            // What is not the Replay's stays, whatever it is: a root given by mistake (a library) loses nothing.
+            let project = dir.appendingPathComponent("old.toma", isDirectory: true)
             try FileManager.default.createDirectory(
-                at: oldPackage.appendingPathComponent("takes/take-001", isDirectory: true), withIntermediateDirectories: true)
-            let loose = dir.appendingPathComponent("loose.txt")
-            try Data("x".utf8).write(to: loose)
-            let hidden = dir.appendingPathComponent(".half-deleted", isDirectory: true)
-            try FileManager.default.createDirectory(at: hidden, withIntermediateDirectories: false)
+                at: project.appendingPathComponent("takes/take-001", isDirectory: true), withIntermediateDirectories: true)
+            try Data("x".utf8).write(to: dir.appendingPathComponent("loose.txt"))
+            try FileManager.default.createDirectory(
+                at: dir.appendingPathComponent(".hidden", isDirectory: true), withIntermediateDirectories: false)
+            // A deletion cut short.
+            let halfDeleted = dir.appendingPathComponent(".discarding-1234", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: halfDeleted.appendingPathComponent("takes", isDirectory: true), withIntermediateDirectories: true)
 
             let removed = ReplayScratch.discardLeftovers(in: dir)
 
-            #expect(Set(removed.map(\.lastPathComponent)) == [".half-deleted", "loose.txt", "old.toma"])
+            #expect(removed.map(\.lastPathComponent) == [".discarding-1234"])
+            let others = [".hidden", "loose.txt", "old.toma"]
             withExtendedLifetime(lock) {
-                #expect((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) == [ReplayScratch.packageName])
+                #expect((try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.sorted() == (others + [ReplayScratch.packageName]).sorted())
                 #expect(ReplayScratch.isScratch(live))
             }
 
             // Once its recorder is gone, the scratch is a leftover too.
             lock?.release()
             #expect(ReplayScratch.discardLeftovers(in: dir).map(\.lastPathComponent) == [ReplayScratch.packageName])
+            #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == others)
+        }
+    }
+
+    /// A `current.toma` without the marker that holds a take is not the Replay's: neither the cleanup nor `create` deletes
+    /// it. A file of that name neither.
+    @Test func aCurrentTomaThatIsNotAScratchIsNeverDeleted() throws {
+        try withTemporaryDirectory { dir in
+            let project = try ProjectPackage.create(in: dir, name: "current", app: testApp, now: Date())
+            try FileManager.default.createDirectory(at: project.takeDirectory("take-001"), withIntermediateDirectories: false)
+            let store = try ManifestStore(package: project)
+            try store.update { $0.takes.append(TakeRecord(id: "take-001", status: .complete, startedAt: Date(), tracks: [])) }
+
+            #expect(ReplayScratch.discardLeftovers(in: dir).isEmpty)
+            #expect(throws: POSIXError(.EEXIST)) { try ReplayScratch.create(in: dir, app: testApp, now: Date()) }
+            #expect(fileType(project.manifestURL) == S_IFREG)
+            #expect(fileType(project.takeDirectory("take-001")) == S_IFDIR)
+
+            try FileManager.default.removeItem(at: project.url)
+            try Data("x".utf8).write(to: project.url)
+            #expect(ReplayScratch.discardLeftovers(in: dir).isEmpty)
+            #expect(throws: POSIXError(.EEXIST)) { try ReplayScratch.create(in: dir, app: testApp, now: Date()) }
+            #expect(fileType(project.url) == S_IFREG)
+        }
+    }
+
+    /// What `create` leaves if it is cut before the marker (a package without a take) goes, by the cleanup or by the next
+    /// `create`.
+    @Test func aScratchCutBeforeItsMarkerGoes() throws {
+        try withTemporaryDirectory { dir in
+            let cut = try ProjectPackage.create(in: dir, name: "current", app: testApp, now: Date())
+            #expect(!ReplayScratch.isScratch(cut))
+            #expect(ReplayScratch.discardLeftovers(in: dir).map(\.lastPathComponent) == [ReplayScratch.packageName])
             #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).isEmpty)
+
+            // No manifest at all (cut before it was written), and `create` replaces it.
+            try FileManager.default.createDirectory(
+                at: ReplayScratch.package(in: dir).takesURL, withIntermediateDirectories: true)
+            let package = try ReplayScratch.create(in: dir, app: testApp, now: Date())
+            #expect(ReplayScratch.isScratch(package))
         }
     }
 
@@ -157,8 +201,9 @@ private func addTakeFolder(to package: ProjectPackage, held: Bool) throws -> Hel
                 at: root.appendingPathComponent(ReplayScratch.packageName), withDestinationURL: outside)
             try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("other"), withDestinationURL: outside)
 
-            #expect(ReplayScratch.discardLeftovers(in: root).count == 2)
-            #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+            // The one named like the scratch goes, never what it names; the other is not the Replay's and stays.
+            #expect(ReplayScratch.discardLeftovers(in: root).map(\.lastPathComponent) == [ReplayScratch.packageName])
+            #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["other"])
             #expect(FileManager.default.fileExists(atPath: keep.path))
         }
     }

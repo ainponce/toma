@@ -137,6 +137,17 @@ public final class ManifestStore: Sendable {
         }
     }
 
+    /// Only the Replay's working package (`ReplayScratch`, never recovered): writes what is pending (`stage`) as
+    /// `flushPending()` does, atomically (a temporary file renamed over `manifest.json`), but without syncing it nor its
+    /// folder, so an always-on Replay never flushes the drive's cache for it. Does nothing if the file is up to date.
+    public func flushPendingWithoutSyncing() throws {
+        try state.withLock { state in
+            guard state.needsWrite else { return }
+            try ProjectJSON.encoder().encode(state.manifest).write(to: package.manifestURL, options: .atomic)
+            state.needsWrite = false
+        }
+    }
+
     /// Writes a change whose earlier write failed. Does nothing if the file is up to date.
     public func flushPending() throws {
         try state.withLock { state in

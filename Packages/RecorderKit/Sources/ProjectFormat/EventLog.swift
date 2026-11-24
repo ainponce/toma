@@ -28,7 +28,7 @@ private let newline = UInt8(ascii: "\n")
 /// `EventLogReader.truncateIncompleteTail` does. Use one writer per file.
 ///
 /// Only the Replay moves a writer to a new file (`rotate(to:)`); one that never rotates writes the one file it was
-/// opened on, as always.
+/// opened on, as always. Only the Replay opens one that is not durable (`init(url:durable:)`).
 public final class EventLogWriter: Sendable {
     public static let flushInterval: Duration = .milliseconds(250)
     public static let syncInterval: Duration = .seconds(2)
@@ -66,6 +66,8 @@ public final class EventLogWriter: Sendable {
     private let timer: any DispatchSourceTimer
     private let io: EventLogIO
     private let ticksPerSync: Int
+    /// Whether it syncs: the periodic barrier, the full sync of `close()` and `rotate(to:)`, a new file's folder.
+    private let durable: Bool
 
     /// Opens `url` for appending, creating it if needed. The folder must exist. Throws `ELOOP` or
     /// `EFTYPE` if `url` is a symlink (never followed) or not a regular file.
@@ -73,8 +75,17 @@ public final class EventLogWriter: Sendable {
         try self.init(url: url, flushInterval: Self.flushInterval, syncInterval: Self.syncInterval, io: .system)
     }
 
+    /// Only the Replay's working package, which is never recovered (fases 4 y 5 design §10.2): with `durable` false it
+    /// writes its buffer every `flushInterval` as always, and never syncs (no barrier every `syncInterval`, no full sync
+    /// in `close()` or `rotate(to:)`, no sync of a new file's folder), so an always-on Replay does not flush the drive's
+    /// cache all day. With `durable` true it is `init(url:)`.
+    public convenience init(url: URL, durable: Bool) throws {
+        try self.init(
+            url: url, flushInterval: Self.flushInterval, syncInterval: Self.syncInterval, io: .system, durable: durable)
+    }
+
     /// Tests pass their own intervals and I/O.
-    init(url: URL, flushInterval: Duration, syncInterval: Duration, io: EventLogIO) throws {
+    init(url: URL, flushInterval: Duration, syncInterval: Duration, io: EventLogIO, durable: Bool = true) throws {
         let path = url.path
         var created = true
         var fd = open(path, O_RDWR | O_APPEND | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
@@ -85,7 +96,7 @@ public final class EventLogWriter: Sendable {
         guard fd >= 0 else { throw POSIXError.current() }
         do {
             if created {
-                try DurableFile.syncDirectory(url.deletingLastPathComponent())
+                if durable { try DurableFile.syncDirectory(url.deletingLastPathComponent()) }
             } else {
                 _ = try EventLogReader.endAtLineBoundary(fd, isWholeObject: EventLogReader.isWholeObject)
             }
@@ -97,6 +108,7 @@ public final class EventLogWriter: Sendable {
         currentURL = Mutex(url)
         file = Mutex(FileState(fd: fd))
         self.io = io
+        self.durable = durable
         ticksPerSync = max(1, Int((syncInterval / flushInterval).rounded()))
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.toma.EventLogWriter", qos: .utility))
         self.timer = timer
@@ -171,7 +183,9 @@ public final class EventLogWriter: Sendable {
 
             var ownError: (any Error)?
             do { try writeUnwritten(&file, to: fd) } catch { ownError = error }
-            do { try io.fullSync(fd) } catch { ownError = ownError ?? error }
+            if durable {
+                do { try io.fullSync(fd) } catch { ownError = ownError ?? error }
+            }
             if Darwin.close(fd) != 0, ownError == nil { ownError = POSIXError.current() }
             let error = file.ioError ?? ownError ?? file.encodingError
             file.unwritten = []
@@ -186,7 +200,8 @@ public final class EventLogWriter: Sendable {
     ///
     /// Creates `url` (`O_EXCL`, never following a link) and full-syncs its folder; then writes what `append` buffered
     /// before this call to the current file, full-syncs it (`F_FULLFSYNC`) and closes it, and from then on appends to
-    /// `url`, which `url` (the property) names. Lines appended after it returns go to `url`.
+    /// `url`, which `url` (the property) names. Lines appended after it returns go to `url`. A writer that is not durable
+    /// (`init(url:durable:)`) syncs neither.
     ///
     /// If `url` cannot be created (it exists, it is a link, its folder is gone), throws and goes on in the current file,
     /// unchanged. Otherwise it always moves to `url`, and a failure of the old file is thrown as `close()` throws it
@@ -195,12 +210,14 @@ public final class EventLogWriter: Sendable {
     public func rotate(to url: URL) throws {
         try file.withLock { file in
             guard let old = file.fd else { return }
-            let new = try Self.createNewFile(url)
+            let new = try Self.createNewFile(url, syncingFolder: durable)
             drainPending(into: &file)
 
             var ownError: (any Error)?
             do { try writeUnwritten(&file, to: old) } catch { ownError = error }
-            do { try io.fullSync(old) } catch { ownError = ownError ?? error }
+            if durable {
+                do { try io.fullSync(old) } catch { ownError = ownError ?? error }
+            }
             if Darwin.close(old) != 0, ownError == nil { ownError = POSIXError.current() }
             let error = file.ioError ?? ownError ?? file.encodingError
 
@@ -211,10 +228,11 @@ public final class EventLogWriter: Sendable {
     }
 
     /// Creates the empty file `url` for appending, never over anything there nor through a link, and full-syncs its
-    /// folder. On a failure nothing is left at `url`.
-    private static func createNewFile(_ url: URL) throws -> Int32 {
+    /// folder if `syncingFolder`. On a failure nothing is left at `url`.
+    private static func createNewFile(_ url: URL, syncingFolder: Bool) throws -> Int32 {
         let fd = open(url.path, O_RDWR | O_APPEND | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
         guard fd >= 0 else { throw POSIXError.current() }
+        guard syncingFolder else { return fd }
         do {
             try DurableFile.syncDirectory(url.deletingLastPathComponent())
         } catch {
@@ -236,6 +254,7 @@ public final class EventLogWriter: Sendable {
                 // The bytes stay for the next tick, `flush()` or `close()`; one of those two throws it.
                 if file.ioError == nil { file.ioError = error }
             }
+            guard durable else { return }
             file.ticksSinceSync += 1
             guard file.ticksSinceSync >= ticksPerSync else { return }
             if file.needsSync {

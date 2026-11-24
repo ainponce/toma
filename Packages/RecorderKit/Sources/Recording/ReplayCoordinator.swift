@@ -11,8 +11,8 @@ public struct ReplayConfiguration: Sendable {
     public var segmentDuration: Duration
     /// What ended more than N plus this ago is deleted.
     public var pruneMargin: Duration
-    /// The restarts, heartbeats and syncs of the tracks, as in a take; `syncInterval` also paces the writes of what the
-    /// manifest and the event log have pending.
+    /// The restarts and heartbeats of the tracks, as in a take (the Replay syncs nothing while it records);
+    /// `syncInterval` also paces the writes, not synced, of what the manifest and the event log have pending.
     public var recording: RecordingConfiguration
 
     public init(
@@ -42,6 +42,10 @@ public enum ReplayEnd: Equatable, Sendable {
 /// next one opened before then, after its state is folded into memory (`ReplayEventState`): the geometry, the camera's
 /// style and the cursor of the start are never lost. A save freezes it (`freeze()`): every track rotated at once,
 /// nothing deleted until `thaw()`.
+///
+/// Nothing of the working package is synced while it records, since it is never recovered: the manifest and the event
+/// log are written every `syncInterval` without syncing, and the capture queues never sync a segment. `freeze()` syncs
+/// what a save clones and writes the manifest.
 ///
 /// It is never a project: `stopAndDiscard()` and a full disk delete the whole package; a forced quit leaves it for
 /// `ReplayScratch.discardLeftovers` when Toma opens. It reserves no space and keeps no activity assertion (plan 5c,
@@ -201,7 +205,8 @@ public actor ReplayCoordinator: ReplaySource {
                 at: package.trackDirectory(take: takeID, track: source.trackID), withIntermediateDirectories: false)
         }
         let firstShard = ReplayScratch.shardURL(of: package, index: 1)
-        let log = try EventLogWriter(url: firstShard)
+        // Never synced while it records (the working package is never recovered): a save reads what it has written.
+        let log = try EventLogWriter(url: firstShard, durable: false)
         ring?.log = log
         ring?.shards = [Shard(index: 1, url: firstShard, openedAt: clock())]
         // Where the screens are as it starts, as `RecordingCoordinator.openTake` logs it; the app's watchers log every
@@ -288,8 +293,10 @@ public actor ReplayCoordinator: ReplaySource {
 
     /// Stops deleting until `thaw()`, rotates every track at once (`TrackPipeline.rotate()`), writes the event log's
     /// buffer to its file and returns what a save takes: of each track, the segments closed by that rotation and before
-    /// (the ones it opened are left out), the event files left and the state of the ones deleted. Every segment it lists
-    /// is full-synced (`F_FULLFSYNC`) before the manifest says it closed, so a save may clone it as it is.
+    /// (the ones it opened are left out), the event files left and the state of the ones deleted. The capture queues never
+    /// sync a segment: before it answers, every segment it lists is synced here (an `fsync` each and one `F_FULLFSYNC`,
+    /// which flushes the drive's cache for all of them), so a save may clone them as they are. It also writes the
+    /// manifest, which the ring otherwise keeps in memory.
     ///
     /// Freezes nest: nothing is deleted until each one is thawed, so a second save that starts while the first one copies
     /// keeps its files. Each call made while recording counts, also one that throws: its caller thaws it as after a save
@@ -331,7 +338,7 @@ public actor ReplayCoordinator: ReplaySource {
             throw ReplayError.nothingToSave
         }
         // The capture queues never sync a segment: the ones a save clones are synced here, off them.
-        try await Self.fullSync(take.tracks.flatMap { track in
+        try await Self.sync(take.tracks.flatMap { track in
             track.segments.map { ring.package.url.appending(path: $0.file, directoryHint: .notDirectory) }
         })
         return ReplaySnapshot(
@@ -365,13 +372,18 @@ public actor ReplayCoordinator: ReplaySource {
         return rotated
     }
 
-    /// Opens each file (never through a link), full-syncs it (`F_FULLFSYNC`) and closes it, off the caller's actor.
-    @concurrent private static func fullSync(_ urls: [URL]) async throws {
-        for url in urls {
+    /// Off the caller's actor: opens each file (never through a link), `fsync`s it (to the drive) and closes it, then one
+    /// `F_FULLFSYNC` (on the last one) flushes the drive's cache for all of them: one flush per save, not one per file.
+    @concurrent private static func sync(_ urls: [URL]) async throws {
+        for (i, url) in urls.enumerated() {
             let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
             guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
             defer { close(fd) }
-            try DurableFile.fullSync(fd)
+            if i == urls.count - 1 {
+                try DurableFile.fullSync(fd)
+            } else if fsync(fd) != 0 {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
         }
     }
 
@@ -499,8 +511,10 @@ public actor ReplayCoordinator: ReplaySource {
     }
 
     /// Unless frozen: deletes each closed segment that ended before N + `pruneMargin` − a tick of the ring ago, its record
-    /// first (a save never sees a record without its file), then its file; and each event file whose next one opened
-    /// before then, after folding its events into `eventState`. The tick less makes up for the tick a segment waits to be
+    /// first (a save never sees a record without its file), then its file; and each event file whose next one opened a
+    /// segment before then, after folding its events into `eventState`. A segment kept can start up to a segment before
+    /// that threshold (a save keeps the one across its cut whole), so its events, its `segmentStarted` first, are kept
+    /// too. The tick less makes up for the tick a segment waits to be
     /// deleted: on disk there is never more than N + `pruneMargin` + a segment (the design's N + 20 s); a save needs only
     /// what ended after N ago. The tick never takes a margin below zero; a margin already below it (the tests', to delete
     /// inside N without waiting N) is taken as it is.
@@ -528,7 +542,8 @@ public actor ReplayCoordinator: ReplaySource {
             }
         }
         var shards = ring.shards
-        while shards.count >= 2, shards[1].openedAt < threshold {
+        let shardThreshold = threshold.adding(seconds: -configuration.segmentDuration.seconds)
+        while shards.count >= 2, shards[1].openedAt < shardThreshold {
             let shard = shards.removeFirst()
             if let events = try? EventLogReader.read(shard.url).events {
                 eventState.fold(events)
@@ -538,8 +553,9 @@ public actor ReplayCoordinator: ReplaySource {
         self.ring?.shards = shards
     }
 
-    /// Every `syncInterval`: writes a manifest change whose write failed, and the event log's buffer. Running out of
-    /// space either way discards the Replay.
+    /// Every `syncInterval`: writes the event log's buffer and the manifest's pending changes, neither synced (the working
+    /// package is never recovered, and an always-on Replay never flushes the drive's cache for it); running out of space
+    /// discards the Replay.
     private func maintain() async {
         while true {
             do {
@@ -549,7 +565,7 @@ public actor ReplayCoordinator: ReplaySource {
             }
             guard state == .recording, let ring else { return }
             do {
-                try ring.store?.flushPending()
+                try ring.store?.flushPendingWithoutSyncing()
             } catch {
                 if isOutOfSpace(error) { diskFilled() }
             }
@@ -595,8 +611,8 @@ public actor ReplayCoordinator: ReplaySource {
 
     // MARK: - Helpers
 
-    /// Changes the manifest in memory (`ManifestStore.stage`): `maintain` writes it every `syncInterval`, and `freeze()`
-    /// before it answers. Out of space, the Replay is discarded.
+    /// Changes the manifest in memory (`ManifestStore.stage`); `maintain` writes it without syncing, and `freeze()` before
+    /// it answers.
     private func updateManifest(_ store: ManifestStore, _ change: (inout Manifest) -> Void) {
         do {
             try store.stage(change)

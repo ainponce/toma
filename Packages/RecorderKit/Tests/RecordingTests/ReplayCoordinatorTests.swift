@@ -60,8 +60,18 @@ extension RealTimeRecordingTests {
                     // No file without its record, no record without its file.
                     #expect(Set(track.segments.map(\.file)) == rig.segmentFiles(of: track.id), "\(track.id)")
                 }
+                // Every segment kept has its `segmentStarted` in the event files left: they are pruned a segment later.
+                let started = Set(try rig.shardEvents().compactMap { event -> String? in
+                    guard case let .segmentStarted(track, index) = event.kind else { return nil }
+                    return "\(track) \(index)"
+                })
+                for track in snapshot.take.tracks {
+                    for segment in track.segments {
+                        #expect(started.contains("\(track.id) \(segment.index)"), "\(track.id) \(segment.index)")
+                    }
+                }
                 let shards = rig.shardFiles()
-                #expect(shards.count <= 7, "\(shards)")
+                #expect(shards.count <= 8, "\(shards)")
                 #expect(!shards.contains("events-0001.jsonl"))
                 #expect(snapshot.shards.map(\.lastPathComponent) == shards)
                 await rig.coordinator.thaw()

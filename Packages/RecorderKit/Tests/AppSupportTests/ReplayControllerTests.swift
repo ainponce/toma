@@ -348,6 +348,9 @@ import Testing
             let leftover = try ReplayScratch.create(in: rig.scratchRoot, app: AppInfo(name: "Tests", version: "0"), now: Date())
             let leftoverID = try rig.scratchProjectID()
             try Data("junk".utf8).write(to: rig.scratchRoot.appending(path: "junk"))
+            // A deletion of the working package cut short; what is not the Replay's ("junk") stays.
+            let halfDeleted = rig.scratchRoot.appending(path: ".discarding-1234", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: halfDeleted, withIntermediateDirectories: true)
             let abandoned = rig.projects.appending(path: "." + UUID().uuidString + ReplaySaver.stagingSuffix, directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: abandoned, withIntermediateDirectories: true)
             try Data().write(to: abandoned.appending(path: ReplaySaver.lockName))
@@ -356,7 +359,8 @@ import Testing
 
             await rig.controller.launch()
             #expect(!FileManager.default.fileExists(atPath: abandoned.path))
-            #expect(!FileManager.default.fileExists(atPath: rig.scratchRoot.appending(path: "junk").path))
+            #expect(!FileManager.default.fileExists(atPath: halfDeleted.path))
+            #expect(FileManager.default.fileExists(atPath: rig.scratchRoot.appending(path: "junk").path))
             #expect(FileManager.default.fileExists(atPath: kept.path))
             // On: a working package of its own, not the one left.
             #expect(rig.controller.phase == .on(since: ReplayRig.now))

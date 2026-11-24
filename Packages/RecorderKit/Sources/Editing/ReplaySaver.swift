@@ -205,11 +205,23 @@ public enum ReplaySaver {
     /// `.save.lock` is tried without waiting: one whose lock is free (the save's process died) is removed while it is held
     /// here; one whose lock someone holds (a save of this process or of another) is left alone; one without a lock is
     /// removed only once it has not changed for `locklessGrace` (a save makes its folder just before its lock). Nothing
-    /// else: never a `.toma`, another hidden folder or a duplicate's `.duplicating`. Returns what it removed; what it
-    /// could not remove, or tell, is left for the next time.
+    /// else: never a `.toma`, another hidden folder or a duplicate's `.duplicating`. Also the `.save.lock` a forced quit
+    /// between a save's rename and its unlock leaves in the root of a saved project (`<name>.toma/.save.lock`, a regular
+    /// file by `lstat`), only while its lock is free. Returns what it removed; what it could not remove, or tell, is left
+    /// for the next time.
     @discardableResult public static func removeAbandonedSaves(in projectsFolder: URL) -> [URL] {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: projectsFolder.path) else { return [] }
         var removed: [URL] = []
+        for name in names.sorted() where (name as NSString).pathExtension == ProjectPackage.fileExtension {
+            let lockURL = projectsFolder.appending(path: name, directoryHint: .isDirectory)
+                .appending(path: lockName, directoryHint: .notDirectory)
+            var info = stat()
+            guard lstat(lockURL.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { continue }
+            let lock = open(lockURL.path, O_RDONLY | O_EXLOCK | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+            guard lock >= 0 else { continue }  // held: its save is still releasing it
+            defer { close(lock) }
+            if unlink(lockURL.path) == 0 { removed.append(lockURL) }
+        }
         for name in names.sorted() where isStagingName(name) {
             let url = projectsFolder.appending(path: name, directoryHint: .isDirectory)
             var info = stat()
