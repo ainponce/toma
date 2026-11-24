@@ -158,12 +158,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hotKeys.update(isRecording: recording.isRecording)
         }
         recovery.recovered = { [weak self] urls in self?.showRecovered(urls) }
-        // Save Replay is a shortcut only while it records.
-        replay.phaseChanged = { [weak self] in
-            guard let self else { return }
-            hotKeys.update(replayOn: replay.look.records)
-        }
+        // Save Replay is a shortcut while it records, or while a problem holds it off (it then says why).
+        replayShortcutChanged()
         replay.onSaved = { [weak self] take in self?.island?.replaySaved(take) }
+        replay.onHeldOff = { [weak self] problem in self?.island?.replayHeldOff(problem) }
+    }
+
+    /// Registers Save Replay as the Replay says (`ReplayLook.answersShortcut`), now and whenever that may change.
+    private func replayShortcutChanged() {
+        let answers = withObservationTracking {
+            replay.look.answersShortcut
+        } onChange: { [weak self] in
+            // Called before the change: read it once it is made.
+            Task { @MainActor in self?.replayShortcutChanged() }
+        }
+        hotKeys.update(replayOn: answers)
     }
 
     // MARK: - Life cycle
@@ -232,6 +241,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
         island.openLibrary = { [weak self] in self?.showLibrary(section: $0) }
         island.openProject = { [weak self] url in self?.showEditor(for: url, take: nil) }
+        island.openReplaySettings = { [weak self] in
+            self?.showSettings()
+            self?.settings?.showReplayPane()
+        }
         recording.onConfirmation = { [weak island] confirmation in island?.showConfirmation(confirmation) }
         self.island = island
     }
@@ -536,8 +549,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showcaseWindow = window
         case ("island", let variant):
             makeIsland()
-            // `peek` and the Replay's at rest (`replay`, `replay-pill`, `replay-saved`) stay closed.
-            if !["peek", "replay", "replay-pill", "replay-saved"].contains(variant ?? "") { island?.invoke() }
+            // `peek` and the Replay's at rest (`replay`, `replay-pill`, `replay-saved`, `replay-off`) stay closed.
+            if !["peek", "replay", "replay-pill", "replay-saved", "replay-off"].contains(variant ?? "") { island?.invoke() }
             if let variant { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.island?.showcase(variant) } }
         case ("editor", let path?), ("export", let path?):
             let url = URL(fileURLWithPath: path).standardizedFileURL

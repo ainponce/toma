@@ -60,6 +60,7 @@ import Testing
         try await withReplay(probe: probe, selection: selection, enabled: true) { rig in
             await rig.controller.launch()
             #expect(rig.controller.phase == .off && rig.controller.problem == .noScreenRecording)
+            #expect(rig.calls.heldOff == [.noScreenRecording])
             #expect(rig.controller.isEnabled && rig.store.settings.replay.enabled)
             #expect(!rig.scratchExists && rig.calls.prepared.isEmpty)
 
@@ -204,6 +205,8 @@ import Testing
             await rig.controller.launch()
             rig.disk.set(importantUsage: 9_000_000_000, available: 500_000_000)
             #expect(await eventually { rig.controller.phase == .off && rig.controller.problem == .diskFull })
+            // It stopped by itself: the app is told, to say so.
+            #expect(rig.calls.heldOff == [.diskFull])
             #expect(!rig.scratchExists && rig.controller.recordedKinds.isEmpty)
             #expect(rig.controller.isEnabled && rig.store.settings.replay.enabled)
 
@@ -443,6 +446,91 @@ import Testing
         }
     }
 
+    @Test func aTakeDuringTheStartDeletesTheRingAtOnce() async throws {
+        try await withReplay(enabled: true) { rig in
+            // Its sources take their time to start.
+            rig.calls.startGate.close()
+            let launching = Task { await rig.controller.launch() }
+            #expect(await eventually { rig.calls.startGate.arrivals == 1 && rig.controller.phase == .starting })
+
+            // A take comes meanwhile: once the sources have started, the ring is deleted at once, without its wallpapers.
+            let suspending = Task { await rig.controller.suspendForTake() }
+            try await Task.sleep(for: .milliseconds(100))
+            rig.calls.startGate.open()
+            #expect(await suspending.value)
+            await launching.value
+            #expect(rig.calls.started.isEmpty)
+            #expect(rig.controller.phase == .suspended && !rig.scratchExists && rig.controller.recordedKinds.isEmpty)
+            #expect(rig.controller.problem == nil && rig.calls.heldOff.isEmpty)
+        }
+    }
+
+    @Test func aTakeWaitsForTheReplayWithinItsTimeLimit() async throws {
+        try await withReplay(enabled: true) { rig in
+            await rig.controller.launch()
+            try await Task.sleep(for: .milliseconds(1600))
+            rig.saveGate.close()
+            let saving = Task { await rig.controller.save() }
+            #expect(await eventually { rig.saveGate.arrivals == 1 })
+
+            // The save does not end for 2 s: the take goes ahead once the limit has passed.
+            let opening = Task {
+                try? await Task.sleep(for: .seconds(2))
+                rig.saveGate.open()
+            }
+            let clock = ContinuousClock()
+            let asked = clock.now
+            let gone = await rig.controller.suspendForTake(timeLimit: .milliseconds(300))
+            #expect(!gone && clock.now - asked < .milliseconds(1500))
+            #expect(rig.scratchExists)
+
+            // The Replay is deleted on its own once the save has ended, and waits for the take's end.
+            await opening.value
+            #expect(await saving.value != nil)
+            #expect(await eventually { rig.controller.phase == .suspended && !rig.scratchExists })
+            rig.controller.resumeAfterTake()
+            #expect(await eventually { rig.controller.phase == .on(since: ReplayRig.now) })
+        }
+    }
+
+    @Test func afterATakeItStartsAgainOnlyAfterAWhile() async throws {
+        try await withReplay(enabled: true, resumeDelay: .milliseconds(700)) { rig in
+            await rig.controller.launch()
+            await rig.controller.suspendForTake()
+            rig.controller.resumeAfterTake()
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(rig.controller.phase == .suspended && !rig.scratchExists && rig.calls.prepared.count == 1)
+
+            // Another take meanwhile (Record again, Re-record): no ring started and deleted for nothing.
+            await rig.controller.suspendForTake()
+            try await Task.sleep(for: .milliseconds(900))
+            #expect(rig.controller.phase == .suspended && !rig.scratchExists && rig.calls.prepared.count == 1)
+
+            rig.controller.resumeAfterTake()
+            #expect(await eventually { rig.controller.phase == .on(since: ReplayRig.now) })
+            #expect(rig.calls.prepared.count == 2)
+        }
+    }
+
+    @Test func aProblemThatHoldsItOffIsToldOnce() async throws {
+        try await withReplay(enabled: true) { rig in
+            rig.calls.load = .over(ratio: 1.4, suggestions: [])
+            await rig.controller.launch()
+            #expect(rig.controller.problem == .encoderBusy && rig.calls.heldOff == [.encoderBusy])
+            // Again after the next take, and told again.
+            await rig.controller.suspendForTake()
+            rig.controller.resumeAfterTake()
+            #expect(await eventually { rig.calls.heldOff == [.encoderBusy, .encoderBusy] })
+            #expect(rig.controller.phase == .off)
+            // A save's problem is the save's to say, not this.
+            rig.calls.load = nil
+            rig.controller.setEnabled(true)
+            #expect(await eventually { rig.controller.phase == .on(since: ReplayRig.now) })
+            #expect(await rig.controller.save() == nil && rig.controller.problem == .tooShort)
+            #expect(rig.calls.heldOff == [.encoderBusy, .encoderBusy])
+        }
+    }
+
     @Test func shutDownLeavesNoScratch() async throws {
         try await withReplay(enabled: true) { rig in
             await rig.controller.launch()
@@ -469,7 +557,8 @@ import Testing
 /// at the end.
 @MainActor private func withReplay(
     probe: ReplayProbe = ReplayProbe(), selection: CaptureSelection? = .mainDisplay(1), enabled: Bool = false,
-    seconds: Int = 30, pruneMargin: Duration = .seconds(1), _ body: (ReplayRig) async throws -> Void
+    seconds: Int = 30, pruneMargin: Duration = .seconds(1), resumeDelay: Duration = .zero,
+    _ body: (ReplayRig) async throws -> Void
 ) async throws {
     try await withTemporaryDirectory { directory in
         let suite = "ReplayControllerTests-\(UUID().uuidString)"
@@ -477,7 +566,7 @@ import Testing
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = SettingsStore(defaults: defaults)
         store.settings = RecorderSettings(selection: selection, replay: ReplayPreferences(enabled: enabled, seconds: seconds))
-        let rig = ReplayRig(in: directory, store: store, probe: probe, pruneMargin: pruneMargin)
+        let rig = ReplayRig(in: directory, store: store, probe: probe, pruneMargin: pruneMargin, resumeDelay: resumeDelay)
         do {
             try await body(rig)
         } catch {
@@ -508,7 +597,7 @@ import Testing
     let environment: ReplayEnvironment
     let controller: ReplayController
 
-    init(in directory: URL, store: SettingsStore, probe: ReplayProbe, pruneMargin: Duration) {
+    init(in directory: URL, store: SettingsStore, probe: ReplayProbe, pruneMargin: Duration, resumeDelay: Duration) {
         self.directory = directory
         let scratchRoot = directory.appending(path: "Replay", directoryHint: .isDirectory)
         let projects = directory.appending(path: "Projects", directoryHint: .isDirectory)
@@ -542,8 +631,11 @@ import Testing
             prepare: { selection, quick, granted, configuration in
                 calls.prepared.append(ReplayCalls.Prepared(selection: selection, granted: granted, seconds: configuration.seconds))
                 let plan = try TakePlanner.plan(selection, settings: quick, displays: Self.displays, granted: granted, factory: factory)
+                // The screen starts once the start gate lets it.
+                let gate = calls.startGate
+                let sources = plan.sources.map { $0.kind == .display ? GatedStartSource($0, gate: gate) : $0 }
                 let coordinator = ReplayCoordinator(
-                    scratchRoot: scratchRoot, app: AppInfo(name: "Tests", version: "0"), sources: plan.sources, input: plan.input,
+                    scratchRoot: scratchRoot, app: AppInfo(name: "Tests", version: "0"), sources: sources, input: plan.input,
                     diskMonitor: disk.monitor(volume: directory),
                     configuration: ReplayConfiguration(
                         seconds: configuration.seconds, segmentDuration: .seconds(1), pruneMargin: calls.pruneMargin))
@@ -559,8 +651,9 @@ import Testing
             didStart: { package, selection in calls.started.append(ReplayCalls.Started(package: package, selection: selection)) },
             now: { ReplayRig.now })
         self.environment = environment
-        controller = ReplayController(probe: probe, environment: environment, store: store)
+        controller = ReplayController(probe: probe, environment: environment, store: store, resumeDelay: resumeDelay)
         controller.onSaved = { saved in calls.saved.append(saved) }
+        controller.onHeldOff = { problem in calls.heldOff.append(problem) }
         controller.phaseChanged = { calls.phaseChanges += 1 }
     }
 
@@ -621,6 +714,10 @@ import Testing
     var started: [Started] = []
     var saved: [SavedTake] = []
     var phaseChanges = 0
+    /// The problems that held it off, as it told them.
+    var heldOff: [ReplayController.Problem] = []
+    /// What the screen's start waits for.
+    let startGate = StartGate()
 
     init(pruneMargin: Duration) {
         self.pruneMargin = pruneMargin
@@ -647,6 +744,70 @@ import Testing
         arrivals += 1
         guard isClosed else { return }
         await withCheckedContinuation { waiters.append($0) }
+    }
+}
+
+/// Holds the starts that pass it while it is closed; from any thread.
+private final class StartGate: Sendable {
+    private struct State {
+        var isClosed = false
+        var arrivals = 0
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
+
+    var arrivals: Int { state.withLock { $0.arrivals } }
+
+    func close() {
+        state.withLock { $0.isClosed = true }
+    }
+
+    func open() {
+        let waiters = state.withLock { state in
+            state.isClosed = false
+            defer { state.waiters = [] }
+            return state.waiters
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func pass() async {
+        await withCheckedContinuation { continuation in
+            let passes = state.withLock { state in
+                state.arrivals += 1
+                guard state.isClosed else { return true }
+                state.waiters.append(continuation)
+                return false
+            }
+            if passes { continuation.resume() }
+        }
+    }
+}
+
+/// `source`, whose start first passes `gate`.
+private final class GatedStartSource: CaptureSource {
+    private let source: any CaptureSource
+    private let gate: StartGate
+
+    init(_ source: any CaptureSource, gate: StartGate) {
+        self.source = source
+        self.gate = gate
+    }
+
+    var trackID: String { source.trackID }
+    var kind: TrackKind { source.kind }
+    var media: TrackMedia { source.media }
+    var sourceInfo: TrackSource { source.sourceInfo }
+    var activeDeviceUniqueID: String? { source.activeDeviceUniqueID }
+
+    func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {
+        await gate.pass()
+        try await source.start(on: queue, sink: sink)
+    }
+
+    func stop() async {
+        await source.stop()
     }
 }
 

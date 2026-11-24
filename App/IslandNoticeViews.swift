@@ -53,7 +53,7 @@ final class ConfirmationCapsule {
         withAnimation(animation) { model.item = item }
         timer?.cancel()
         timer = Task { [weak self] in
-            try? await Task.sleep(for: IslandConfirmation.displayDuration)
+            try? await Task.sleep(for: item.duration)
             guard !Task.isCancelled else { return }
             self?.hide()
         }
@@ -97,6 +97,8 @@ struct CapsuleItem: Identifiable {
     var tint = Color.white
     /// What a click on the capsule does; `nil`: the capsule lets the mouse through.
     var action: (() -> Void)?
+    /// How long it shows.
+    var duration = IslandConfirmation.displayDuration
 }
 
 extension IslandConfirmation {
