@@ -42,7 +42,6 @@ app=Toma
 archive=build/$app.xcarchive
 bundle=$out/$app.app
 dmg=$out/$app-$version.dmg
-staging=build/dmg-staging
 dmg_check=build/dmg-check
 appcast_work=build/appcast-staging
 sparkle_bin=build/SourcePackages/artifacts/sparkle/Sparkle/bin
@@ -82,7 +81,7 @@ bash scripts/check-licenses.sh
 
 step "Archiving $app $version (build $build_number), signed by \"$identity\""
 # Only what this run makes again: earlier DMGs and the appcast in $out/ stay.
-rm -rf "$archive" "$bundle" "$dmg" "$staging"
+rm -rf "$archive" "$bundle" "$dmg"
 mkdir -p "$out"
 source_setting=()
 if [[ -n ${SOURCE_CODE_URL:-} ]]; then source_setting=(SOURCE_CODE_URL="$SOURCE_CODE_URL"); fi
@@ -170,12 +169,8 @@ done
 kill -0 "$pid" 2>/dev/null && fail "$app (pid $pid) did not quit"
 
 step "Creating $dmg"
-mkdir -p "$staging"
-ditto "$bundle" "$staging/$app.app"
-cp LICENSE "$staging/LICENSE"
-ln -s /Applications "$staging/Applications"
-hdiutil create -volname "$app $version" -srcfolder "$staging" -format UDZO -ov "$dmg"
-rm -rf "$staging"
+# The designed window (background, icons in place, LICENSE hidden): scripts/make-dmg.sh asks Finder to lay it out.
+bash scripts/make-dmg.sh "$bundle" "$version" "$dmg"
 hdiutil verify -quiet "$dmg"
 echo "hdiutil verify: checksum valid"
 rm -rf "$dmg_check"
@@ -183,10 +178,13 @@ mkdir -p "$dmg_check"
 hdiutil attach -quiet -nobrowse -readonly -mountpoint "$dmg_check" "$dmg"
 dmg_license=yes
 [[ -f $dmg_check/LICENSE && -f $dmg_check/$app.app/Contents/Resources/LICENSE ]] || dmg_license=
+dmg_window=yes
+[[ -f $dmg_check/.DS_Store && -f $dmg_check/.background/background.tiff ]] || dmg_window=
 hdiutil detach -quiet "$dmg_check"
 rmdir "$dmg_check"
 [[ -n $dmg_license ]] || fail "$dmg has no LICENSE next to the app, or the app in it has none"
-echo "$dmg: LICENSE next to the app and inside it"
+[[ -n $dmg_window ]] || fail "$dmg has no window layout (.DS_Store) or no background"
+echo "$dmg: LICENSE next to the app (hidden) and inside it; window layout and background in place"
 
 step "Appcast"
 if [[ -n $ed_key ]]; then
